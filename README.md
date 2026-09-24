@@ -1,8 +1,8 @@
-# X-Tutor
+# PaceWise
 
 > Trợ lý học tập AI giúp sinh viên biến yêu cầu của nhiều môn thành kế hoạch
-> tuần khả thi, nhận hỗ trợ có nguồn khi mắc kẹt và điều chỉnh cách học theo
-> chu trình **Plan–Do–Reflect**.
+> tuần khả thi, nhận hỗ trợ có nguồn, theo dõi sai lệch và tự nhìn lại việc học
+> theo chu trình **Plan–Do–Reflect**.
 
 **Mã đề:** EDU-01 | **Đội:** P-008 | **Trạng thái:** Gate 01 / MVP Design
 
@@ -18,12 +18,18 @@ giảm, nên thiếu cơ hội hỗ trợ sớm.
 
 ## Giải pháp
 
-X-Tutor tạo một vòng lặp học tập khép kín:
+PaceWise đồng hành theo chu trình **Plan–Do–Reflect**. Trong bước **Do**, hệ
+thống có thêm hai cơ chế hỗ trợ là kiểm tra mức độ hiểu bài (`Check`) và phục
+hồi kế hoạch khi tiến độ bị lệch (`Recover`):
 
 - **Plan:** Đọc assignment, rubric và deadline để đề xuất kế hoạch tuần gồm các
   nhiệm vụ nhỏ; sinh viên xem lại và xác nhận trước khi lưu.
 - **Do:** Theo dõi tiến độ và hỏi đáp trên tài liệu môn học có trích nguồn.
   Guardrail chặn yêu cầu làm hộ và chuyển sang gợi ý kiểu Socratic.
+- **Check trong Do:** Dùng 1–3 câu kiểm tra nhanh đã được giảng viên duyệt để thu bằng
+  chứng theo một đơn vị kiến thức; kết quả không phải điểm chính thức.
+- **Recover trong Do:** Kết hợp sai lệch thời gian và bằng chứng học tập để đề xuất phương án phân
+  bổ lại; sinh viên xác nhận trước khi thay đổi kế hoạch.
 - **Reflect:** So sánh kế hoạch với kết quả thực tế, xác định nguyên nhân chậm
   tiến độ và đề xuất điều chỉnh cho tuần sau.
 - **Instructor view:** Hiển thị tiến độ và tín hiệu nguy cơ ở dạng tổng hợp/ẩn
@@ -39,13 +45,17 @@ X-Tutor tạo một vòng lặp học tập khép kín:
 ## Phạm vi MVP
 
 - Hai vai trò: sinh viên và giảng viên/cố vấn.
-- Lập kế hoạch cho nhiều môn từ dữ liệu Canvas mô phỏng.
-- Hỏi đáp có nguồn được pilot trên 1–2 môn đại diện.
+- Lập kế hoạch tuần cho một môn pilot từ dữ liệu Canvas mô phỏng.
+- MVP luôn chạy bằng fixture; Canvas REST chỉ đọc chỉ bật khi có sandbox/token; LTI 1.3 là P1 khi có developer key.
+- Pilot kiểm tra nhanh trên 1 môn với 3–5 đơn vị kiến thức.
+- Hỏi đáp có nguồn được pilot trên 1 môn đại diện.
 - Guardrail chống làm hộ nằm trong luồng xử lý của code.
 - Phiên Reflect cuối tuần và bản nháp re-plan cần sinh viên xác nhận.
-- Dashboard giảng viên dùng dữ liệu tổng hợp/ẩn danh.
+- Dashboard giảng viên dùng dữ liệu tổng hợp khi nhóm có ít nhất 5 sinh viên.
+- Production pilot có structured logs, OpenTelemetry, metrics, health check,
+  backup/restore và rollback.
 
-X-Tutor không làm hộ, nộp bài, chấm điểm hoặc thay đổi điểm trên Canvas. Canvas
+PaceWise không làm hộ, nộp bài, chấm điểm hoặc thay đổi điểm trên Canvas. Canvas
 LTI cấp trường và việc ghi dữ liệu ngược vào Canvas nằm ngoài MVP.
 
 ## Tech stack
@@ -55,11 +65,13 @@ LTI cấp trường và việc ghi dữ liệu ngược vào Canvas nằm ngoài
 | Backend | Python 3.11, FastAPI, Pydantic |
 | AI workflow | LangGraph, LangChain |
 | LLM | OpenAI-compatible API qua OpenRouter; model cấu hình bằng `.env` |
-| Database | SQLite cho development/MVP ban đầu |
-| Vector store | Chưa chốt; xem Known Ambiguities trong PRD |
-| Frontend | Next.js — chưa triển khai |
-| Test | pytest, pytest-asyncio, Ruff |
-| Deploy | Docker; hosting production chưa chốt |
+| Database/vector | SQLite hiện tại; mục tiêu PostgreSQL + Qdrant |
+| Cache/job | Redis + RQ worker — chưa triển khai |
+| Frontend | Next.js + TypeScript — chưa triển khai |
+| Guardrail | Quy tắc xác định trước + Llama Guard |
+| Test/eval | pytest/Ruff; mục tiêu Vitest, Playwright, Locust/k6, RAGAS và metric xác định trước |
+| Observability | Mục tiêu OpenTelemetry, structured logs, Prometheus/Grafana và LLM tracing |
+| Deploy | Docker; Render hoặc GCP Cloud Run sau khi chốt ngân sách |
 
 ## Quick start
 
@@ -125,15 +137,18 @@ ruff check .
 | `GET` | `/api/v1/status` | Kiểm tra trạng thái agent |
 | `POST` | `/api/v1/chat` | Gửi tin nhắn tới LangGraph agent mẫu |
 
-Các API nghiệp vụ Plan–Do–Reflect chưa được triển khai. Phạm vi dự kiến được
-quản lý trong PRD, không được xem là tính năng đã hoàn thành.
+Các API nghiệp vụ Plan–Do–Reflect, bao gồm Check/Recover trong bước Do, chưa
+được triển khai. Phạm vi dự kiến được quản lý trong PRD, không được xem là tính
+năng đã hoàn thành.
 
 ## Tài liệu Gate 01
 
+- [Topic Requirements & Traceability](docs/00-topic-requirements.md)
 - [Project Brief](docs/01-brief.md)
 - [Product Requirements Document](docs/02-prd.md)
 - [Wireframe & UI Flow](docs/03-wireframe-uiflow.md)
 - [Architecture Diagram](docs/architecture_diagram.md)
+- [Project Charter & 5-week Delivery Plan](docs/04-project-charter.md)
 
 ## Cấu trúc repository
 
@@ -155,10 +170,10 @@ presentation/     # Pitch deck và video demo
 
 | Thành viên | Vai trò | Trách nhiệm chính |
 |---|---|---|
-| Phạm Khắc Tú | **Tech Lead** | Kiến trúc, backend, code review, tích hợp các module và hoàn thiện hệ thống |
-| Nguyễn Gia Khánh | **AI Engineer** | LangGraph, RAG, prompt/guardrail và evaluation |
-| Trần Thế Anh | **Product Owner (PO)** | Tầm nhìn sản phẩm, ưu tiên backlog, phạm vi MVP và nghiệm thu |
-| Thân Thị Kim Chi | **Business Analyst (BA)** | Nghiên cứu pain point, user stories, PRD, UI flow và tiêu chí chấp nhận |
+| Phạm Khắc Tú | **Tech Lead** | Backend, Canvas REST/LTI, CI/CD, security, observability và release |
+| Nguyễn Gia Khánh | **AI Engineer** | LangGraph, Plan/Recover, RAG, assessment/diagnosis, guardrail và eval |
+| Trần Thế Anh | **Product Owner (PO)** | Backlog, Student Experience, analytics, UAT và demo/release acceptance |
+| Thân Thị Kim Chi | **Business Analyst (BA)** | Objective/rubric, Management Console, Canvas fixtures, data/content QA |
 
 ## Quy trình nhánh
 

@@ -1,276 +1,385 @@
-# X-Tutor — Wireframe / UI Flow
+# PaceWise — Wireframe / UI Flow
 
-**Mã đề:** EDU-01 | **Đội:** P-008 | **Phạm vi:** MVP Gate 01 | **Cập nhật:** 20/09/2026
+**Phiên bản:** 1.0 · **Cập nhật:** 24/09/2026
+Mục tiêu của tài liệu là khóa đủ màn hình, trạng thái và điểm xác nhận để frontend/backend có thể code cùng một hợp đồng.
 
-> Wireframe ưu tiên đủ trạng thái và đúng luồng, chưa thể hiện thiết kế hình ảnh cuối cùng. Phạm vi bám theo `01-brief.md` và các user story P0 trong `02-prd.md`.
+## 1. Kiến trúc giao diện
 
-## 1. Danh sách màn hình
+PaceWise có hai bề mặt dùng chung API và phân quyền:
 
-| ID | Màn hình | Vai trò/trạng thái | Yêu cầu được đáp ứng |
+- **Student Experience:** Plan–Do–Reflect, hỏi đáp có nguồn, kiểm tra nhanh và phục hồi kế hoạch.
+- **Management Console:** dashboard tổng hợp, duyệt câu hỏi/rubric, xử lý ca cần người xem.
+
+MVP luôn chạy bằng Canvas fixture. Canvas REST chỉ đọc được bật khi có sandbox/token. LTI 1.3 là P1 khi có developer key.
+
+## 2. Danh sách màn hình
+
+| ID | Màn hình | Vai trò | Trạng thái bắt buộc |
 |---|---|---|---|
-| S0 | Đăng nhập/chọn vai trò | Chung | Điểm bắt đầu và phân quyền |
-| S1 | Dashboard sinh viên | Sinh viên | Màn hình chính vai trò 1 |
-| S2 | Dashboard giảng viên | Giảng viên | Màn hình chính vai trò 2 |
-| S3 | Xác nhận kế hoạch AI | Sinh viên, HITL | Xác nhận trước khi ghi dữ liệu |
-| S4 | AI đang xử lý | Loading | Không để người dùng tưởng ứng dụng treo |
-| S5 | Không thể trả lời/lỗi | Error | Nêu giới hạn và hướng xử lý tiếp theo |
-| S6 | Chưa có dữ liệu | Empty | Trạng thái người dùng mới |
-| S7 | Câu trả lời có nguồn/guardrail | Sinh viên | Kết quả grounded hoặc chuyển hướng an toàn |
-| S8 | Xác nhận can thiệp | Giảng viên, HITL | Không tự gửi liên hệ hoặc áp dụng hành động |
+| C0 | Đăng nhập/chọn vai trò | Cả hai | mặc định, sai quyền |
+| S0 | Chưa có dữ liệu tuần | Sinh viên | rỗng |
+| S1 | Tổng quan tuần | Sinh viên | đủ dữ liệu, dữ liệu Canvas cũ |
+| S2 | Quỹ thời gian và mục tiêu | Sinh viên | hợp lệ, xung đột |
+| S3 | AI đang lập kế hoạch | Sinh viên | đang xử lý, timeout |
+| S4 | Xem trước/xác nhận kế hoạch | Sinh viên | khả thi, quá tải, vô nghiệm |
+| S5 | Thực hiện/cập nhật tiến độ | Sinh viên | đúng tiến độ, sai lệch |
+| S6 | Cảnh báo nguy cơ | Sinh viên | cảnh báo, người dùng bác bỏ |
+| S7 | Xem trước/xác nhận phục hồi | Sinh viên | 2–3 phương án, vô nghiệm |
+| S8 | Hỏi đáp có nguồn | Sinh viên | có nguồn, thiếu nguồn |
+| S9 | Chuyển hướng yêu cầu làm hộ | Sinh viên | bị chặn, gợi ý học |
+| S10 | Kiểm tra nhanh | Sinh viên | câu hỏi, nộp bài, đang chấm |
+| S11 | Bằng chứng hiểu bài | Sinh viên | đủ tin cậy, từ chối kết luận |
+| S12 | Reflect cuối tuần | Sinh viên | bản nháp, xác nhận |
+| I0 | Dashboard giảng viên rỗng | Giảng viên | chưa đủ dữ liệu/n<5 |
+| I1 | Tổng quan lớp | Giảng viên | tổng hợp, filter |
+| I2 | Hàng chờ duyệt | Giảng viên | cần xem, đã xử lý |
+| I3 | Xác nhận hỗ trợ | Giảng viên | xem trước, đã gửi |
+| E0 | Lỗi chung | Cả hai | retry, fallback |
 
-## 2. UI Flow tổng thể
+## 3. UI Flow tổng thể
+
+### 3.1 Điểm vào và phân quyền
 
 ```mermaid
-flowchart TD
-    A[S0: Đăng nhập] --> B{Vai trò?}
-
-    B -->|Sinh viên| C{Đã có dữ liệu môn học?}
-    C -->|Chưa có| D[S6: Empty state]
-    D -->|Dùng dữ liệu mẫu| E[S1: Dashboard sinh viên]
-    D -->|Nhập nhiệm vụ| E
-    C -->|Đã có| E
-
-    E -->|Tạo kế hoạch tuần| F[S4: AI đang xử lý]
-    F -->|Tạo thành công| G[S3: Xem trước và xác nhận]
-    F -->|Timeout hoặc sai định dạng| H[S5: Lỗi và hướng xử lý]
-    H -->|Thử lại| F
-    H -->|Nhập thủ công| E
-    G -->|Sửa bản nháp| G
-    G -->|Hủy| E
-    G -->|Xác nhận lưu| E
-
-    E -->|Hỏi trợ lý| I[S4: Kiểm tra guardrail và tìm nguồn]
-    I -->|Có nguồn hợp lệ| J[S7: Trả lời kèm citation]
-    I -->|Yêu cầu làm hộ| K[S7: Từ chối và gợi ý Socratic]
-    I -->|Không đủ nguồn hoặc lỗi| H
-    J --> E
-    K --> E
-
-    E -->|Cuối tuần| L[S4: Tổng hợp tiến độ]
-    L --> M[S3: Xác nhận Reflect và re-plan]
-    M -->|Xác nhận| E
-
-    B -->|Giảng viên| N{Lớp đã có dữ liệu?}
-    N -->|Chưa có| O[S6: Empty dashboard]
-    O -->|Chọn lớp có dữ liệu mẫu| P[S2: Dashboard giảng viên]
-    N -->|Đã có| P
-    P -->|Mở tín hiệu nguy cơ| Q[Chi tiết lý do gắn cờ]
-    Q -->|Đề xuất hỗ trợ| R[S8: Xác nhận can thiệp]
-    R -->|Hủy hoặc theo dõi thêm| P
-    R -->|Xác nhận hành động| P
+flowchart LR
+    A[C0 Đăng nhập] --> B{Vai trò}
+    B -->|Sinh viên| C{Có dữ liệu tuần?}
+    B -->|Giảng viên| D{Đủ dữ liệu tổng hợp?}
+    B -->|Sai quyền| E[E0 Lỗi quyền]
+    C -->|Không| F[S0 Trạng thái rỗng]
+    C -->|Có| G[S1 Tổng quan tuần]
+    D -->|Không hoặc n nhỏ hơn 5| H[I0 Trạng thái rỗng]
+    D -->|Có| I[I1 Tổng quan lớp]
 ```
 
-## 3. Wireframes
+### 3.2 Plan
 
-### S0 — Đăng nhập và chọn vai trò
+```mermaid
+flowchart LR
+    A[S0 hoặc S1] --> B[S2 Nhập mục tiêu và quỹ thời gian]
+    B --> C{Dữ liệu hợp lệ?}
+    C -->|Không| B
+    C -->|Có| D[S3 Đang xử lý]
+    D -->|Timeout hoặc lỗi| E[E0 Thử lại hoặc dùng bản nháp]
+    D -->|Hoàn tất| F[S4 Xem trước]
+    F --> G{Kế hoạch khả thi?}
+    G -->|Không| H[Hiện giờ thiếu và xung đột]
+    H --> B
+    G -->|Có| I{Sinh viên xác nhận?}
+    I -->|Sửa| B
+    I -->|Xác nhận| J[S1 Kế hoạch đã lưu]
+```
+
+### 3.3 Do và Recover
+
+```mermaid
+flowchart LR
+    A[S1 Tổng quan tuần] --> B[S5 Bắt đầu hoặc cập nhật phiên học]
+    B --> C[Hệ thống tính sai lệch]
+    C --> D{Có nguy cơ?}
+    D -->|Không| A
+    D -->|Có| E[S6 Cảnh báo và căn cứ]
+    E --> F{Người dùng chọn}
+    F -->|Dữ liệu sai| G[Sửa thời gian thực tế]
+    F -->|Bỏ qua| A
+    F -->|Phục hồi| H[S7 Các phương án]
+    H --> I{Còn nghiệm khả thi?}
+    I -->|Không| J[Khuyến nghị trao đổi giảng viên]
+    I -->|Có| K{Xác nhận diff?}
+    K -->|Không| A
+    K -->|Có| L[Lưu lịch mới và audit]
+```
+
+### 3.4 Hỏi đáp và liêm chính
+
+```mermaid
+flowchart LR
+    A[S8 Nhập câu hỏi] --> B{Yêu cầu làm hộ?}
+    B -->|Có| C[S9 Giải thích ranh giới]
+    C --> D[Gợi ý khái niệm hoặc yêu cầu cách làm thử]
+    B -->|Không| E[Tìm và xếp hạng nguồn]
+    E --> F{Nguồn đủ?}
+    F -->|Không| G[Từ chối kết luận và gợi ý tài liệu]
+    F -->|Có| H[Trả lời kèm trích dẫn]
+    H --> I{Người dùng báo nguồn sai?}
+    I -->|Có| J[Ghi nhận để review]
+    I -->|Không| A
+```
+
+### 3.5 Kiểm tra hiểu bài và Reflect
+
+```mermaid
+flowchart LR
+    A[S10 Chọn đơn vị kiến thức] --> B[Làm 1 đến 3 câu]
+    B --> C[Đang đánh giá]
+    C --> D{Đủ tin cậy?}
+    D -->|Không| E[S11 Từ chối kết luận]
+    E --> F[I2 Hàng chờ giảng viên]
+    D -->|Có| G[S11 Trạng thái bằng chứng]
+    G --> H[Chọn hành động tiếp theo]
+    H --> I[S5 Thực hiện]
+    I --> J[S12 Reflect cuối tuần]
+    J --> K{Xác nhận điều chỉnh?}
+    K -->|Có| L[Dùng cho Plan tuần sau]
+    K -->|Không| M[Lưu phản tư, không đổi kế hoạch]
+```
+
+### 3.6 Giảng viên/cố vấn
+
+```mermaid
+flowchart LR
+    A[I1 Tổng quan lớp] --> B{Chọn thao tác}
+    B -->|Xem xu hướng| C[Tiến độ và đơn vị kiến thức]
+    B -->|Duyệt nội dung| D[I2 Câu hỏi và rubric]
+    B -->|Ca không chắc chắn| E[I2 Hàng chờ]
+    D --> F{Phê duyệt?}
+    F -->|Sửa hoặc từ chối| D
+    F -->|Duyệt| G[Xuất bản cho môn pilot]
+    E --> H[I3 Xem căn cứ]
+    H --> I{Hỗ trợ cá nhân?}
+    I -->|Không| J[Ghi chú tổng hợp]
+    I -->|Có| K[I3 Xác nhận đối tượng và nội dung]
+    K --> L[Audit quyết định]
+```
+
+## 4. Wireframe chính
+
+### C0 — Đăng nhập
 
 ```text
-┌──────────────────────────────────────────────────────────────┐
-│ X-Tutor                                                      │
-│ Trợ lý học tập Plan – Do – Reflect                           │
-├──────────────────────────────────────────────────────────────┤
-│ Email                                                        │
-│ [ sinhvien@example.edu                              ]         │
-│ Mật khẩu                                                     │
-│ [ •••••••••••                                       ]         │
-│                                                              │
-│ Vai trò                                                      │
-│ (●) Sinh viên              ( ) Giảng viên/Cố vấn             │
-│                                                              │
-│                         [ Đăng nhập ]                         │
-│                                                              │
-│ Bản demo chỉ sử dụng dữ liệu mô phỏng hoặc đã ẩn danh.       │
-└──────────────────────────────────────────────────────────────┘
++------------------------------------------------------+
+| PaceWise                                             |
+| Email [________________]  Mật khẩu [______________] |
+| [ Đăng nhập ]                                       |
+| Dữ liệu demo: [ Sinh viên ] [ Giảng viên ]          |
+|                                                      |
+| Nếu sai quyền: "Bạn không có quyền mở trang này."   |
++------------------------------------------------------+
 ```
 
-Điều kiện chuyển: đăng nhập thành công → kiểm tra quyền và dữ liệu của đúng vai trò; lỗi xác thực → ở lại S0 và hiện thông báo cạnh trường lỗi.
-
-### S1 — Dashboard sinh viên
+### S0 — Trạng thái rỗng
 
 ```text
-┌──────────────────────────────────────────────────────────────────────────┐
-│ X-Tutor      Tổng quan | Kế hoạch | Hỏi đáp | Reflect       [Sinh viên] │
-├──────────────────────────────────────────────────────────────────────────┤
-│ Chào Minh — Tuần 20/09–26/09                 Tiến độ tuần: 6/9 (67%)    │
-│                                                                          │
-│ VIỆC NÊN LÀM TIẾP                         DEADLINE GẦN                    │
-│ ┌─────────────────────────────────────┐   ┌────────────────────────────┐ │
-│ │ [ ] Viết dàn ý báo cáo      45 phút│   │ 22/09  Quiz môn A          │ │
-│ │ [>] Ôn chương 3             60 phút│   │ 24/09  Báo cáo môn B       │ │
-│ │ [✓] Đọc rubric              20 phút│   │ 26/09  Assignment môn C    │ │
-│ └─────────────────────────────────────┘   └────────────────────────────┘ │
-│                                                                          │
-│ [ + Tạo kế hoạch tuần ]  [ Hỏi trợ lý có nguồn ]  [ Reflect cuối tuần ]│
-│                                                                          │
-│ Nguồn dữ liệu: Canvas mock • cập nhật 09:30 20/09/2026                  │
-└──────────────────────────────────────────────────────────────────────────┘
++------------------------------------------------------+
+| Tuần này chưa có dữ liệu                             |
+| PaceWise cần nhiệm vụ, deadline và quỹ thời gian.    |
+| [ Dùng dữ liệu Canvas mô phỏng ] [ Đồng bộ lại ]    |
+| Canvas REST: Chưa kết nối                            |
+| LTI: Chưa bật trong MVP                              |
++------------------------------------------------------+
 ```
 
-Hành động chính: tạo/sửa kế hoạch, cập nhật `todo → in_progress → done`, mở hỏi đáp hoặc bắt đầu Reflect.
-
-### S2 — Dashboard giảng viên
+### S1 — Tổng quan tuần
 
 ```text
-┌──────────────────────────────────────────────────────────────────────────┐
-│ X-Tutor          Tổng quan lớp | Tín hiệu | Tài liệu       [Giảng viên] │
-├──────────────────────────────────────────────────────────────────────────┤
-│ Lớp: CS101                 Dữ liệu tổng hợp, không hiển thị chat riêng   │
-│                                                                          │
-│ Hoàn thành kế hoạch: 72%  │ Có nguy cơ trễ: 5 │ Đã Reflect: 68%          │
-│                                                                          │
-│ TÍN HIỆU CẦN XEM                          ĐIỂM NGHẼN CHUNG               │
-│ ┌────────────────────────────────────┐   ┌─────────────────────────────┐ │
-│ │ Nhóm ẩn danh A • deadline < 48h   │   │ 1. Dynamic Programming     │ │
-│ │ Lý do: chưa bắt đầu milestone     │   │ 2. Cách đọc rubric         │ │
-│ │ [ Xem lý do gắn cờ ]              │   │ 3. Trích dẫn học thuật     │ │
-│ └────────────────────────────────────┘   └─────────────────────────────┘ │
-│                                                                          │
-│ Cảnh báo: AI chỉ đề xuất tín hiệu; giảng viên quyết định can thiệp.      │
-└──────────────────────────────────────────────────────────────────────────┘
++------------------------------------------------------+
+| 23–29/09        Dữ liệu Canvas: 09:10 hôm nay        |
+| Tiến độ 62% | 2 nguy cơ | 6 giờ còn trống           |
+|------------------------------------------------------|
+| Tiếp theo: Ôn khái niệm A — 45 phút                  |
+| Lý do: cần trước milestone B, hạn trong 2 ngày       |
+| [ Bắt đầu ] [ Cập nhật thực tế ] [ Hỏi tài liệu ]   |
+|------------------------------------------------------|
+| Deadline quan trọng: Assignment 2 — 27/09            |
+| Cảnh báo: kế hoạch sẽ thiếu 1,5 giờ nếu giữ nhịp này |
+| [ Xem phương án phục hồi ]                           |
++------------------------------------------------------+
 ```
 
-Quyền riêng tư: P0 chỉ hiển thị dữ liệu tổng hợp/ẩn danh; không hiển thị nội dung chat hoặc tự giải ẩn danh sinh viên.
+Nếu dữ liệu cũ, banner phải ghi rõ thời điểm snapshot và nút đồng bộ lại.
 
-### S3 — Xác nhận kế hoạch AI (Human-in-the-loop)
+### S2/S3 — Nhập quỹ thời gian và đang xử lý
 
 ```text
-┌──────────────────────────────────────────────────────────────┐
-│ Xem trước kế hoạch tuần                         [Bản nháp AI]│
-├──────────────────────────────────────────────────────────────┤
-│ Nguồn: Assignment 2 • Rubric môn CS101 • hạn 26/09          │
-│                                                              │
-│ 1. Đọc đề và rubric                [30 phút] [20/09 19:00]   │
-│ 2. Lập dàn ý                       [45 phút] [21/09 19:00]   │
-│ 3. Viết bản nháp                  [120 phút] [23/09 18:00]   │
-│ 4. Kiểm tra và hoàn thiện          [60 phút] [25/09 18:00]   │
-│                                                              │
-│ [ Sửa nhiệm vụ ] [ Sửa thời lượng ] [ Sửa lịch ]             │
-│                                                              │
-│ AI có thể ước lượng sai. Kế hoạch chỉ được lưu khi bạn       │
-│ xác nhận.                                                    │
-│                                                              │
-│ [ Hủy ]                         [ Xác nhận và lưu kế hoạch ]  │
-└──────────────────────────────────────────────────────────────┘
++------------------------------------------------------+
+| Mục tiêu tuần [_______________________________]      |
+| Thứ 2 [18:00–20:00]  Thứ 3 [không rảnh]            |
+| Ràng buộc [không học sau 23:00_______________]      |
+| [ Tạo kế hoạch ]                                    |
+|------------------------------------------------------|
+| Đang chia nhiệm vụ và kiểm tra deadline...           |
+| Bước 2/3: kiểm tra xung đột lịch                     |
+| [ Hủy ]   Quá 30 giây hệ thống sẽ dừng an toàn      |
++------------------------------------------------------+
 ```
 
-Điều kiện chuyển: **Xác nhận** → ghi DB và quay lại S1; **Hủy** → không ghi; **Sửa** → cập nhật bản nháp rồi yêu cầu xác nhận lại.
-
-### S4 — Agent đang xử lý
+### S4 — Xác nhận kế hoạch
 
 ```text
-┌──────────────────────────────────────────────────────────────┐
-│ X-Tutor đang chuẩn bị câu trả lời…                           │
-├──────────────────────────────────────────────────────────────┤
-│ ✓ Kiểm tra yêu cầu và liêm chính học thuật                   │
-│ ● Tìm nội dung liên quan trong tài liệu môn học              │
-│ ○ Kiểm tra nguồn trích dẫn                                   │
-│ ○ Soạn câu trả lời                                           │
-│                                                              │
-│ Có thể mất 5–20 giây. Bạn có thể hủy mà không mất dữ liệu.   │
-│                                              [ Hủy xử lý ]    │
-└──────────────────────────────────────────────────────────────┘
++------------------------------------------------------+
+| Bản xem trước — chưa lưu                             |
+| T2 18:00  Milestone A  60 phút  [nguồn: Assignment] |
+| T4 19:00  Ôn đơn vị B 45 phút   [vì check chưa chắc]|
+| T6 09:00  Hoàn thiện   90 phút                       |
+|------------------------------------------------------|
+| Tổng 4,5/6 giờ | Không xung đột | Slack: 8 giờ      |
+| Giả định: thời lượng Assignment 2 là 3 giờ           |
+| [ Sửa ] [ Hủy ] [ Xác nhận và lưu ]                 |
++------------------------------------------------------+
 ```
 
-Yêu cầu UX: có trạng thái từng bước, thông báo thời gian dự kiến và nút hủy; không ghi thay đổi dở dang.
+Trường hợp vô nghiệm thay bảng bằng số giờ thiếu, deadline xung đột và hành động đề xuất; không có nút “lưu”.
 
-### S5 — Lỗi hoặc không thể trả lời
+### S5/S6/S7 — Theo dõi, cảnh báo và phục hồi
 
 ```text
-┌──────────────────────────────────────────────────────────────┐
-│ Không thể tạo câu trả lời có thể kiểm chứng                  │
-├──────────────────────────────────────────────────────────────┤
-│ X-Tutor chưa tìm thấy đủ thông tin trong tài liệu của môn    │
-│ CS101. Hệ thống sẽ không đoán hoặc tạo nguồn không tồn tại.  │
-│                                                              │
-│ Bạn có thể:                                                  │
-│ • Chọn lại đúng môn học.                                     │
-│ • Viết lại câu hỏi cụ thể hơn.                               │
-│ • Liên hệ giảng viên nếu tài liệu chưa được cung cấp.        │
-│                                                              │
-│ [ Quay lại ]          [ Thử lại ]          [ Nhập thủ công ] │
-│                                                              │
-│ Mã lỗi: NO_GROUNDED_CONTEXT • dữ liệu chưa bị thay đổi       │
-└──────────────────────────────────────────────────────────────┘
++------------------------------------------------------+
+| Cảnh báo nguy cơ                                     |
+| Milestone A: dự kiến 60', thực tế 105'               |
+| Assignment 2 còn 1 ngày 8 giờ; slack còn 20 phút    |
+| [ Dữ liệu chưa đúng ] [ Bỏ qua ] [ Phục hồi ]       |
+|------------------------------------------------------|
+| Phương án A: dời ôn C, giữ Assignment 2              |
+| Phương án B: chia phiên tối nay, vẫn giữ ôn C         |
+| Phương án C: không còn khả thi — trao đổi giảng viên |
+| [ So sánh ] [ Chọn phương án ]                       |
+|------------------------------------------------------|
+| Xác nhận thay đổi: T4 19:00 -> T4 20:00              |
+| [ Quay lại ] [ Xác nhận cập nhật ]                   |
++------------------------------------------------------+
 ```
 
-Biến thể cùng bố cục: `LLM_TIMEOUT`, `QUOTA_EXCEEDED`, `INVALID_AI_OUTPUT`, `CANVAS_SYNC_FAILED`, `SAVE_FAILED`.
+Mọi phương án phải nêu đánh đổi và diff; chỉ nút xác nhận cuối cùng mới ghi DB.
 
-### S6 — Trạng thái rỗng
+### S8/S9 — Hỏi đáp có nguồn và chuyển hướng
 
 ```text
-┌──────────────────────────────────────────────────────────────┐
-│ Chưa có môn học hoặc nhiệm vụ                                │
-├──────────────────────────────────────────────────────────────┤
-│ X-Tutor cần assignment và deadline để tạo kế hoạch tuần.     │
-│                                                              │
-│ [ Dùng dữ liệu mẫu ]                                         │
-│ [ Nhập nhiệm vụ thủ công ]                                   │
-│ [ Kết nối Canvas read-only — nếu được bật ]                  │
-│                                                              │
-│ X-Tutor không tự nộp bài hoặc thay đổi dữ liệu trên Canvas.  │
-└──────────────────────────────────────────────────────────────┘
++------------------------------------------------------+
+| Hỏi tài liệu môn học                                 |
+| [_______________________________________________]    |
+| [ Gửi ]                                             |
+|------------------------------------------------------|
+| Trả lời ngắn... [1] [2]                             |
+| [1] Syllabus, mục 3.2  [Mở đoạn nguồn]              |
+| [2] Lecture 04, trang 7 [Mở đoạn nguồn]             |
+| [ Báo nguồn sai ]                                   |
+|------------------------------------------------------|
+| Yêu cầu làm hộ: "Mình không thể viết đáp án nộp."   |
+| Hãy gửi cách bạn đã thử; mình sẽ gợi ý bước tiếp.    |
++------------------------------------------------------+
 ```
 
-Empty state giảng viên dùng cùng nguyên tắc: “Chưa đủ dữ liệu lớp để tổng hợp”, kèm lựa chọn lớp demo hoặc quay lại.
-
-### S7 — Kết quả có nguồn và guardrail
+### S10/S11 — Kiểm tra nhanh và kết quả
 
 ```text
-┌──────────────────────────────────────────────────────────────┐
-│ Trợ lý học tập có nguồn                                      │
-├──────────────────────────────────────────────────────────────┤
-│ Bạn hỏi: “Rubric yêu cầu phần phân tích gồm những gì?”       │
-│                                                              │
-│ Trả lời: Rubric yêu cầu nêu giả định, phương pháp và giải    │
-│ thích kết quả.                                               │
-│ Nguồn: [CS101_Assignment2_Rubric.pdf • trang 2]              │
-│                                                              │
-│ [ Mở nguồn ] [ Hỏi tiếp ]                                    │
-├──────────────────────────────────────────────────────────────┤
-│ Nếu yêu cầu làm hộ:                                          │
-│ “Mình không thể viết đáp án để bạn nộp. Mình có thể giúp     │
-│ bạn xác định bước đầu tiên hoặc kiểm tra dàn ý của bạn.”     │
-│ [ Gợi ý bước đầu ] [ Giải thích khái niệm ]                  │
-└──────────────────────────────────────────────────────────────┘
++------------------------------------------------------+
+| Kiểm tra nhanh — Đơn vị kiến thức A                  |
+| Câu 1/3: Giải thích vì sao...                        |
+| [_______________________________________________]    |
+| [ Nộp câu trả lời ]                                 |
+|------------------------------------------------------|
+| Trạng thái: Đang hình thành  | Độ tin cậy: Trung bình|
+| Bằng chứng: đúng khái niệm, thiếu bước lập luận      |
+| Đây không phải điểm chính thức.                      |
+| Tiếp theo: xem Lecture 04 §2 rồi thử câu tương tự    |
+| [ Thêm vào kế hoạch ] [ Yêu cầu giảng viên xem ]    |
++------------------------------------------------------+
 ```
 
-### S8 — Giảng viên xác nhận can thiệp (Human-in-the-loop)
+Nếu không đủ tin cậy: hiện “Chưa đủ bằng chứng để kết luận”, lý do và nút gửi hàng chờ; không ép ra nhãn.
+
+### S12 — Reflect cuối tuần
 
 ```text
-┌──────────────────────────────────────────────────────────────┐
-│ Xác nhận biện pháp hỗ trợ                                    │
-├──────────────────────────────────────────────────────────────┤
-│ Tín hiệu: nhóm ẩn danh A chưa bắt đầu milestone, deadline    │
-│ còn dưới 48 giờ. Dữ liệu cập nhật: 09:30 20/09/2026.         │
-│                                                              │
-│ Hành động đề xuất: đăng thông báo nhắc chung cho lớp.        │
-│ Nội dung xem trước:                                          │
-│ [ Hãy kiểm tra kế hoạch Assignment 2 trước ngày 22/09… ]     │
-│                                                              │
-│ Không có thông báo nào được gửi nếu chưa xác nhận.           │
-│                                                              │
-│ [ Hủy ] [ Theo dõi thêm ]          [ Xác nhận hành động ]    │
-└──────────────────────────────────────────────────────────────┘
++------------------------------------------------------+
+| Tuần của bạn                                         |
+| Kế hoạch 8h | Thực tế 10,2h | 1 lần phục hồi        |
+| Điều hiệu quả? [_______________________________]     |
+| Điều gây lệch?  [_______________________________]    |
+| Tuần sau đổi gì? [_____________________________]     |
+| Gợi ý: tăng ước lượng bài đọc thêm 20%               |
+| [ Lưu phản tư ] [ Xác nhận dùng cho tuần sau ]      |
++------------------------------------------------------+
 ```
 
-## 4. Quy tắc trạng thái dùng khi code
+### I0/I1/I2/I3 — Giảng viên
 
-| State | Khi nào xuất hiện | Hành động người dùng luôn phải có |
+```text
++------------------------------------------------------+
+| Môn pilot — Tuần 3                                   |
+| Đúng hạn 78% | 12 ca nguy cơ | 4 ca cần xem          |
+|------------------------------------------------------|
+| Đơn vị A: 64% "đã thể hiện" | xu hướng +8 điểm %    |
+| Đơn vị B: 31% "còn nhầm lẫn" | cần xem              |
+| Chỉ hiển thị nhóm n >= 5. Không có chat thô.         |
+| [ Hàng chờ 4 ] [ Duyệt câu hỏi/rubric ]             |
+|------------------------------------------------------|
+| Ca #PW-104 — độ tin cậy thấp                         |
+| Căn cứ: 2 câu trả lời mâu thuẫn; rubric mục B2       |
+| [ Không kết luận ] [ Ghi chú ] [ Chuẩn bị hỗ trợ ]  |
+|------------------------------------------------------|
+| Xem trước hỗ trợ: đối tượng, nội dung, căn cứ        |
+| [ Hủy ] [ Xác nhận ]                                |
++------------------------------------------------------+
+```
+
+### E0 — Lỗi
+
+```text
++------------------------------------------------------+
+| Chưa thể hoàn tất tác vụ                             |
+| Mã: PW-TIMEOUT | request_id: ...                     |
+| Dữ liệu của bạn chưa bị thay đổi.                    |
+| [ Thử lại ] [ Dùng chức năng không AI ] [ Trợ giúp ]|
++------------------------------------------------------+
+```
+
+Thông báo lỗi không lộ stack trace, secret hoặc prompt nội bộ.
+
+## 5. Hợp đồng trạng thái
+
+Mọi tác vụ AI phải có:
+
+| Trạng thái | UI |
+|---|---|
+| idle | form/nút thao tác |
+| validating | kiểm tra dữ liệu tại client/server |
+| queued | đã nhận tác vụ |
+| processing | tiến trình và nút hủy |
+| needs_confirmation | diff, nguồn, rủi ro, nút xác nhận |
+| success | kết quả và hành động tiếp |
+| abstained | lý do chưa thể kết luận |
+| failed | thông báo, request_id, retry/fallback |
+
+Các action ghi dữ liệu dùng idempotency key để tránh bấm hai lần. Sau 30 giây, UI chuyển failed/timeout; không quay vô hạn.
+
+## 6. Event tracking
+
+| Event | Thuộc tính tối thiểu | KPI |
 |---|---|---|
-| `empty` | Không có course/assignment hoặc chưa đủ dữ liệu lớp | Dùng dữ liệu mẫu, nhập thủ công hoặc quay lại |
-| `loading` | Agent/RAG đang chạy | Hủy xử lý; không mất dữ liệu |
-| `success` | Có kết quả hợp lệ | Xem nguồn, sửa/xác nhận hoặc tiếp tục |
-| `blocked` | Guardrail phát hiện yêu cầu làm hộ | Xem lý do và chọn hỗ trợ Socratic |
-| `error` | Timeout, quota, sai schema, mất kết nối hoặc lỗi lưu | Thử lại, quay lại hoặc dùng cách thủ công |
-| `confirm` | Trước hành động ghi/xóa/gửi/can thiệp | Xem trước đầy đủ, xác nhận hoặc hủy |
+| plan_generated | plan_id, constraint_pass, latency | chất lượng Plan |
+| plan_confirmed | plan_id, edits_count | adoption |
+| task_progress_updated | planned_min, actual_min | sai số ước lượng |
+| risk_detected | risk_type, lead_time | recall/precision |
+| recovery_confirmed | option_id, protected_deadline | recovery success |
+| citation_opened/reported | source_id, valid_after_review | grounding |
+| integrity_redirected | intent, result | guardrail |
+| check_completed | component_id, evidence_state, confidence | hiểu bài |
+| diagnosis_reviewed | predicted, reviewer_label | macro-F1 |
+| reflection_confirmed | adjustment_type | evidence-to-action |
 
-## 5. Checklist Gate 01
+Analytics không chứa câu trả lời/chat/phản tư thô. ID dùng mã giả.
 
-- [x] Có màn hình chính sinh viên.
-- [x] Có màn hình chính giảng viên/cố vấn.
-- [x] Có màn hình xác nhận cho kế hoạch AI và can thiệp của giảng viên.
-- [x] Có trạng thái agent đang xử lý.
-- [x] Có trạng thái lỗi/không đủ nguồn và hành động phục hồi.
-- [x] Có trạng thái rỗng cho người dùng mới.
-- [x] Có UI Flow Mermaid với điều kiện chuyển màn hình.
-- [x] Có giới hạn sản phẩm và guardrail hiển thị rõ cho người dùng.
+## 7. Tiêu chí nghiệm thu UI
+
+- Có đủ hai vai trò và tất cả màn hình rỗng, đang xử lý, lỗi, từ chối kết luận, xác nhận.
+- Không ghi kế hoạch/phục hồi trước khi xác nhận.
+- Mọi câu trả lời học thuật có trích dẫn hoặc nói rõ thiếu nguồn.
+- Guardrail không tạo đáp án nộp được.
+- Kết quả hiểu bài không trông giống điểm số.
+- Dashboard ẩn dữ liệu khi n<5 và không hiển thị nội dung thô.
+- Keyboard navigation, focus state, contrast và label form đạt mức dùng được.
+- Responsive ở 360 px, 768 px và desktop.
+- Mermaid render được trên GitHub; thuật ngữ khớp PRD.
+
+## 8. Quy tắc nội dung và khả năng tiếp cận
+
+- Cảnh báo luôn mô tả **dữ kiện → ảnh hưởng → lựa chọn**, không dùng câu gây áp lực như “bạn đang học kém”.
+- Màu không phải tín hiệu duy nhất: mọi trạng thái có icon, nhãn chữ và mô tả ngắn.
+- Nút chính dùng động từ rõ nghĩa: “Xác nhận và lưu”, “Thử lại”, “Gửi giảng viên xem”; tránh nút chung chung như “OK”.
+- Trích dẫn mở đúng đoạn nguồn trong tab/panel phụ và giữ lại câu hỏi đang nhập.
+- Thành phần loading thông báo tiến trình qua `aria-live`; dialog giữ focus, đóng được bằng Escape và trả focus về nút mở.
+- Biểu đồ giảng viên có bảng dữ liệu tương đương cho screen reader; số liệu phần trăm luôn kèm mẫu số.
+- Ngày giờ hiển thị theo múi giờ người dùng và ghi rõ khi deadline từ Canvas khác múi giờ.
+- Trên mobile, thao tác xác nhận nguy cơ cao không đặt sát nút hủy; diff vẫn phải đọc được trước khi lưu.
+- Empty state chỉ đưa một hành động chính. Error state không đổ lỗi người dùng và luôn cho biết dữ liệu có được lưu hay chưa.

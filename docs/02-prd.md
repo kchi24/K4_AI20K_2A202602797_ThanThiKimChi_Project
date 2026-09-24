@@ -1,163 +1,337 @@
-# PRD — X-Tutor
+# PRD — PaceWise
 
-**Mã đề:** EDU-01 | **Đội:** P-008 | **Trạng thái:** Draft cho Gate 01 | **Cập nhật:** 20/09/2026
+**Phiên bản:** 1.0 · **Đội:** P-008 · **Cập nhật:** 24/09/2026
+**Trạng thái:** scope P0 đã khóa; các mục P1 phụ thuộc sandbox/credential và release gate.
 
-> PRD này mô tả phạm vi sản phẩm mục tiêu và phải được cập nhật cùng PR khi code hoặc quyết định kỹ thuật thay đổi. Trạng thái triển khai thực tế được ghi tại Mục 8; tính năng chưa có trong code không được xem là đã hoàn thành.
+## 1. Bối cảnh và mục tiêu
 
-## 1. Bối cảnh & Mục tiêu
+Canvas quản lý course, assignment, deadline và submission, nhưng chưa giúp sinh viên chuyển dữ liệu của nhiều môn thành một kế hoạch tuần phù hợp với quỹ thời gian và mức độ hiểu bài. Khi thời gian thực tế lệch khỏi dự kiến hoặc sinh viên chưa nắm kiến thức nền, rủi ro thường chỉ lộ rõ gần deadline.
 
-Sinh viên đại học phải theo dõi nhiều môn và deadline cùng lúc, nhưng thường khó biết nên bắt đầu từ đâu, chia bài tập lớn như thế nào và ưu tiên công việc nào trong tuần. Hiện tại, họ tự ghép thông tin từ Canvas, lịch cá nhân, ghi chú và chatbot rời rạc; vì vậy dễ bắt đầu muộn, chạy theo deadline và lặp lại cách học chưa hiệu quả.
+PaceWise là learning companion theo chu trình **Plan–Do–Reflect**:
 
-Giảng viên thường chỉ nhận ra sinh viên gặp khó khăn sau khi bài bị nộp muộn hoặc kết quả giảm. X-Tutor hướng tới tạo một vòng lặp **Plan–Do–Reflect** giúp sinh viên lập kế hoạch, nhận hỗ trợ có căn cứ khi thực hiện và điều chỉnh cách học cho tuần tiếp theo; đồng thời cung cấp cho giảng viên tín hiệu tổng hợp để hỗ trợ đúng lúc.
+- **Plan:** lập kế hoạch tuần từ nhiệm vụ, deadline và quỹ thời gian.
+- **Do:** theo dõi thực tế, hỏi đáp có nguồn, kiểm tra nhanh mức hiểu bài và phục hồi kế hoạch khi cần.
+- **Reflect:** tìm nguyên nhân sai lệch và hiệu chỉnh ước lượng cho tuần sau.
 
-### Mục tiêu MVP
+### Mục tiêu P0
 
-1. Giúp sinh viên tổng hợp nhiệm vụ từ nhiều môn và xác nhận một kế hoạch tuần khả thi.
-2. Hỗ trợ hỏi đáp trên tài liệu môn học có trích nguồn, nhưng không làm hộ bài tập tính điểm.
-3. Ghi nhận tiến độ thực tế và tạo phiên Reflect ngắn để đề xuất điều chỉnh cho tuần sau.
-4. Cho giảng viên xem tiến độ lớp và tín hiệu nguy cơ ở dạng tổng hợp/ẩn danh.
-5. Đo được tỷ lệ hoàn thành kế hoạch, tỷ lệ nộp đúng hạn, mức sử dụng Reflect và chất lượng câu trả lời có nguồn.
+1. Giúp sinh viên biết việc tiếp theo và lý do ưu tiên.
+2. Phát hiện sớm khi kế hoạch không còn khả thi.
+3. Đề xuất phương án phục hồi nhưng không tự ý đổi lịch.
+4. Biến bằng chứng học tập thành hành động tiếp theo.
+5. Cho giảng viên thấy xu hướng tổng hợp và ca cần duyệt mà không biến hệ thống thành công cụ giám sát cá nhân.
 
-Ngưỡng thành công định lượng chưa được chốt; đây là một Known Ambiguity ở Mục 9, không được tự coi là cam kết sản phẩm.
+### Nguyên tắc
 
-## 2. User personas
+- AI hỗ trợ ra quyết định; con người chịu trách nhiệm cho hành động có tác động.
+- Không làm hộ bài tính điểm.
+- Trả lời từ tài liệu môn học có trích dẫn; thiếu nguồn thì nói rõ.
+- Đánh giá hiểu bài chỉ mang tính hỗ trợ, không phải điểm số.
+- P0 phải chạy được không phụ thuộc Canvas thật.
 
-| Vai trò | Mô tả | Mục tiêu chính | Quyền hạn trong MVP |
+## 2. Người dùng và quyền hạn
+
+| Vai trò | Mô tả | Mục tiêu | Quyền |
 |---|---|---|---|
-| **Sinh viên** | Học nhiều môn, có lịch cá nhân và mức tải khác nhau | Biết cần làm gì trong tuần, nhận hỗ trợ khi mắc kẹt và giảm trễ hạn | Xem môn/bài tập của mình; tạo, sửa và xác nhận kế hoạch; cập nhật tiến độ; hỏi đáp; thực hiện Reflect; xem lịch sử cá nhân |
-| **Giảng viên/Cố vấn** | Theo dõi một lớp hoặc nhóm sinh viên nhưng không có tín hiệu sớm | Nhận biết khó khăn chung và nguy cơ chậm tiến độ để hỗ trợ đúng lúc | Quản lý tài liệu được phép dùng; xem dashboard tổng hợp; xem cảnh báo ẩn danh; ghi nhận quyết định can thiệp |
+| Sinh viên | Học một môn pilot, có nhiều nhiệm vụ và quỹ thời gian hữu hạn | Duy trì kế hoạch khả thi, nộp đúng hạn, biết phần cần ôn | Xem dữ liệu cá nhân; tạo/xác nhận kế hoạch; cập nhật tiến độ; hỏi đáp; làm kiểm tra nhanh; phản tư |
+| Giảng viên/cố vấn | Theo dõi lớp và duyệt nội dung đánh giá | Phát hiện sớm điểm nghẽn, hỗ trợ đúng chỗ | Duyệt mục tiêu/câu hỏi/rubric; xem tổng hợp nhóm; xử lý hàng chờ; xác nhận hỗ trợ |
+| Hệ thống | Điều phối workflow và thực thi quy tắc | Đưa ra gợi ý có thể kiểm tra | Không tự gửi tin, đổi lịch, ghi điểm hay chia sẻ dữ liệu |
 
-Quản trị hệ thống chưa phải persona có giao diện riêng trong MVP. Cấu hình model, quota và nguồn dữ liệu được vận hành bằng biến môi trường hoặc công cụ nội bộ.
+P0 có hai bề mặt:
 
-## 3. User stories
+- **Student Experience:** web độc lập; P1 có thể mở từ Canvas qua LTI 1.3.
+- **Management Console:** web cho giảng viên/cố vấn, dùng chung backend và RBAC.
 
-P0 là bắt buộc cho MVP; P1 chỉ làm sau khi P0 ổn định; P2 là hướng mở rộng.
+## 3. Phạm vi
 
-| ID | Ưu tiên | User story | Điều kiện chấp nhận chính |
+### 3.1 P0 bắt buộc
+
+- Một môn pilot và 3–5 đơn vị kiến thức.
+- Canvas fixture có schema tương thích adapter REST.
+- Đăng nhập mô phỏng, phân quyền hai vai trò.
+- Kế hoạch tuần có milestone, thời lượng, thứ tự, deadline và giải thích ưu tiên.
+- Cập nhật thời gian thực tế và trạng thái công việc.
+- Phát hiện nguy cơ theo quy tắc xác định trước; AI chỉ giải thích.
+- Tạo 2–3 phương án phục hồi và yêu cầu sinh viên xác nhận.
+- RAG trên tài liệu môn học, trích dẫn tới đoạn nguồn.
+- Guardrail nhiều lớp với yêu cầu làm hộ bài.
+- Kiểm tra nhanh 1–3 câu và trạng thái bằng chứng học tập.
+- Phiên Reflect cuối tuần.
+- Dashboard lớp tổng hợp, ngưỡng ẩn danh và hàng chờ giảng viên.
+- Logging, tracing, metrics, ba bộ đánh giá ≥120 mẫu và deploy online.
+
+### 3.2 P1 sau release gate
+
+- Canvas REST chỉ đọc với sandbox/token.
+- LTI 1.3 với developer key.
+- Memory dài hạn qua nhiều tuần.
+- Reranker/model dịch vụ và định tuyến model nâng cao.
+- Load test 1.000 người dùng đồng thời.
+
+### 3.3 Không làm
+
+- Làm hộ, nộp bài, chấm điểm chính thức hoặc ghi điểm lên Canvas.
+- Fork/chỉnh sửa mã nguồn Canvas LMS.
+- Triển khai toàn trường hoặc hỗ trợ tất cả môn.
+- Tự động gửi email, thay deadline, đổi lịch cá nhân hoặc can thiệp sinh viên.
+- Xếp hạng hay gắn nhãn năng lực cố định.
+
+## 4. User stories và tiêu chí chấp nhận
+
+| ID | Ưu tiên | User story | Tiêu chí chấp nhận |
 |---|---|---|---|
-| US-S01 | P0 | Là sinh viên, tôi muốn đăng nhập và chỉ xem dữ liệu của mình để bảo vệ riêng tư. | Hai vai trò có màn hình/quyền khác nhau; sinh viên không truy cập dashboard giảng viên. |
-| US-S02 | P0 | Là sinh viên, tôi muốn xem assignment và deadline của nhiều môn tại một nơi để không bỏ sót việc. | Hiển thị được dữ liệu mô phỏng của nhiều môn; có trạng thái nguồn và thời điểm cập nhật. |
-| US-S03 | P0 | Là sinh viên, tôi muốn AI đề xuất cách chia assignment thành các bước nhỏ để biết nên bắt đầu từ đâu. | Đề xuất có nhiệm vụ, thời lượng, thứ tự và hạn dự kiến; chưa lưu cho tới khi sinh viên xác nhận. |
-| US-S04 | P0 | Là sinh viên, tôi muốn sửa và xác nhận kế hoạch tuần để kế hoạch phù hợp lịch thực tế. | Có màn hình xem trước; cho phép sửa; chỉ ghi kế hoạch sau khi bấm xác nhận. |
-| US-S05 | P0 | Là sinh viên, tôi muốn cập nhật trạng thái nhiệm vụ để biết mình đang lệch kế hoạch ở đâu. | Hỗ trợ `todo`, `in_progress`, `done`; ghi thời điểm cập nhật; tính tiến độ tuần bằng quy tắc thường. |
-| US-S06 | P0 | Là sinh viên, tôi muốn hỏi về nội dung môn học và thấy nguồn để kiểm chứng câu trả lời. | Câu trả lời grounded phải có tên tài liệu và vị trí tham chiếu; thiếu căn cứ thì hệ thống nói không đủ dữ liệu. |
-| US-S07 | P0 | Là sinh viên, khi yêu cầu AI làm hộ bài, tôi muốn được chuyển sang gợi ý từng bước để vẫn tự giải quyết. | Guardrail chạy trong code trước bước sinh câu trả lời; không trả đáp án hoàn chỉnh; có lý do và hướng hỗ trợ thay thế. |
-| US-S08 | P0 | Là sinh viên, tôi muốn nhìn lại tuần vừa qua để điều chỉnh tuần tiếp theo. | Phiên Reflect dùng tiến độ thật, ghi nhận nguyên nhân và chỉ tạo đề xuất re-plan sau khi sinh viên xác nhận. |
-| US-I01 | P0 | Là giảng viên, tôi muốn xem tiến độ và điểm nghẽn chung của lớp để chuẩn bị hỗ trợ. | Dashboard không hiển thị nội dung chat riêng; dữ liệu lớp được tổng hợp/ẩn danh theo ngưỡng phù hợp. |
-| US-I02 | P0 | Là giảng viên, tôi muốn xem tín hiệu nguy cơ và quyết định có can thiệp hay không. | Hệ thống nêu lý do gắn cờ; không tự gửi liên hệ hoặc xử phạt; giảng viên xác nhận hành động. |
-| US-I03 | P1 | Là giảng viên, tôi muốn đưa tài liệu đã được phép sử dụng vào kho kiến thức của môn. | Xem trước tên file, môn và phạm vi truy cập trước khi index; có thể gỡ tài liệu. |
-| US-S09 | P1 | Là sinh viên, tôi muốn đồng bộ Canvas ở chế độ chỉ đọc để giảm nhập thủ công. | Chỉ đọc course, assignment và due date; lỗi đồng bộ không làm mất kế hoạch hiện có. |
-| US-S10 | P1 | Là sinh viên, tôi muốn nhận nhắc việc đã chọn để không quên milestone. | Người dùng opt-in, chọn kênh/tần suất và có thể tắt. |
-| US-X01 | P2 | Là người dùng, tôi muốn mở X-Tutor trực tiếp trong Canvas qua LTI. | Ngoài phạm vi MVP Gate 01. |
+| US-01 | P0 | Là sinh viên, tôi muốn thấy nhiệm vụ từ Canvas để không nhập lại | Fixture luôn chạy; adapter thật có timestamp đồng bộ và trạng thái lỗi |
+| US-02 | P0 | Tôi muốn khai báo quỹ thời gian để kế hoạch không vượt khả năng | Tổng thời lượng không vượt slot; xung đột được báo rõ |
+| US-03 | P0 | Tôi muốn AI chia assignment thành milestone | Mỗi milestone có đầu ra, thời lượng, deadline nội bộ và nguồn assignment |
+| US-04 | P0 | Tôi muốn xem trước kế hoạch trước khi lưu | Chỉ ghi DB sau khi bấm xác nhận; thay đổi được audit |
+| US-05 | P0 | Tôi muốn cập nhật thời gian thực tế | Hệ thống tính lại sai lệch và nguy cơ trong ≤2 giây, không cần gọi LLM |
+| US-06 | P0 | Tôi muốn phương án phục hồi khi có nguy cơ trễ | Có 2–3 phương án, nêu đánh đổi và bảo vệ deadline quan trọng khi còn nghiệm |
+| US-07 | P0 | Tôi muốn hỏi tài liệu môn học | Câu trả lời có trích dẫn hoặc từ chối khi không đủ nguồn |
+| US-08 | P0 | Tôi muốn được gợi ý chứ không nhận bài làm sẵn | Yêu cầu làm hộ bị chặn/chuyển thành gợi ý từng bước |
+| US-09 | P0 | Tôi muốn biết phần vừa học đã hiểu tới đâu | Kết quả có bằng chứng, độ tin cậy, giới hạn và bước tiếp theo |
+| US-10 | P0 | Tôi muốn nhìn lại tuần học | Reflect so sánh dự kiến–thực tế và lưu một điều chỉnh cụ thể |
+| US-11 | P0 | Là giảng viên, tôi muốn thấy xu hướng lớp | Chỉ hiện nhóm n≥5, không lộ chat/phản tư thô |
+| US-12 | P0 | Tôi muốn duyệt câu hỏi và ca không chắc chắn | Có hàng chờ, thông tin giải thích và audit quyết định |
 
-## 4. Luồng chính (happy path)
+## 5. Luồng nghiệp vụ chi tiết
 
-### 4.1 Sinh viên: Plan → Do → Reflect
+### 5.1 Khởi tạo và nạp dữ liệu
 
-1. Sinh viên đăng nhập và chọn hồ sơ sinh viên.
-2. Hệ thống tải danh sách môn, assignment và deadline từ bộ dữ liệu mô phỏng; nếu có kết nối Canvas read-only thì hiển thị nguồn và lần đồng bộ gần nhất.
-3. Sinh viên chọn mục tiêu tuần, thời gian có thể học và assignment cần ưu tiên.
-4. Planner tạo bản nháp gồm các milestone, thời lượng ước tính và hạn dự kiến.
-5. Sinh viên xem trước, sửa hoặc từ chối bản nháp; chỉ khi bấm **Xác nhận kế hoạch** hệ thống mới ghi dữ liệu.
-6. Trong tuần, sinh viên cập nhật trạng thái từng nhiệm vụ.
-7. Khi cần hỗ trợ, sinh viên chọn môn rồi đặt câu hỏi. Guardrail kiểm tra yêu cầu trước khi gọi luồng RAG.
-8. Nếu yêu cầu hợp lệ và có căn cứ, hệ thống trả lời kèm nguồn. Nếu là yêu cầu làm hộ, hệ thống từ chối phần đáp án và chuyển sang câu hỏi/gợi ý Socratic.
-9. Cuối tuần, hệ thống tổng hợp kế hoạch và tiến độ, sau đó đặt 3–5 câu hỏi Reflect.
-10. Sinh viên xem và xác nhận các điều chỉnh cho tuần sau.
-11. Hệ thống lưu phiên Reflect và tạo bản nháp kế hoạch mới; sinh viên vẫn là người quyết định cuối cùng.
+1. Người dùng đăng nhập và hệ thống xác định vai trò.
+2. Sinh viên chọn môn pilot.
+3. Adapter đọc Canvas fixture. Nếu có credential, người dùng có quyền mới được bật Canvas REST read-only.
+4. Hệ thống chuẩn hóa course, assignment, deadline, submission status và tài liệu.
+5. Màn hình hiển thị thời điểm đồng bộ, nguồn dữ liệu và các trường thiếu.
+6. Nếu chưa có dữ liệu, hiển thị empty state kèm lựa chọn tải fixture; không gọi AI.
 
-### 4.2 Giảng viên: xem tín hiệu và quyết định hỗ trợ
+**Lỗi:** khi Canvas không truy cập được, dùng bản đồng bộ gần nhất, gắn nhãn “dữ liệu cũ” và cho phép thử lại. Không suy đoán deadline bị thiếu.
 
-1. Giảng viên đăng nhập vào dashboard của lớp được phân quyền.
-2. Hệ thống hiển thị tỷ lệ hoàn thành kế hoạch, nhiệm vụ có nguy cơ trễ và chủ đề gây khó khăn ở dạng tổng hợp.
-3. Giảng viên mở một tín hiệu để xem lý do, độ mới của dữ liệu và hành động gợi ý.
-4. Giảng viên chọn bỏ qua, theo dõi thêm hoặc xác nhận một biện pháp hỗ trợ. MVP không tự gửi thông báo hay áp dụng hình phạt.
+### 5.2 Plan — lập kế hoạch tuần
 
-## 5. Human-in-the-loop
+1. Sinh viên chọn tuần, mục tiêu, quỹ thời gian từng ngày và khung giờ không thể dùng.
+2. Bộ lập lịch xác định trước kiểm tra deadline, thời lượng và phụ thuộc.
+3. LLM đề xuất cách chia assignment thành milestone có đầu ra kiểm chứng được.
+4. Bộ kiểm tra schema và lịch loại phương án vượt quỹ thời gian, đặt sau deadline hoặc thiếu phụ thuộc.
+5. Hệ thống xếp ưu tiên theo deadline, trọng số do người dùng cung cấp, tiến độ và mức rủi ro.
+6. Sinh viên thấy bản xem trước gồm lý do ưu tiên, slot học, phần chưa chắc chắn và cảnh báo quá tải.
+7. Sinh viên sửa hoặc xác nhận. Chỉ sau xác nhận, kế hoạch mới được lưu.
 
-Guardrail phải là nhánh xử lý trong code và được kiểm thử, không chỉ là câu lệnh trong system prompt.
+**Trường hợp không khả thi:** hệ thống không tạo lịch giả. Nó chỉ rõ thiếu bao nhiêu giờ và yêu cầu sinh viên giảm phạm vi, đổi ưu tiên hoặc trao đổi với giảng viên.
 
-| Hành động/rủi ro | Người xác nhận và thông tin phải thấy | Hành vi MVP |
-|---|---|---|
-| Lưu kế hoạch do AI đề xuất | Sinh viên thấy milestone, thời lượng, hạn và nguồn assignment trước khi bấm **Xác nhận** | Không tự ghi bản nháp AI vào kế hoạch chính thức |
-| Sửa hoặc xóa mục tiêu/milestone | Sinh viên thấy phần thay đổi và ảnh hưởng tới tiến độ | Sửa được hoàn tác; xóa cần xác nhận riêng |
-| Yêu cầu có dấu hiệu làm hộ | Sinh viên thấy lý do bị chặn và các lựa chọn hỗ trợ an toàn | Chặn trước khi sinh đáp án; không tự báo cáo sinh viên cho giảng viên |
-| Index hoặc gỡ tài liệu môn học | Giảng viên thấy tên file, môn, loại tài liệu và phạm vi người được truy cập | Chỉ index sau xác nhận; việc gỡ yêu cầu xác nhận và cập nhật chỉ mục |
-| Gắn cờ sinh viên/nguy cơ | Giảng viên thấy tín hiệu, dữ liệu đầu vào, thời điểm và mức tin cậy | AI chỉ đề xuất; giảng viên quyết định có can thiệp |
-| Gửi email/thông báo ra ngoài | Người gửi xem người nhận, nội dung, kênh và thời điểm | Không tự gửi trong P0; nếu làm P1 phải có bước duyệt cuối |
-| Hiển thị danh tính cá nhân cho giảng viên | Phải có chính sách trường và cơ sở đồng ý/quyền truy cập rõ ràng | P0 chỉ hiển thị tổng hợp/ẩn danh; không tự giải ẩn danh |
-| Xóa dữ liệu cá nhân | Chủ dữ liệu thấy phạm vi dữ liệu và hậu quả | Xác nhận hai bước; ghi audit event nhưng không lưu lại nội dung đã xóa |
+### 5.3 Do — thực hiện và theo dõi
 
-## 6. Xử lý lỗi & giới hạn
+1. Dashboard hiển thị việc tiếp theo, thời lượng dự kiến, deadline và trạng thái.
+2. Sinh viên bắt đầu/kết thúc phiên hoặc nhập thời gian thực tế.
+3. Bộ tính sai lệch cập nhật:
+   - phần trăm hoàn thành;
+   - sai số thời gian;
+   - slack trước deadline;
+   - số milestone bị phụ thuộc;
+   - trạng thái bằng chứng học tập liên quan.
+4. Nếu vượt ngưỡng, hệ thống tạo tín hiệu nguy cơ và giải thích dữ liệu đã dùng.
+5. Sinh viên có thể tiếp tục, mở Recover hoặc đánh dấu dữ liệu chưa đúng.
 
-| Tình huống | Hệ thống xử lý | Thông báo cho người dùng |
-|---|---|---|
-| LLM timeout, provider lỗi hoặc hết quota | Dừng an toàn, không ghi thay đổi dang dở; cho phép thử lại | “AI tạm thời chưa phản hồi. Kế hoạch/dữ liệu của bạn chưa bị thay đổi.” |
-| LLM trả sai JSON/schema | Validate bằng Pydantic, retry tối đa một lần; thất bại thì chuyển sang mẫu thủ công | “Không thể tạo bản nháp hợp lệ. Bạn có thể nhập nhiệm vụ thủ công.” |
-| Không tìm thấy tài liệu liên quan | Không suy đoán; yêu cầu chọn đúng môn hoặc bổ sung tài liệu | “Chưa có đủ căn cứ trong tài liệu môn học để trả lời.” |
-| Câu trả lời không tạo được citation hợp lệ | Không gắn nhãn grounded; không hiển thị câu trả lời như kiến thức đã kiểm chứng | “Không xác minh được nguồn cho câu trả lời này.” |
-| Prompt injection hoặc yêu cầu làm hộ | Chặn nhánh nguy hiểm trước khi gọi tutor; đưa hỗ trợ Socratic | Nêu ngắn gọn giới hạn và đề nghị giải thích khái niệm/gợi ý bước tiếp theo |
-| Canvas không kết nối hoặc dữ liệu cũ | Giữ dữ liệu đã có, hiển thị lần đồng bộ gần nhất; cho nhập thủ công/dùng mock | “Không đồng bộ được Canvas; đang dùng dữ liệu gần nhất.” |
-| Lỗi ghi cơ sở dữ liệu | Rollback giao dịch, chống ghi trùng bằng request ID khi phù hợp | “Chưa lưu được thay đổi; vui lòng thử lại.” |
-| Dashboard có nhóm quá ít người | Không hiển thị lát cắt có nguy cơ nhận diện cá nhân | “Chưa đủ dữ liệu để hiển thị thống kê an toàn.” |
+### 5.4 Do — hỏi đáp có nguồn và liêm chính
 
-### Giới hạn phải nói thẳng
+1. Câu hỏi được kiểm tra prompt injection và ý định làm hộ.
+2. Với yêu cầu hợp lệ, retriever tìm đoạn liên quan trong Qdrant; reranker xếp lại.
+3. Nếu nguồn không đủ, hệ thống từ chối trả lời chắc chắn và gợi ý tài liệu cần xem.
+4. Nếu đủ nguồn, LLM trả lời ngắn, kèm trích dẫn đến tài liệu/đoạn.
+5. Với yêu cầu làm hộ bài tính điểm, hệ thống không sinh đáp án hoàn chỉnh; yêu cầu sinh viên đưa cách làm thử, đưa gợi ý từng bước hoặc giải thích khái niệm.
+6. Người dùng có thể báo trích dẫn sai; sự kiện được đưa vào bộ đánh giá.
 
-- X-Tutor không nộp bài, làm bài, chấm điểm hoặc thay đổi điểm trên Canvas.
-- X-Tutor không bảo đảm mọi câu trả lời AI đều đúng; câu trả lời học thuật phải có nguồn để người dùng kiểm tra.
-- MVP không chứng minh tác động dài hạn lên năng lực tự học.
-- MVP không chẩn đoán sức khỏe tâm thần, năng lực cá nhân hoặc đưa ra quyết định kỷ luật.
-- Lập kế hoạch hỗ trợ nhiều môn; RAG và bộ đánh giá chuyên sâu chỉ được pilot trên 1–2 môn đại diện.
-- Canvas LTI cấp trường và tích hợp ghi dữ liệu ngược vào Canvas nằm ngoài MVP.
+### 5.5 Do — kiểm tra mức hiểu bài
 
-## 7. Dữ liệu
+1. Sinh viên chọn một đơn vị kiến thức hoặc hệ thống gợi ý từ nhiệm vụ đang làm.
+2. Hệ thống lấy mục tiêu, ngân hàng câu hỏi/rubric đã được giảng viên duyệt.
+3. Sinh viên làm 1–3 câu; với câu mở, AI chỉ phân tích theo rubric.
+4. Bộ chấm xác định trước xử lý câu đóng; AI xử lý câu mở và phải trả schema.
+5. Hệ thống tổng hợp bốn mặt: đúng khái niệm, lập luận, vận dụng và kiến thức nền.
+6. Kết quả là một trong bốn trạng thái:
+   - chưa đủ bằng chứng;
+   - còn nhầm lẫn;
+   - đang hình thành;
+   - đã thể hiện được.
+7. Mỗi kết quả có nguồn bằng chứng, độ tin cậy, giới hạn và hành động tiếp theo.
+8. Nếu độ tin cậy thấp, câu trả lời mâu thuẫn hoặc nội dung ngoài rubric, hệ thống từ chối kết luận và đưa vào hàng chờ giảng viên.
 
-| Nguồn | Dữ liệu/định dạng dự kiến | Cách lấy và mục đích | Phạm vi MVP |
+Kết quả không được hiển thị như điểm số và không ghi vào gradebook.
+
+### 5.6 Do — Recover
+
+Recover được kích hoạt khi có ít nhất một điều kiện:
+
+- slack của deadline quan trọng xuống dưới ngưỡng;
+- một milestone vượt thời gian dự kiến;
+- nhiệm vụ phụ thuộc bị chậm;
+- bằng chứng học tập cho thấy cần thêm một phiên ôn;
+- sinh viên chủ động yêu cầu.
+
+Luồng:
+
+1. Hệ thống chụp snapshot kế hoạch hiện tại.
+2. Bộ lập lịch tạo các phương án hợp lệ; LLM diễn giải đánh đổi.
+3. Mỗi phương án nêu việc giữ, việc dời, thời gian thiếu/dư, deadline được bảo vệ và rủi ro còn lại.
+4. Nếu không còn nghiệm khả thi, hệ thống nói rõ và gợi ý trao đổi với giảng viên.
+5. Sinh viên chọn, sửa hoặc bỏ qua.
+6. Màn hình xác nhận hiển thị diff trước–sau.
+7. Chỉ sau xác nhận, lịch mới được cập nhật; snapshot cũ vẫn nằm trong audit log.
+
+### 5.7 Reflect — cuối tuần
+
+1. Hệ thống tổng hợp kế hoạch, thời gian thực tế, milestone, tín hiệu nguy cơ và bằng chứng học tập.
+2. Sinh viên trả lời tối đa ba câu: điều gì hiệu quả, điều gì gây lệch, tuần sau đổi gì.
+3. AI tóm tắt nhưng không phán xét tính cách/năng lực.
+4. Sinh viên chọn một điều chỉnh: hệ số ước lượng, khung giờ, cách chia việc hoặc đơn vị kiến thức cần ôn.
+5. Điều chỉnh chỉ ảnh hưởng kế hoạch tuần sau sau khi sinh viên xác nhận.
+
+### 5.8 Giảng viên/cố vấn
+
+1. Dashboard hiển thị tỷ lệ đúng hạn, số ca nguy cơ, trạng thái bằng chứng theo đơn vị kiến thức và xu hướng theo tuần.
+2. Chỉ nhóm n≥5 được hiển thị; không có nội dung chat/phản tư thô.
+3. Giảng viên duyệt mục tiêu, câu hỏi, đáp án và rubric trước khi dùng.
+4. Hàng chờ gồm ca độ tin cậy thấp, nguồn bị báo sai và tín hiệu cần hỗ trợ.
+5. Trước khi gửi một hỗ trợ hướng tới cá nhân, giảng viên xem lý do, dữ liệu được dùng và xác nhận.
+
+## 6. Human-in-the-loop
+
+| Hành động | Rủi ro | Người xác nhận | Thông tin phải thấy |
 |---|---|---|---|
-| Canvas mô phỏng | Course, assignment, rubric, due date ở JSON/CSV | Bộ dữ liệu do đội tạo, không chứa dữ liệu cá nhân thật | P0, nguồn mặc định |
-| Canvas REST API | Course, assignment, due date | OAuth/token chỉ đọc của tài khoản thử nghiệm đã cho phép | P1, nếu có sandbox/quyền truy cập |
-| Tài liệu môn học | PDF, TXT, Markdown; định dạng khác phải chuyển đổi hoặc được hỗ trợ riêng | Tài liệu công khai, do đội tạo hoặc được giảng viên cho phép | Pilot trên 1–2 môn |
-| Dữ liệu sinh viên | Mục tiêu, kế hoạch, tiến độ, câu trả lời Reflect | Người dùng nhập và xác nhận trong ứng dụng | Chỉ chủ dữ liệu xem chi tiết |
-| Log an toàn/đánh giá | Loại intent, trạng thái guardrail, latency, lỗi; hạn chế lưu nội dung thô | Phục vụ debug và evaluation | Dùng ID giả danh; không đưa chat riêng lên dashboard |
-| Dữ liệu dashboard | Tỷ lệ hoàn thành, nhóm nhiệm vụ trễ, chủ đề khó | Tổng hợp từ dữ liệu sử dụng | Ẩn danh/tổng hợp; áp dụng ngưỡng nhóm tối thiểu |
+| Lưu kế hoạch tuần | Ghi sai lịch cá nhân | Sinh viên | Toàn bộ slot, xung đột, deadline, giả định |
+| Phục hồi kế hoạch | Dời việc quan trọng | Sinh viên | Diff trước–sau, đánh đổi, rủi ro còn lại |
+| Duyệt câu hỏi/rubric | Đánh giá sai mục tiêu | Giảng viên/SME | Mục tiêu, câu, đáp án, rubric, nguồn |
+| Kết luận ca không chắc chắn | Gắn nhãn sai | Giảng viên | Bằng chứng, độ tin cậy, lý do từ chối kết luận |
+| Hỗ trợ cá nhân | Ảnh hưởng riêng tư | Giảng viên | Đối tượng, nội dung, căn cứ, kênh gửi |
+| Xóa dữ liệu | Không thể khôi phục ngay | Chủ dữ liệu/admin | Phạm vi, thời hạn xử lý, chính sách backup |
 
-Nguyên tắc dữ liệu:
+## 7. Lỗi và giới hạn
 
-- Chỉ dùng dữ liệu công khai, mô phỏng, đã ẩn danh hoặc có quyền sử dụng rõ ràng.
-- Không đưa API key, token Canvas hoặc dữ liệu định danh vào prompt/log.
-- Không dùng nội dung chat riêng để đánh giá kỷ luật.
-- Người dùng phải có cách xem và yêu cầu xóa dữ liệu cá nhân của mình.
-- Chính sách thời hạn lưu dữ liệu phải được chốt trước khi thử nghiệm với người dùng thật.
-
-## 8. Tech stack (dự kiến và trạng thái code)
-
-| Thành phần | Hiện có trong repo ngày 20/09/2026 | Mục tiêu MVP |
+| Tình huống | Phản hồi cho người dùng | Xử lý hệ thống |
 |---|---|---|
-| Ngôn ngữ/backend | Python 3.11, FastAPI, Uvicorn | Giữ nguyên; REST API có schema Pydantic và xử lý lỗi ổn định |
-| Agent | LangGraph với hai node mẫu `analyze` và `respond` | Mở rộng thành router/guardrail, planner, grounded tutor và reflector theo từng lát dọc P0 |
-| LLM | `ChatOpenAI` qua endpoint tương thích OpenAI/OpenRouter; model lấy từ biến môi trường, default code là `openai/gpt-4o-mini` | Một model cấu hình qua `.env`; chưa cam kết model routing trong MVP |
-| API | `/health`, `/api/v1/status`, `/api/v1/chat` | Bổ sung auth/role, course, plan, progress, reflect và dashboard endpoints |
-| Cơ sở dữ liệu | Cấu hình mặc định SQLite; chưa có ORM/schema nghiệp vụ | SQLite cho phát triển/MVP ban đầu; chỉ chuyển PostgreSQL khi có nhu cầu deploy nhiều người dùng |
-| Vector store/RAG | Có biến `CHROMA_PERSIST_DIR`, nhưng dependency và ingestion chưa được bật | Chọn và triển khai một vector store sau spike; chưa mặc định Qdrant khi code chưa có |
-| Frontend | Chưa có frontend trong repo | Next.js cho hai vai trò; phạm vi màn hình bám theo P0 |
-| Auth | Chưa triển khai | Phải chốt trước khi xây màn hình đa vai trò; mọi endpoint nghiệp vụ phải kiểm tra role |
-| Test | pytest/pytest-asyncio, test health/status/chat mẫu; ruff | Unit test cho guardrail, schema, permission; integration test cho happy path và lỗi chính |
-| Deploy | Docker backend chạy FastAPI; chưa có cấu hình production/live URL | Chốt Render/GCP Cloud Run cho backend và Vercel cho frontend trước Gate triển khai |
-| Cache/queue | Chưa có Redis hoặc worker | Không bắt buộc P0; chỉ thêm khi có số liệu chứng minh cần thiết |
+| Canvas lỗi/quá hạn token | “Không đồng bộ được; đang dùng dữ liệu lúc…” | Dùng snapshot; retry có backoff |
+| Không đủ tài liệu | “Chưa đủ nguồn để kết luận” | Không gọi model lớn; log ca thiếu nguồn |
+| LLM sai schema | Hiển thị thử lại, không lưu kết quả | Validate; retry tối đa 1 lần; fallback |
+| Provider hết quota | Thông báo tạm thời và cho dùng chức năng không-AI | Circuit breaker; chuyển provider nếu đã cấu hình |
+| Timeout >30 giây | Dừng tác vụ và cho thử lại | Hủy job; lưu trace lỗi |
+| Kế hoạch vô nghiệm | Nêu số giờ thiếu và deadline xung đột | Không sinh lịch giả |
+| Độ tin cậy thấp | Không kết luận | Chuyển hàng chờ giảng viên |
+| Yêu cầu làm hộ | Giải thích ranh giới và đưa gợi ý học | Log loại guardrail, không lưu nội dung nhạy cảm thừa |
 
-## 9. Known Ambiguities
+Giới hạn phải hiển thị rõ: dữ liệu Canvas có thể cũ; ước lượng không bảo đảm kết quả; bằng chứng học tập không phải điểm; cảnh báo không thay thế trao đổi với giảng viên.
 
-| Điểm chưa chốt | Giả định tạm thời để không chặn code | Khi nào phải chốt |
-|---|---|---|
-| Có quyền truy cập Canvas sandbox/API hay không | P0 dùng Canvas mock; không phụ thuộc kết nối thật | Trước khi bắt đầu US-S09 |
-| Cơ chế đăng nhập và phân quyền | Chưa chọn nhà cung cấp; API vẫn phải thiết kế theo `student`/`instructor` | Trước khi xây frontend và endpoint nghiệp vụ đầu tiên |
-| Chroma hay Qdrant cho RAG | Chưa có vector store nào được triển khai; spike bằng cùng một bộ tài liệu/câu hỏi | Trước US-S06; cập nhật PRD và config trong cùng PR |
-| Model chạy chính thức | Runtime lấy từ `.env`; `.env.example` và default code hiện chưa thống nhất tên model | Trước khi tạo baseline evaluation; tài liệu và code phải dùng cùng một cấu hình |
-| Ngưỡng nào được xem là “có nguy cơ trễ” | Dùng rule minh bạch trên dữ liệu mock, chưa tự động can thiệp | Trước khi nghiệm thu US-I02 |
-| Khi nào giảng viên được xem danh tính sinh viên | P0 chỉ tổng hợp/ẩn danh; không giải ẩn danh | Chỉ chốt sau khi có chính sách/đồng ý rõ ràng từ đơn vị thử nghiệm |
-| Ngưỡng thành công của MVP | Trước mắt chỉ thu baseline: đúng hạn, hoàn thành kế hoạch, Reflect, citation và guardrail | Chốt sau pilot nhỏ/baseline, trước khi tuyên bố tác động |
-| Định dạng tài liệu được hỗ trợ | Ưu tiên PDF/TXT/Markdown; chưa cam kết DOCX/PPTX | Trước khi xây ingestion UI |
-| Kênh nhắc việc | P0 chỉ nhắc trong ứng dụng; không gửi email/push tự động | Trước US-S10 |
-| Nơi deploy và giới hạn quota | Chạy local/Docker cho đến khi có lựa chọn hosting và ngân sách | Trước Gate triển khai/live URL |
+## 8. Dữ liệu và quyền riêng tư
 
-Khi một ambiguity được chốt, đội phải cập nhật mục tương ứng trong PRD cùng thay đổi code; không để quyết định chỉ tồn tại trong chat, slide hoặc issue.
+### Nguồn dữ liệu
+
+- Canvas fixture: course, assignment, deadline, submission status, syllabus.
+- Canvas REST read-only khi có credential.
+- Tài liệu môn do đội/giảng viên được phép dùng.
+- Dữ liệu người dùng nhập: quỹ thời gian, tiến độ, câu trả lời kiểm tra, lựa chọn phục hồi.
+- Dữ liệu đánh giá công khai, mô phỏng hoặc đã thay định danh.
+
+### Chính sách
+
+- RBAC tách sinh viên và giảng viên.
+- Mã định danh pilot được thay bằng mã giả.
+- Dashboard chỉ tổng hợp nhóm n≥5.
+- Không đưa chat/phản tư thô vào dashboard hoặc analytics.
+- Log vận hành giữ 30 ngày.
+- Dữ liệu pilot đã thay định danh giữ 90 ngày.
+- Yêu cầu xóa hoàn tất trong 30 ngày; backup hết hạn trong 30 ngày tiếp theo.
+- Secret chỉ nằm trong secret manager/.env cục bộ, không commit.
+- Không dùng dữ liệu để xếp hạng, kỷ luật hay chấm điểm chính thức.
+
+## 9. Đánh giá và metrics
+
+### 9.1 Ba bộ đánh giá
+
+Mỗi bộ có ít nhất 120 mẫu, version hóa, tách development/test và không dùng test để sửa prompt:
+
+1. **planning_v1:** bình thường, quá tải, xung đột, nguy cơ và phục hồi.
+2. **grounding_safety_v1:** trả lời được/không trả lời được, injection, câu hỏi hợp lệ, yêu cầu làm hộ.
+3. **understanding_journey_v1:** câu hỏi/rubric, câu trả lời có nhầm lẫn và hành trình Plan–Do–Reflect.
+
+Với dữ liệu hiểu bài: SME duyệt; hai người gán nhãn độc lập; người thứ ba phân xử; báo cáo Cohen’s kappa hoặc Krippendorff’s alpha.
+
+### 9.2 Ngưỡng AI/reliability
+
+| Nhóm | Metric | Ngưỡng P0 |
+|---|---|---:|
+| Plan | Kế hoạch đúng ràng buộc | ≥95% |
+| Recover | Bảo vệ deadline quan trọng khi còn nghiệm | ≥90% |
+| Risk | Recall / precision | ≥85% / ≥75% |
+| Grounding | Trích dẫn hợp lệ | ≥95% |
+| Grounding | Từ chối đúng khi thiếu nguồn | ≥90% |
+| Integrity | Tỷ lệ sinh đáp án làm hộ | ≤5% |
+| Integrity | Chặn nhầm yêu cầu hợp lệ | ≤10% |
+| Check | Câu hỏi/đáp án không lỗi | ≥95% |
+| Check | Bám mục tiêu kiến thức | ≥90% |
+| Diagnosis | Macro-F1 so với nhãn chuẩn | ≥0,80 |
+| Diagnosis | Lỗi ở ca độ tin cậy cao | ≤5% |
+
+RAGAS đo faithfulness và answer relevance; metric xác định trước kiểm tra citation, schema, deadline và guardrail; LLM-as-Judge chỉ dùng sau khi hiệu chuẩn với nhãn người.
+
+### 9.3 KPI sản phẩm
+
+Đây là mục tiêu pilot:
+
+- Tỷ lệ nộp đúng hạn tăng ≥10 điểm phần trăm so với baseline cùng môn/nhóm.
+- ≥70% ca nguy cơ còn khả thi có phương án phục hồi được xác nhận trước deadline.
+- Trung vị sai số thời gian dự kiến–thực tế giảm ≥20% sau ba tuần.
+- ≥60% bằng chứng học tập dẫn tới hành động tiếp theo.
+
+Baseline, cohort, kỳ quan sát và công thức phải được lưu cùng báo cáo; không suy diễn quan hệ nhân quả nếu không có thiết kế thử nghiệm phù hợp.
+
+### 9.4 Hiệu năng và chi phí
+
+- Hỏi đáp p95 ≤8 giây.
+- Plan/Recover p95 ≤15 giây.
+- Hard timeout 30 giây.
+- Báo cáo p50/p95/error rate/token/cost/cache hit/model route.
+- Load test P0: 100 virtual users với kịch bản pha trộn.
+- 1.000 người đồng thời là P1/stretch, không tuyên bố nếu chưa có bằng chứng.
+
+## 10. Tech stack và vận hành
+
+| Lớp | Lựa chọn |
+|---|---|
+| Frontend | Next.js, React, TypeScript |
+| Backend | FastAPI, Pydantic |
+| Agent | LangGraph |
+| Model gateway | OpenRouter; model nhỏ mặc định, model lớn cho Reflect khó |
+| RAG | Qdrant, embedding đa ngôn ngữ, bge-reranker; Cohere Rerank tùy cấu hình |
+| Guardrail | Quy tắc xác định trước + Llama Guard |
+| Data | PostgreSQL |
+| Cache/rate limit | Redis |
+| Eval | Pytest + RAGAS + deterministic metrics + LLM-as-Judge hiệu chuẩn |
+| Observability | OpenTelemetry, Prometheus, Grafana hoặc dịch vụ tương đương |
+| Deploy | Docker; Render hoặc GCP Cloud Run sau khi chốt ngân sách |
+
+Mỗi request có request_id, user role, workflow, model, prompt version, latency, token, cost estimate, cache status và error class. Không log secret hoặc nội dung học tập thô nếu không cần cho mục đích đã công bố.
+
+## 11. Quyết định còn mở
+
+| Mục | Chủ sở hữu | Hạn | Fallback |
+|---|---|---|---|
+| Môn pilot và 3–5 đơn vị kiến thức | PO + BA | Cuối tuần 1 | Bộ môn mô phỏng đã duyệt |
+| SME duyệt nội dung | BA | Cuối tuần 1 | Hoãn đánh giá mở, chỉ demo câu đóng |
+| Canvas sandbox/token | Tech Lead | Cuối tuần 1 | Fixture |
+| LTI developer key | Tech Lead | Cuối tuần 1 | Web độc lập |
+| Model/prompt version | AI Engineer | Đầu tuần 3 | Model nhỏ mặc định |
+| Hosting/ngân sách | Tech Lead + PO | Cuối tuần 2 | Gói staging chi phí thấp |
+| Ngoại lệ tech stack | Tech Lead + mentor | Cuối tuần 1 | Dùng stack trong PRD |
+
+## 12. Release gate P0
+
+Chỉ gọi là MVP có thể pilot khi:
+
+- Hai vai trò đăng nhập đúng quyền.
+- Happy path Plan–Do–Reflect chạy end-to-end bằng fixture.
+- Recover có diff và xác nhận.
+- Hỏi đáp có nguồn và guardrail vượt ngưỡng.
+- Kiểm tra hiểu bài có rubric, độ tin cậy và đường chuyển giảng viên.
+- Ba bộ đánh giá đều ≥120 mẫu và đạt ngưỡng hoặc có báo cáo ngoại lệ.
+- Dashboard tuân thủ n≥5 và không lộ dữ liệu thô.
+- p95/error rate/load test đạt mục tiêu P0.
+- Có dashboard/log/trace, runbook rollback và deploy online.
+- QA chính tả, thuật ngữ, link, Mermaid và thông tin đội đã hoàn tất.
