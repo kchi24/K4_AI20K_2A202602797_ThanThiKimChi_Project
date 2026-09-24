@@ -153,22 +153,28 @@ presentation/     # Pitch deck và video demo
 
 ## Thành viên và vai trò
 
-Tên thật của thành viên chưa được lưu trong repository; bảng dưới sử dụng mã nội
-bộ để không bịa dữ liệu cá nhân. Đội chỉ cần thay cột **Thành viên** trước khi
-nộp danh sách chính thức.
-
 | Thành viên | Vai trò | Trách nhiệm chính |
 |---|---|---|
 | Phạm Khắc Tú | **Tech Lead** | Kiến trúc, backend, code review, tích hợp các module và hoàn thiện hệ thống |
 | Nguyễn Gia Khánh | **AI Engineer** | LangGraph, RAG, prompt/guardrail và evaluation |
-| Đặng Thế Anh | **Product Owner (PO)** | Tầm nhìn sản phẩm, ưu tiên backlog, phạm vi MVP và nghiệm thu |
+| Trần Thế Anh | **Product Owner (PO)** | Tầm nhìn sản phẩm, ưu tiên backlog, phạm vi MVP và nghiệm thu |
 | Thân Thị Kim Chi | **Business Analyst (BA)** | Nghiên cứu pain point, user stories, PRD, UI flow và tiêu chí chấp nhận |
 
 ## Quy trình nhánh
 
-- `main`: phiên bản ổn định.
-- `develop`: nhánh tích hợp trong quá trình phát triển.
-- Nhánh tính năng: `feature/<ten-tinh-nang>`, tạo pull request vào `develop`.
+| Loại nhánh | Dùng cho | Ví dụ |
+|---|---|---|
+| `main` | Bản ổn định/deploy | Không code trực tiếp |
+| `develop` | Tích hợp các thay đổi đã review | Nhận PR từ các nhánh ngắn hạn |
+| `feat/*` | Tính năng sản phẩm | `feat/planner-agent` |
+| `docs/*` | Brief, PRD, wireframe, kiến trúc | `docs/architecture-diagram` |
+| `fix/*` | Sửa lỗi | `fix/guardrail-false-positive` |
+| `test/*` | Test hoặc evaluation riêng | `test/rag-evaluation` |
+| `chore/*` | Config, Git, CI hoặc dependency | `chore/ignore-local-pitch-deck` |
+
+Mỗi thay đổi được thực hiện trên một nhánh ngắn hạn tạo từ `develop`, mở pull
+request trở lại `develop` và xóa branch sau khi merge. Khi một phiên bản đã ổn
+định, đội mở pull request từ `develop` vào `main`.
 
 ## License
 
