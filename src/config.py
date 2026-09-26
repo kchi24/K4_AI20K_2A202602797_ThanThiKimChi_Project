@@ -30,7 +30,9 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./data/app.db"
 
     # Vector Store
-    chroma_persist_dir: str = "./data/chroma"
+    vector_store_type: str = "qdrant"
+    qdrant_path: str = "./src/agents/data/qdrant"
+    chroma_persist_dir: str = "./src/agents/data/chroma"
 
 
 @lru_cache

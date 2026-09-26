@@ -1,0 +1,300 @@
+"""
+Workflow Plan: Phân rã bài tập lớn thành milestone và lập lịch tuần.
+Agent phụ trách: Milestone Agent.
+Tích hợp:
+- Lập kế hoạch lộ trình milestone bài tập ban đầu.
+- Tự động nhận diện ngữ cảnh phiên hội thoại (Multi-turn): điều chỉnh chính xác milestone được yêu cầu thay vì tạo lại từ đầu.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from typing import Any
+from langchain_core.messages import HumanMessage, SystemMessage
+
+from src.agents.llm import get_agent_llm
+from src.agents.prompts.milestone import MILESTONE_SYSTEM_PROMPT
+from src.agents.state import LearningGraphState
+
+
+def _parse_int_minutes(val: Any) -> int:
+    """Chuyển đổi chuỗi thời lượng (ví dụ '45 phút', '1.5h', '2 tiếng') thành số phút nguyên."""
+    if isinstance(val, (int, float)):
+        return max(15, int(val))
+    if isinstance(val, str):
+        text = val.strip().lower()
+        # 1. Nếu có chữ 'phút' hoặc 'min', lấy số phút
+        min_match = re.search(r"(\d+)\s*(?:phút|min)", text)
+        if min_match:
+            return max(15, int(min_match.group(1)))
+
+        # 2. Nếu có 'tiếng', 'giờ', hoặc 'h' (dạng 1.5h, 2 giờ)
+        hour_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:h|tiếng|giờ)\b", text)
+        if hour_match:
+            return max(15, int(float(hour_match.group(1)) * 60))
+
+        # 3. Fallback lấy số nguyên đầu tiên
+        nums = re.findall(r"\d+", text)
+        if nums:
+            return max(15, int(nums[0]))
+    return 60
+
+
+def _parse_depends_on(val: Any) -> list[str]:
+    """Chuẩn hóa danh sách các milestone phụ thuộc."""
+    if isinstance(val, list):
+        return [
+            str(x).strip()
+            for x in val
+            if str(x).strip() and str(x).strip().lower() not in {"không", "none", "no", "-", "khong"}
+        ]
+    if isinstance(val, str):
+        cleaned = val.strip()
+        if not cleaned or cleaned.lower() in {"không", "none", "no", "-", "khong"}:
+            return []
+        parts = re.split(r"[,;]+", cleaned)
+        return [p.strip() for p in parts if p.strip()]
+    return []
+
+
+def _extract_milestones_from_text(text: str) -> list[dict[str, Any]]:
+    """
+    Trích xuất danh sách proposed_milestones từ câu trả lời của LLM.
+    Ưu tiên khối ```json, sau đó đến bảng markdown, và fallback mặc định nếu rỗng.
+    """
+    # 1. Thử parse từ khối ```json ... ```
+    if "```json" in text:
+        try:
+            block = text.split("```json")[1].split("```")[0].strip()
+            data = json.loads(block)
+            items = (
+                data.get("milestones")
+                if isinstance(data, dict)
+                else (data if isinstance(data, list) else None)
+            )
+            if isinstance(items, list) and items:
+                result = []
+                for idx, item in enumerate(items):
+                    if isinstance(item, dict):
+                        m_id = str(item.get("milestone_id") or item.get("id") or f"M{idx + 1}")
+                        title = str(item.get("title") or item.get("name") or f"Milestone {idx + 1}")
+                        deliv = str(item.get("deliverable") or item.get("output") or "Đầu ra kiểm chứng được")
+                        est_min = _parse_int_minutes(
+                            item.get("estimated_minutes") or item.get("duration_minutes") or item.get("duration")
+                        )
+                        deps = _parse_depends_on(item.get("depends_on") or item.get("dependencies"))
+                        result.append({
+                            "milestone_id": m_id,
+                            "title": title,
+                            "deliverable": deliv,
+                            "estimated_minutes": est_min,
+                            "depends_on": deps,
+                        })
+                if result:
+                    return result
+        except Exception:
+            pass
+
+    # 2. Thử parse từ bất kỳ code block ``` ... ``` nào có dạng JSON
+    if "```" in text:
+        for chunk in text.split("```")[1::2]:
+            try:
+                data = json.loads(chunk.strip())
+                items = (
+                    data.get("milestones")
+                    if isinstance(data, dict)
+                    else (data if isinstance(data, list) else None)
+                )
+                if isinstance(items, list) and items:
+                    result = []
+                    for idx, item in enumerate(items):
+                        if isinstance(item, dict):
+                            result.append({
+                                "milestone_id": str(item.get("milestone_id") or f"M{idx + 1}"),
+                                "title": str(item.get("title") or f"Milestone {idx + 1}"),
+                                "deliverable": str(item.get("deliverable") or "Đầu ra kiểm chứng được"),
+                                "estimated_minutes": _parse_int_minutes(item.get("estimated_minutes")),
+                                "depends_on": _parse_depends_on(item.get("depends_on")),
+                            })
+                    if result:
+                        return result
+            except Exception:
+                continue
+
+    # 3. Fallback: Parse từ bảng Markdown (cột M1, M2...)
+    table_rows = re.findall(
+        r"\|\s*(M\d+|[0-9]+)\s*\|\s*([^\|]+)\|\s*([^\|]+)\|\s*([^\|]+)\|\s*([^\|]+)\|\s*([^\|]+)\|",
+        text,
+    )
+    if table_rows:
+        result = []
+        for row in table_rows:
+            m_id = row[0].strip()
+            title = row[1].strip()
+            deliv = row[3].strip() if len(row) > 3 else row[2].strip()
+            duration_str = row[4].strip() if len(row) > 4 else "60"
+            dep_str = row[5].strip() if len(row) > 5 else "Không"
+            result.append({
+                "milestone_id": m_id,
+                "title": title,
+                "deliverable": deliv,
+                "estimated_minutes": _parse_int_minutes(duration_str),
+                "depends_on": _parse_depends_on(dep_str),
+            })
+        if result:
+            return result
+
+    # 4. Fallback baseline: Đảm bảo proposed_milestones luôn có dữ liệu hợp lệ
+    return [
+        {
+            "milestone_id": "M1",
+            "title": "Xác định câu hỏi nghiên cứu và lập đề cương",
+            "deliverable": "Bản đề cương 1 trang xác định phạm vi",
+            "estimated_minutes": 60,
+            "depends_on": [],
+        },
+        {
+            "milestone_id": "M2",
+            "title": "Thu thập và phân tích tài liệu học thuật",
+            "deliverable": "Danh mục 5-7 nguồn học thuật có trích dẫn",
+            "estimated_minutes": 90,
+            "depends_on": ["M1"],
+        },
+        {
+            "milestone_id": "M3",
+            "title": "Soạn thảo nội dung các luận điểm chính",
+            "deliverable": "Bản nháp 1.500 từ theo rubric",
+            "estimated_minutes": 120,
+            "depends_on": ["M2"],
+        },
+        {
+            "milestone_id": "M4",
+            "title": "Rà soát, hiệu đính và đối chiếu tiêu chuẩn",
+            "deliverable": "Bản hoàn chỉnh kèm checklist kiểm tra",
+            "estimated_minutes": 45,
+            "depends_on": ["M3"],
+        },
+    ]
+
+
+def _apply_deterministic_adjustment(milestones: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+    """
+    Áp dụng trực tiếp các chỉ thị số liệu rõ ràng trong câu hỏi của người dùng
+    (ví dụ: 'giảm thời lượng xuống 45 phút' cho 'Milestone 3' hoặc 'M3').
+    """
+    updated = [dict(m) for m in milestones]
+    q_lower = query.lower()
+
+    # Tìm milestone mục tiêu: ví dụ Milestone 3, m3, m 3
+    target_match = re.search(r"\b(?:milestone|mốc|m)\s*([0-9]+)\b", q_lower)
+    if not target_match:
+        return updated
+
+    target_num = target_match.group(1)
+    target_id_candidates = {f"M{target_num}", f"m{target_num}", target_num}
+
+    # Tìm thời lượng yêu cầu: ví dụ '45 phút', '1 giờ', '30 min'
+    time_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:phút|min|h|tiếng|giờ)", q_lower)
+    new_minutes = None
+    if time_match:
+        new_minutes = _parse_int_minutes(time_match.group(0))
+
+    for m in updated:
+        curr_id = str(m.get("milestone_id", ""))
+        if curr_id in target_id_candidates or curr_id.endswith(target_num):
+            if new_minutes is not None:
+                m["estimated_minutes"] = new_minutes
+            if "dời" in q_lower or "ngày mai" in q_lower:
+                m["status"] = "rescheduled"
+                if "notes" not in m:
+                    m["notes"] = "Đã dời theo yêu cầu của sinh viên"
+
+    return updated
+
+
+def plan_node(state: LearningGraphState) -> dict[str, Any]:
+    """
+    Milestone Agent: chia nhỏ assignment thành các milestone cụ thể và xếp ưu tiên.
+    Hỗ trợ cả lập mới (Turn 1) và chỉnh sửa thông minh đa lượt (Multi-turn Refinement).
+    Cập nhật dữ liệu có cấu trúc vào state["proposed_milestones"].
+    """
+    query = state.get("query") or ""
+    if not query and state.get("messages"):
+        last_msg = state["messages"][-1]
+        query = last_msg.get("content", "") if isinstance(last_msg, dict) else getattr(last_msg, "content", "")
+
+    existing_milestones = state.get("proposed_milestones") or []
+    q_lower = query.lower()
+
+    # Nhận diện nếu đây là lượt điều chỉnh kế hoạch đã có (Multi-turn Human-in-the-loop)
+    is_adjustment = bool(
+        existing_milestones
+        and any(k in q_lower for k in ["dời", "giảm", "tăng", "sửa", "đổi", "chỉnh", "milestone", "thời lượng", "mốc", "m1", "m2", "m3", "m4"])
+    )
+
+    try:
+        llm = get_agent_llm(temperature=0.3)
+    except Exception:
+        llm = None
+
+    if is_adjustment:
+        prompt_content = (
+            f"BẠN ĐANG TRONG PHIÊN LÀM VIỆC ĐA LƯỢT VỚI SINH VIÊN (MULTI-TURN SESSION).\n"
+            f"KẾ HOẠCH MILESTONES HIỆN TẠI:\n"
+            f"{json.dumps(existing_milestones, ensure_ascii=False, indent=2)}\n\n"
+            f"YÊU CẦU ĐIỀU CHỈNH: '{query}'\n\n"
+            f"YÊU CẦU: Trả lời ngắn gọn, cập nhật milestone được yêu cầu, giữ nguyên các mốc khác và BẮT BUỘC kèm khối ```json danh sách milestones cập nhật."
+        )
+        default_analysis = f"Milestone Agent đã cập nhật kế hoạch ({len(existing_milestones)} milestones) theo yêu cầu chỉnh sửa."
+    else:
+        prompt_content = (
+            f"Nhiệm vụ của sinh viên: '{query}'\n\n"
+            f"Hãy lập bảng lộ trình milestone súc tích gồm 4 mốc cụ thể, đầu ra kiểm chứng được và thời lượng thực tế. "
+            f"BẮT BUỘC đính kèm khối JSON ```json chứa danh sách milestones ở cuối bài!"
+        )
+        default_analysis = "Milestone Agent đã phân rã lộ trình milestone mới."
+
+    if llm:
+        try:
+            messages = [
+                SystemMessage(content=MILESTONE_SYSTEM_PROMPT),
+                HumanMessage(content=prompt_content),
+            ]
+            res = llm.invoke(messages)
+            response_text = res.content.strip()
+        except Exception as e:
+            response_text = f"[Lỗi kết nối Milestone Agent]: {e}"
+    else:
+        response_text = "[Thông báo]: Đang hoạt động ở chế độ fallback baseline."
+
+    # Bóc tách milestones từ LLM
+    extracted = _extract_milestones_from_text(response_text)
+
+    if is_adjustment:
+        # Nếu LLM trả về danh sách đầy đủ
+        if len(extracted) >= len(existing_milestones):
+            proposed_milestones = extracted
+        elif extracted:
+            # Nếu LLM chỉ trả về milestone được sửa -> merge vào danh sách cũ
+            id_map = {m["milestone_id"]: m for m in extracted}
+            proposed_milestones = [id_map.get(m["milestone_id"], m) for m in existing_milestones]
+        else:
+            proposed_milestones = existing_milestones
+
+        # Áp dụng chuẩn hóa số liệu theo câu lệnh người dùng
+        proposed_milestones = _apply_deterministic_adjustment(proposed_milestones, query)
+    else:
+        proposed_milestones = extracted
+
+    # Loại bỏ khối JSON thô để sinh viên chỉ nhìn thấy bảng lộ trình và lời khuyên dạng text/markdown
+    clean_response = re.sub(r"```json[\s\S]*?```", "", response_text).strip()
+    if not clean_response:
+        clean_response = response_text
+
+    return {
+        "current_node": "plan",
+        "response": clean_response,
+        "proposed_milestones": proposed_milestones,
+        "analysis": default_analysis,
+    }
