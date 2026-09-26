@@ -23,7 +23,6 @@ from qdrant_client.models import Distance, PointStruct, VectorParams
 
 from src.config import get_settings
 
-
 AGENTS_DIR = Path(__file__).resolve().parent.parent
 AGENTS_DATA_DIR = AGENTS_DIR / "data"
 DEFAULT_DOCS_DIR = AGENTS_DATA_DIR / "sample_documents"

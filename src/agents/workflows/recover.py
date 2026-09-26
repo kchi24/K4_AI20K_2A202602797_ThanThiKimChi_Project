@@ -6,6 +6,7 @@ Agent phụ trách: Recovery Agent.
 import json
 import re
 from typing import Any
+
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.agents.llm import get_agent_llm
@@ -206,7 +207,7 @@ def recover_node(state: LearningGraphState) -> dict:
         res = llm.invoke(messages)
         response_text = res.content.strip()
         recovery_options = _extract_recovery_options(response_text)
-    except Exception as e:
+    except Exception:
         default_options = [
             {
                 "option_name": "Phương án A (Ưu tiên an toàn - Minimal Pipeline)",
@@ -226,18 +227,18 @@ def recover_node(state: LearningGraphState) -> dict:
             },
         ]
         response_text = (
-            f"### 🚨 PHƯƠNG ÁN CỨU NGUY ĐỒ ÁN (CÒN 5 NGÀY — RAG CƠ BẢN)\n\n"
-            f"Chào bạn, với tình huống chỉ còn 5 ngày mà chưa bắt đầu viết code đồ án RAG, bạn cần áp dụng ngay chiến lược **Descope (Thu hẹp phạm vi) & Timeboxing**:\n\n"
-            f"#### 📅 Lộ trình cứu vãn 5 ngày hành động:\n"
-            f"- **Ngày 1:** Setup môi trường, chọn Vector Store cục bộ nhanh nhất (như Qdrant local hoặc ChromaDB) và chuẩn bị 2-3 tài liệu mẫu `.md`.\n"
-            f"- **Ngày 2:** Viết script nạp dữ liệu và hàm truy vấn tương đồng Cosine (Retrieve 3 đoạn liên quan).\n"
-            f"- **Ngày 3:** Kết nối LLM để sinh câu trả lời có trích dẫn nguồn (Augmented Generation).\n"
-            f"- **Ngày 4:** Kiểm thử trên 5 câu hỏi mẫu, chụp màn hình kết quả và đóng gói mã nguồn.\n"
-            f"- **Ngày 5:** Soạn thảo báo cáo tóm tắt 5 trang (Kiến trúc, Thử nghiệm, Đánh giá) và nộp trước deadline 2 tiếng.\n\n"
-            f"#### ⚖️ Hai phương án đánh đổi để bạn quyết định:\n"
-            f"1. **Phương án A (Ưu tiên an toàn):** Giữ đúng tiến độ 3-4 giờ/ngày, hoàn thành pipeline tối giản (MVP) và nộp đúng hạn.\n"
-            f"2. **Phương án B (Ưu tiên giảm tải):** Bỏ qua hoàn toàn giao diện đồ họa, chỉ dùng script CLI Terminal để kịp tiến độ.\n\n"
-            f"*(Chi tiết 2 phương án đã được lưu vào hệ thống State để theo dõi)*"
+            "### 🚨 PHƯƠNG ÁN CỨU NGUY ĐỒ ÁN (CÒN 5 NGÀY — RAG CƠ BẢN)\n\n"
+            "Chào bạn, với tình huống chỉ còn 5 ngày mà chưa bắt đầu viết code đồ án RAG, bạn cần áp dụng ngay chiến lược **Descope (Thu hẹp phạm vi) & Timeboxing**:\n\n"
+            "#### 📅 Lộ trình cứu vãn 5 ngày hành động:\n"
+            "- **Ngày 1:** Setup môi trường, chọn Vector Store cục bộ nhanh nhất (như Qdrant local hoặc ChromaDB) và chuẩn bị 2-3 tài liệu mẫu `.md`.\n"
+            "- **Ngày 2:** Viết script nạp dữ liệu và hàm truy vấn tương đồng Cosine (Retrieve 3 đoạn liên quan).\n"
+            "- **Ngày 3:** Kết nối LLM để sinh câu trả lời có trích dẫn nguồn (Augmented Generation).\n"
+            "- **Ngày 4:** Kiểm thử trên 5 câu hỏi mẫu, chụp màn hình kết quả và đóng gói mã nguồn.\n"
+            "- **Ngày 5:** Soạn thảo báo cáo tóm tắt 5 trang (Kiến trúc, Thử nghiệm, Đánh giá) và nộp trước deadline 2 tiếng.\n\n"
+            "#### ⚖️ Hai phương án đánh đổi để bạn quyết định:\n"
+            "1. **Phương án A (Ưu tiên an toàn):** Giữ đúng tiến độ 3-4 giờ/ngày, hoàn thành pipeline tối giản (MVP) và nộp đúng hạn.\n"
+            "2. **Phương án B (Ưu tiên giảm tải):** Bỏ qua hoàn toàn giao diện đồ họa, chỉ dùng script CLI Terminal để kịp tiến độ.\n\n"
+            "*(Chi tiết 2 phương án đã được lưu vào hệ thống State để theo dõi)*"
         )
         recovery_options = default_options
 

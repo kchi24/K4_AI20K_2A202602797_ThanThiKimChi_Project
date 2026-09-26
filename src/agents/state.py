@@ -1,5 +1,5 @@
-from typing import Annotated, Any, TypedDict
 import operator
+from typing import Annotated, Any, TypedDict
 
 
 class LearningGraphState(TypedDict, total=False):

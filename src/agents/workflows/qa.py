@@ -23,7 +23,6 @@ from src.agents.tools.qdrant_retriever import (
     search_course_materials,
 )
 
-
 ACADEMIC_CHEATING_KEYWORDS = [
     "giải hộ",
     "giải giúp mình bài này",
