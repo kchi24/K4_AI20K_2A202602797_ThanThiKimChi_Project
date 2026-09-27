@@ -2,13 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, Develop]
   pull_request:
-    branches: [main]
+    branches: [main, Develop]
 
 jobs:
   lint-and-test:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64, team-8]
 
     steps:
       - uses: actions/checkout@v4
