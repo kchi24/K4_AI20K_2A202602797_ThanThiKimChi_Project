@@ -1,0 +1,173 @@
+import { useState } from 'react';
+import { Badge } from '../../components/ui/Badge';
+import { Button } from '../../components/ui/Button';
+import { Card, CardHeader } from '../../components/ui/Card';
+import { Textarea } from '../../components/ui/Field';
+import { Modal } from '../../components/ui/Modal';
+import { PageHeader } from '../../components/ui/PageHeader';
+import { EmptyState } from '../../components/ui/States';
+import { useToast } from '../../components/ui/Toast';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
+import { useAppStore } from '../../store/AppStore';
+import type { ReviewItem, ReviewStatus, Tone } from '../../types';
+import { cx } from '../../utils/cx';
+
+const statusMeta: Record<ReviewStatus, { label: string; tone: Tone }> = {
+  pending: { label: 'Chờ xem', tone: 'warning' },
+  in_review: { label: 'Đang xem', tone: 'primary' },
+  approved: { label: 'Đã duyệt', tone: 'success' },
+  needs_review: { label: 'Cần xem lại', tone: 'accent' },
+};
+
+export function EvidenceCard({ item, onReview }: { item: ReviewItem; onReview: () => void }) {
+  const s = statusMeta[item.status];
+  return (
+    <Card as="article" aria-labelledby={`r-${item.id}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 id={`r-${item.id}`} className="font-semibold">
+          Ca #{item.id}
+        </h2>
+        <Badge tone={s.tone}>{s.label}</Badge>
+        <Badge tone={item.confidence === 'low' ? 'danger' : 'warning'}>Độ tin cậy: {item.confidence === 'low' ? 'thấp' : 'trung bình'}</Badge>
+        <span className="caption ml-auto">{item.submittedAt}</span>
+      </div>
+      <p className="caption mt-2">{item.topic}</p>
+      <p className="mt-1 font-medium">{item.question}</p>
+      <blockquote className="mt-3 rounded-xl bg-canvas px-4 py-3 italic text-slate-700">{item.responseExcerpt}</blockquote>
+      <p className="mt-3 text-[15px]">
+        <strong>Lý do chuyển: </strong>
+        {item.reason}
+      </p>
+      {item.note && <p className="caption mt-2">Ghi chú: {item.note}</p>}
+      <div className="mt-4">
+        <Button variant={item.status === 'approved' ? 'secondary' : 'primary'} size="sm" onClick={onReview}>
+          {item.status === 'approved' ? 'Xem lại quyết định' : 'Xem xét & Duyệt'}
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+export function ReviewQueuePage() {
+  useDocumentTitle('Hàng chờ duyệt');
+  const { state, dispatch } = useAppStore();
+  const toast = useToast();
+  const [filter, setFilter] = useState<'open' | 'all'>('open');
+  const [active, setActive] = useState<ReviewItem | null>(null);
+  const [note, setNote] = useState('');
+  const [noteError, setNoteError] = useState('');
+
+  const items = state.reviewQueue.filter((r) => filter === 'all' || r.status === 'pending' || r.status === 'in_review');
+
+  const decide = (status: ReviewStatus) => {
+    if (!active) return;
+    if (status === 'needs_review' && !note.trim()) {
+      setNoteError('Thêm ghi chú để người xem tiếp theo biết cần kiểm tra gì.');
+      return;
+    }
+    dispatch({ type: 'SET_REVIEW_STATUS', id: active.id, status, note: note.trim() || undefined });
+    toast({ tone: 'success', title: status === 'approved' ? `Đã duyệt ca #${active.id}` : `Đã yêu cầu xem lại ca #${active.id}`, description: 'Quyết định đã được ghi vào audit.' });
+    setActive(null);
+  };
+
+  return (
+    <div className="page max-w-4xl">
+      <PageHeader title="Hàng chờ duyệt" description="Các ca hệ thống không đủ tin cậy để tự kết luận. Chỉ hiển thị trích đoạn liên quan tới rubric." />
+      <div className="mb-5 inline-flex rounded-xl border border-line bg-white p-1" role="tablist" aria-label="Lọc hàng chờ">
+        {(
+          [
+            ['open', 'Cần xử lý'],
+            ['all', 'Tất cả'],
+          ] as const
+        ).map(([v, l]) => (
+          <button
+            key={v}
+            role="tab"
+            aria-selected={filter === v}
+            onClick={() => setFilter(v)}
+            className={cx('min-h-[40px] rounded-lg px-4 text-sm font-semibold', filter === v ? 'bg-primary-light text-primary-ink' : 'text-muted hover:text-ink')}
+          >
+            {l}
+          </button>
+        ))}
+      </div>
+      {items.length === 0 ? (
+        <EmptyState icon="inbox" title="Không còn ca nào cần xử lý" description="Khi có ca độ tin cậy thấp hoặc nguồn bị phản ánh, chúng sẽ xuất hiện ở đây." />
+      ) : (
+        <div className="space-y-4">
+          {items.map((r) => (
+            <EvidenceCard
+              key={r.id}
+              item={r}
+              onReview={() => {
+                setActive(r);
+                setNote(r.note ?? '');
+                setNoteError('');
+                if (r.status === 'pending') dispatch({ type: 'SET_REVIEW_STATUS', id: r.id, status: 'in_review' });
+              }}
+            />
+          ))}
+        </div>
+      )}
+
+      <Card className="mt-6" aria-labelledby="audit">
+        <CardHeader id="audit" title="Nhật ký quyết định (audit)" />
+        <ul className="divide-y divide-line">
+          {state.audit.slice(0, 6).map((a) => (
+            <li key={a.id} className="flex flex-col gap-0.5 py-2.5 sm:flex-row sm:gap-3">
+              <span className="caption w-28 shrink-0 tabular-nums">{a.at}</span>
+              <span className="text-[15px]">
+                <strong>{a.actor}</strong> · {a.action}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </Card>
+
+      <Modal
+        open={!!active}
+        onClose={() => setActive(null)}
+        size="lg"
+        title={`Xem xét ca #${active?.id ?? ''}`}
+        description="Xem bằng chứng rồi chọn quyết định. Sinh viên không bị gắn nhãn cho tới khi bạn duyệt."
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setActive(null)}>
+              Để sau
+            </Button>
+            <Button variant="soft" icon="refresh" onClick={() => decide('needs_review')}>
+              Yêu cầu xem lại
+            </Button>
+            <Button icon="check" onClick={() => decide('approved')}>
+              Phê duyệt
+            </Button>
+          </>
+        }
+      >
+        {active && (
+          <div className="space-y-4">
+            <div>
+              <p className="caption">{active.topic}</p>
+              <p className="font-medium">{active.question}</p>
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-muted">Trích đoạn câu trả lời</p>
+              <blockquote className="mt-1 rounded-xl bg-canvas px-4 py-3 italic">{active.responseExcerpt}</blockquote>
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="rounded-xl border border-line p-3">
+                <p className="caption">Độ tin cậy</p>
+                <p className="font-semibold">{active.confidence === 'low' ? 'Thấp' : 'Trung bình'}</p>
+              </div>
+              <div className="rounded-xl border border-line p-3">
+                <p className="caption">Lý do</p>
+                <p className="text-[15px]">{active.reason}</p>
+              </div>
+            </div>
+            <Textarea label="Ghi chú" value={note} onChange={(e) => setNote(e.target.value)} error={noteError} hint="Bắt buộc khi yêu cầu xem lại." rows={3} />
+          </div>
+        )}
+      </Modal>
+    </div>
+  );
+}
