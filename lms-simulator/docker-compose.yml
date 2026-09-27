@@ -1,0 +1,41 @@
+name: canvas-lms-simulator
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-canvas_development}
+      POSTGRES_USER: ${POSTGRES_USER:-canvas}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-canvas}
+    volumes:
+      - lms_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-canvas} -d ${POSTGRES_DB:-canvas_development}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    mem_limit: 256m
+    restart: unless-stopped
+
+  app:
+    build: .
+    ports:
+      - "8010:8010"
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-canvas}:${POSTGRES_PASSWORD:-canvas}@postgres:5432/${POSTGRES_DB:-canvas_development}
+      PACEWISE_API_KEY: ${PACEWISE_API_KEY}
+      PACEWISE_LAUNCH_SECRET: ${PACEWISE_LAUNCH_SECRET}
+      PACEWISE_URL: ${PACEWISE_URL:-http://localhost:3000}
+      SESSION_LIFETIME_HOURS: ${SESSION_LIFETIME_HOURS:-12}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+    volumes:
+      - lms_uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 384m
+    restart: unless-stopped
+
+volumes:
+  lms_postgres_data:
+  lms_uploads:
