@@ -160,22 +160,34 @@ def normalize(data: dict, tool: str) -> dict | None:
 
 
 def main():
+    # Codex `Stop` hooks require valid JSON on stdout when they exit 0. Keep a
+    # tool hint before parsing stdin so malformed/empty payloads still receive
+    # a valid acknowledgement instead of surfacing a hook error in the app.
+    tool_hint = detect_tool({})
+
+    def acknowledge_codex(tool_name: str) -> None:
+        if tool_name == "codex":
+            print(json.dumps({"continue": True}))
+
     # Read stdin as UTF-8 explicitly. On Windows, sys.stdin defaults to the
     # system code page (e.g. cp1252), which corrupts non-Latin1 prompts
     # (Vietnamese, CJK, emoji) into mojibake. The hook payload is always UTF-8.
     raw = sys.stdin.buffer.read().decode("utf-8", errors="replace").strip()
     if not raw:
-        sys.exit(0)
+        acknowledge_codex(tool_hint)
+        return
 
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        sys.exit(0)
+        acknowledge_codex(tool_hint)
+        return
 
     tool = detect_tool(data)
     entry = normalize(data, tool)
     if not entry:
-        sys.exit(0)
+        acknowledge_codex(tool)
+        return
 
     log_dir = Path(os.environ.get("AI_LOG_DIR", ".ai-log"))
     log_dir.mkdir(exist_ok=True)
@@ -187,7 +199,7 @@ def main():
     # Codex lifecycle hooks only accept their documented control fields.
     # `Stop` specifically requires JSON on stdout when the hook exits 0.
     if tool == "codex":
-        print(json.dumps({"continue": True}))
+        acknowledge_codex(tool)
     else:
         # Other integrations only require a valid JSON acknowledgement.
         print(json.dumps({"status": "logged"}))
