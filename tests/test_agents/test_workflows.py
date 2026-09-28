@@ -189,6 +189,29 @@ def test_recover_uses_real_state_fallback_and_waits_for_confirmation(monkeypatch
     assert "RAG" not in result["response"]
 
 
+def test_recover_returns_server_generated_schedule_patch(monkeypatch):
+    monkeypatch.setattr(
+        "src.agents.workflows.recover.get_agent_llm",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+    result = recover_node(
+        {
+            "query": "Phục hồi lịch",
+            "current_plan": {"weekStart": "2026-09-28", "blocks": []},
+            "progress_metrics": {
+                "drift": {"taskId": "task-1", "deficitMin": 90, "deadline": "2026-09-30"}
+            },
+            "availability": [{"weekday": 0, "start": "19:00", "end": "21:00"}],
+            "unavailable_slots": [],
+            "assignments": [{"id": "task-1", "title": "Bài tập", "deadline": "2026-09-30"}],
+        }
+    )
+    first = result["recovery_options"][0]
+    assert first["id"] == "A"
+    assert first["new_blocks"][0]["taskId"] == "task-1"
+    assert first["fully_recovers"] is True
+
+
 def test_closed_understanding_is_deterministic():
     result = understanding_node(
         {

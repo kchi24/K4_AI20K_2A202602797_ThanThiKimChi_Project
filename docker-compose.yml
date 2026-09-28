@@ -77,8 +77,12 @@ services:
       PACEWISE_SESSION_SECRET: ${PACEWISE_SESSION_SECRET:-development-only-session-secret-change-me}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
       VECTOR_STORE_TYPE: qdrant
+      QDRANT_PATH: /app/data/qdrant
+      EMBEDDING_CACHE_DIR: /app/data/models/fastembed
+      RERANKER_CACHE_DIR: /app/data/models/flashrank
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
       FORCE_HTTPS: ${FORCE_HTTPS:-false}
+      LANGGRAPH_STRICT_MSGPACK: "true"
     volumes:
       - ./data:/app/data
     depends_on:
@@ -112,7 +116,38 @@ services:
       retries: 5
     restart: unless-stopped
 
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    profiles: ["observability"]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:12.1.1
+    profiles: ["observability"]
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-pacewise-local-only}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
 volumes:
   pacewise_postgres_data:
   lms_postgres_data:
   lms_uploads:
+  prometheus_data:
+  grafana_data:

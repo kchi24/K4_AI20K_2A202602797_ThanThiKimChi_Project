@@ -5,7 +5,9 @@ Agent phụ trách: Recovery Agent.
 
 import json
 import re
+from datetime import date, timedelta
 from typing import Any
+from uuid import uuid4
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -14,6 +16,187 @@ from src.agents.llm import get_agent_llm
 from src.agents.prompts.recovery import RECOVERY_SYSTEM_PROMPT
 from src.agents.state import LearningGraphState
 from src.agents.validators import build_pending_action, validate_recovery_options
+
+
+def _clock_minutes(value: str) -> int:
+    hours, minutes = str(value).split(":", 1)
+    return int(hours) * 60 + int(minutes)
+
+
+def _clock(value: int) -> str:
+    return f"{value // 60:02d}:{value % 60:02d}"
+
+
+def _executable_recovery_options(state: LearningGraphState) -> list[dict[str, Any]]:
+    """Build schedule patches on the server so the browser never invents recovery decisions."""
+    plan = state.get("current_plan") or {}
+    blocks = list(plan.get("blocks") or [])
+    metrics = state.get("progress_metrics") or {}
+    drift = metrics.get("drift") or {}
+    task_id = str(drift.get("taskId") or drift.get("task_id") or "")
+    deficit = int(drift.get("deficitMin") or drift.get("deficit_minutes") or 0)
+    deadline = str(drift.get("deadline") or "")[:10]
+    week_start_raw = str(plan.get("weekStart") or plan.get("week_start") or "")[:10]
+    if not task_id or deficit <= 0 or not deadline or not week_start_raw:
+        return []
+    try:
+        week_start = date.fromisoformat(week_start_raw)
+        deadline_date = date.fromisoformat(deadline)
+    except ValueError:
+        return []
+
+    # The recovery validator protects every assignment currently in scope. Keep
+    # human-readable identifiers here (prefer titles, then due dates) rather
+    # than only the drifting task's ISO date; otherwise a valid executable
+    # patch is discarded and replaced by the legacy text-only fallback.
+    protected_deadlines: list[str] = []
+    for assignment in state.get("assignments") or []:
+        identifier = next(
+            (
+                str(assignment.get(field, "")).strip()
+                for field in ("title", "name", "deadline", "due_at")
+                if str(assignment.get(field, "")).strip()
+            ),
+            "",
+        )
+        if identifier and identifier not in protected_deadlines:
+            protected_deadlines.append(identifier)
+    if not protected_deadlines:
+        protected_deadlines = [deadline]
+
+    availability = state.get("availability") or []
+    unavailable = state.get("unavailable_slots") or []
+    free_slots: list[tuple[str, int, int]] = []
+    for item in availability:
+        weekday = int(item.get("weekday", item.get("day", 0)))
+        slot_date = week_start + timedelta(days=weekday)
+        if slot_date > deadline_date:
+            continue
+        start, end = _clock_minutes(item["start"]), _clock_minutes(item["end"])
+        occupied = [
+            (_clock_minutes(block["start"]), _clock_minutes(block["end"]))
+            for block in blocks
+            if block.get("date") == slot_date.isoformat()
+        ]
+        occupied.extend(
+            (_clock_minutes(slot["start"]), _clock_minutes(slot["end"]))
+            for slot in unavailable
+            if int(slot.get("weekday", slot.get("day", -1))) == weekday
+        )
+        cursor = start
+        for other_start, other_end in sorted(occupied):
+            if other_start > cursor:
+                free_slots.append((slot_date.isoformat(), cursor, min(other_start, end)))
+            cursor = max(cursor, other_end)
+        if cursor < end:
+            free_slots.append((slot_date.isoformat(), cursor, end))
+
+    added = []
+    left = deficit
+    for slot_date, start, end in free_slots:
+        cursor = start
+        while left > 0 and end - cursor >= min(30, left):
+            duration = min(left, 120, end - cursor)
+            if duration < 30:
+                break
+            added.append(
+                {
+                    "id": f"rec-{uuid4().hex[:10]}",
+                    "taskId": task_id,
+                    "date": slot_date,
+                    "start": _clock(cursor),
+                    "end": _clock(cursor + duration),
+                }
+            )
+            left -= duration
+            cursor += duration + 10
+    placed = deficit - left
+    options = []
+    if placed:
+        options.append(
+            {
+                "id": "A",
+                "title": "Bảo vệ deadline",
+                "summary": f"Xếp thêm {placed} phút vào các khung giờ còn trống trước deadline.",
+                "changes": [f"Thêm phiên {item['date']} {item['start']}-{item['end']}" for item in added],
+                "impact": f"Bù được {placed}/{deficit} phút thiếu hụt.",
+                "time": f"Thêm {placed} phút",
+                "tradeoff": "Giảm quỹ thời gian dự phòng trước deadline.",
+                "new_blocks": [*blocks, *added],
+                "assumptions": ["Khung giờ rảnh do sinh viên khai báo vẫn còn khả dụng."],
+                "fully_recovers": placed >= deficit,
+                "option_name": "Bảo vệ deadline",
+                "kept_items": [task_id],
+                "moved_items": [],
+                "hours_short_or_free": round((placed - deficit) / 60, 2),
+                "protected_deadlines": protected_deadlines,
+                "remaining_risks": "Không còn thiếu thời gian." if placed >= deficit else f"Còn thiếu {deficit - placed} phút.",
+            }
+        )
+        reduced = added[: max(1, len(added) // 2)]
+        reduced_minutes = sum(_clock_minutes(item["end"]) - _clock_minutes(item["start"]) for item in reduced)
+        options.append(
+            {
+                "id": "B",
+                "title": "Phục hồi một phần",
+                "summary": f"Chỉ xếp thêm {reduced_minutes} phút để giữ lại thời gian dự phòng.",
+                "changes": [f"Thêm phiên {item['date']} {item['start']}-{item['end']}" for item in reduced],
+                "impact": f"Bù được {reduced_minutes}/{deficit} phút thiếu hụt.",
+                "time": f"Thêm {reduced_minutes} phút",
+                "tradeoff": f"Còn thiếu {max(0, deficit - reduced_minutes)} phút cần xử lý thủ công.",
+                "new_blocks": [*blocks, *reduced],
+                "assumptions": ["Sinh viên chấp nhận chỉ phục hồi một phần tiến độ."],
+                "fully_recovers": reduced_minutes >= deficit,
+                "option_name": "Phục hồi một phần",
+                "kept_items": [task_id],
+                "moved_items": [],
+                "hours_short_or_free": round((reduced_minutes - deficit) / 60, 2),
+                "protected_deadlines": protected_deadlines,
+                "remaining_risks": f"Còn thiếu {max(0, deficit - reduced_minutes)} phút.",
+            }
+        )
+    else:
+        options.append(
+            {
+                "id": "B",
+                "title": "Yêu cầu hỗ trợ",
+                "summary": "Không tìm thấy khung giờ hợp lệ; giữ lịch và đề nghị giảng viên hỗ trợ ưu tiên phạm vi.",
+                "changes": ["Không tự động thay đổi lịch"],
+                "impact": "Không tạo lịch vi phạm thời gian rảnh hoặc deadline.",
+                "time": f"Thiếu {deficit} phút",
+                "tradeoff": "Cần con người quyết định phạm vi hoặc gia hạn.",
+                "new_blocks": blocks,
+                "assumptions": ["Giảng viên sẽ xem xét yêu cầu hỗ trợ; hệ thống không tự gửi yêu cầu."],
+                "fully_recovers": False,
+                "option_name": "Yêu cầu hỗ trợ",
+                "kept_items": [task_id],
+                "moved_items": [],
+                "hours_short_or_free": round(-deficit / 60, 2),
+                "protected_deadlines": protected_deadlines,
+                "remaining_risks": "Chưa có đủ thời gian trước deadline.",
+            }
+        )
+    options.append(
+        {
+            "id": "C",
+            "title": "Giữ nguyên lịch",
+            "summary": "Không tự động thay đổi kế hoạch hiện tại.",
+            "changes": ["Không có buổi học nào thay đổi"],
+            "impact": f"Vẫn thiếu khoảng {deficit} phút trước deadline.",
+            "time": f"Thiếu {deficit} phút",
+            "tradeoff": "Nguy cơ trễ deadline không được giảm.",
+            "new_blocks": blocks,
+            "assumptions": [],
+            "fully_recovers": False,
+            "option_name": "Giữ nguyên lịch",
+            "kept_items": [task_id],
+            "moved_items": [],
+            "hours_short_or_free": round(-deficit / 60, 2),
+            "protected_deadlines": protected_deadlines,
+            "remaining_risks": "Nguy cơ trễ deadline vẫn còn.",
+        }
+    )
+    return options
 
 
 def _parse_hours_float(val: Any) -> float:
@@ -273,6 +456,9 @@ def recover_node(state: LearningGraphState) -> dict:
         recovery_options = _deterministic_recovery_options(state)
         response_text = _format_options_as_text(recovery_options)
 
+    executable_options = _executable_recovery_options(state)
+    if executable_options:
+        recovery_options = executable_options
     recovery_validation = validate_recovery_options(recovery_options, state.get("assignments") or [])
     if not recovery_validation["valid"]:
         recovery_options = _deterministic_recovery_options(state)

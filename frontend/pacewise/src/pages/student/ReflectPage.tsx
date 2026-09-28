@@ -9,6 +9,7 @@ import { useToast } from '../../components/ui/Toast';
 import { useDerived } from '../../hooks/useDerived';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useAppStore } from '../../store/AppStore';
+import { confirmReflection, createReflection, type AgentResponse } from '../../services/api';
 import { WEEK_START, addDays, formatDM, formatHours } from '../../utils/time';
 
 const QUESTIONS = ['Điều gì giúp bạn học hiệu quả?', 'Điều gì khiến kế hoạch bị lệch?', 'Tuần sau bạn muốn thay đổi điều gì?'] as const;
@@ -21,16 +22,45 @@ export function ReflectPage() {
   const toast = useToast();
   const [answers, setAnswers] = useState<[string, string, string]>(state.reflection?.answers ?? ['', '', '']);
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [draft, setDraft] = useState<AgentResponse | null>(null);
   const dirty = JSON.stringify(answers) !== JSON.stringify(state.reflection?.answers ?? ['', '', '']);
 
-  const save = () => {
+  const save = async () => {
     if (answers.every((a) => !a.trim())) {
       setError('Trả lời ít nhất một câu để lưu tổng kết.');
       return;
     }
     setError('');
-    dispatch({ type: 'SAVE_REFLECTION', answers: answers.map((a) => a.trim()) as [string, string, string] });
-    toast({ tone: 'success', title: 'Đã lưu tổng kết tuần', description: 'Kế hoạch tuần sau không bị thay đổi.' });
+    setLoading(true);
+    try {
+      const result = await createReflection(answers.map((a) => a.trim()) as [string, string, string], stats as unknown as Record<string, unknown>);
+      setDraft(result);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Chưa tạo được bản phản tư.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const confirm = async () => {
+    if (!draft) return;
+    setLoading(true);
+    try {
+      await confirmReflection();
+      dispatch({
+        type: 'SAVE_REFLECTION',
+        answers: answers.map((a) => a.trim()) as [string, string, string],
+        aiDraft: draft.reflection_draft ?? undefined,
+        aiSummary: draft.response,
+      });
+      setDraft(null);
+      toast({ tone: 'success', title: 'Đã lưu tổng kết tuần', description: 'Điều chỉnh chỉ được lưu sau khi bạn xác nhận.' });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Chưa xác nhận được bản phản tư.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -76,9 +106,19 @@ export function ReflectPage() {
             {error}
           </p>
         )}
+        {draft && (
+          <div className="mt-5 rounded-xl border border-[#D6E2FD] bg-primary-light p-4">
+            <h3 className="font-semibold">Bản phản tư do AI đề xuất — chưa lưu</h3>
+            <p className="mt-2 whitespace-pre-line text-sm">{draft.response}</p>
+            <div className="mt-4 flex gap-3">
+              <Button icon="check" onClick={confirm} loading={loading}>Xác nhận điều chỉnh</Button>
+              <Button variant="secondary" onClick={() => setDraft(null)}>Chỉnh lại câu trả lời</Button>
+            </div>
+          </div>
+        )}
         <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
-          <Button icon="check" onClick={save} disabled={!!state.reflection && !dirty}>
-            Lưu tổng kết
+          <Button icon="check" onClick={save} loading={loading} disabled={!!state.reflection && !dirty}>
+            Tạo bản phản tư
           </Button>
           {dirty && <span className="caption">Có thay đổi chưa lưu</span>}
         </div>

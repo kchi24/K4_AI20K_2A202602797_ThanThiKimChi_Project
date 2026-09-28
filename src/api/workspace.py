@@ -27,6 +27,7 @@ WORKSPACE_KEYS = {
     "reflection",
     "settings",
     "dismissedDrifts",
+    "recoveryOptions",
 }
 
 

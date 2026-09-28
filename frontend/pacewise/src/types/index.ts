@@ -188,6 +188,8 @@ export interface Reflection {
   weekStart: string;
   answers: [string, string, string];
   savedAt: string;
+  aiDraft?: Record<string, unknown>;
+  aiSummary?: string;
 }
 
 export interface Toast {

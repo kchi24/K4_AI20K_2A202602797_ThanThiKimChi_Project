@@ -21,3 +21,4 @@ frontend/
 lms-simulator/
 tests/
 .ai-log/
+data/

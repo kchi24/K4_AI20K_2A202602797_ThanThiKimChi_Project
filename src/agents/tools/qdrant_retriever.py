@@ -10,8 +10,12 @@ Tích hợp:
 
 from __future__ import annotations
 
+import hashlib
+import logging
 import os
 import re
+import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
@@ -19,9 +23,13 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from fastembed import TextEmbedding
+    from flashrank import Ranker
     from qdrant_client import QdrantClient
 
 from src.config import get_settings
+from src.observability import observe_rag
+
+logger = logging.getLogger("pacewise.rag")
 
 AGENTS_DIR = Path(__file__).resolve().parent.parent
 AGENTS_DATA_DIR = AGENTS_DIR / "data"
@@ -34,6 +42,12 @@ EMBEDDING_DIM = 384
 
 _embedding_model: TextEmbedding | None = None
 _embedding_model_lock = Lock()
+_reranker_model: Ranker | None = None
+_reranker_model_lock = Lock()
+_qdrant_clients: dict[str, QdrantClient] = {}
+_qdrant_client_lock = Lock()
+_ingestion_lock = Lock()
+_ingested_resource_sets: set[str] = set()
 
 
 def is_embedding_model_loaded() -> bool:
@@ -53,8 +67,83 @@ def _get_embedding_model() -> TextEmbedding:
         if _embedding_model is None:
             from fastembed import TextEmbedding
 
-            _embedding_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+            settings = get_settings()
+            _embedding_model = TextEmbedding(
+                model_name=settings.embedding_model,
+                cache_dir=settings.embedding_cache_dir,
+            )
     return _embedding_model
+
+
+def _get_reranker_model() -> Ranker:
+    """Load the cross-encoder only after vector retrieval produced candidates."""
+    global _reranker_model
+    if _reranker_model is not None:
+        return _reranker_model
+    with _reranker_model_lock:
+        if _reranker_model is None:
+            from flashrank import Ranker
+
+            settings = get_settings()
+            _reranker_model = Ranker(
+                model_name=settings.reranker_model,
+                cache_dir=settings.reranker_cache_dir,
+            )
+    return _reranker_model
+
+
+def _lexical_score(query: str, content: str) -> float:
+    query_terms = set(re.findall(r"\w+", query.casefold()))
+    content_terms = set(re.findall(r"\w+", content.casefold()))
+    return len(query_terms & content_terms) / max(1, len(query_terms))
+
+
+def rerank_passages(query: str, passages: list[dict[str, Any]], top_k: int = 3) -> list[dict[str, Any]]:
+    """Cross-encoder rerank with a deterministic lexical fallback."""
+    if not passages:
+        return []
+    rerank_method = "cross_encoder"
+    try:
+        from flashrank import RerankRequest
+
+        model = _get_reranker_model()
+        request_passages = [
+            {
+                "id": index,
+                "text": "\n".join(
+                    part
+                    for part in (
+                        str(item.get("document_title", "")).strip(),
+                        str(item.get("section_title", "")).strip(),
+                        str(item.get("content", "")).strip(),
+                    )
+                    if part
+                ),
+                "meta": {"index": index},
+            }
+            for index, item in enumerate(passages)
+        ]
+        raw_ranked = list(model.rerank(RerankRequest(query=query, passages=request_passages)))
+        scores_by_index = {
+            int(item.get("id", item.get("meta", {}).get("index", 0))): float(item.get("score", 0))
+            for item in raw_ranked
+        }
+        scores = [scores_by_index.get(index, 0.0) for index in range(len(passages))]
+    except Exception as exc:
+        rerank_method = "lexical_fallback"
+        logger.warning("rag_reranker_fallback error=%s", type(exc).__name__)
+        scores = [_lexical_score(query, str(item.get("content", ""))) for item in passages]
+    ranked = []
+    for passage, score in zip(passages, scores):
+        item = dict(passage)
+        item["rerank_score"] = round(score, 6)
+        item["rerank_method"] = rerank_method
+        ranked.append(item)
+    return sorted(
+        ranked,
+        key=lambda item: (float(item.get("rerank_score", 0)), float(item.get("score", 0))),
+        reverse=True,
+    )[:top_k]
 
 
 def _get_qdrant_client(storage_path: str | None = None) -> QdrantClient:
@@ -68,14 +157,17 @@ def _get_qdrant_client(storage_path: str | None = None) -> QdrantClient:
     settings = get_settings()
     path = storage_path or getattr(settings, "qdrant_path", None) or DEFAULT_QDRANT_PATH
 
-    if path == ":memory:":
-        return QdrantClient(":memory:")
-
     if path in ("./data/qdrant", "data/qdrant"):
         path = DEFAULT_QDRANT_PATH
-
-    os.makedirs(path, exist_ok=True)
-    return QdrantClient(path=path)
+    cache_key = str(path)
+    with _qdrant_client_lock:
+        if cache_key not in _qdrant_clients:
+            if path == ":memory:":
+                _qdrant_clients[cache_key] = QdrantClient(":memory:")
+            else:
+                os.makedirs(path, exist_ok=True)
+                _qdrant_clients[cache_key] = QdrantClient(path=path)
+        return _qdrant_clients[cache_key]
 
 
 def parse_markdown_document(file_path: str | Path) -> list[dict[str, Any]]:
@@ -155,6 +247,54 @@ def parse_markdown_document(file_path: str | Path) -> list[dict[str, Any]]:
             )
 
     return chunks
+
+
+def ingest_course_resources(
+    resources: list[dict[str, Any]],
+    collection_name: str = DEFAULT_COLLECTION_NAME,
+    storage_path: str | None = None,
+    client: QdrantClient | None = None,
+) -> dict[str, Any]:
+    """Idempotently index LMS-authorized resources with stable content-derived IDs."""
+    from qdrant_client.models import Distance, PointStruct, VectorParams
+
+    normalized = [item for item in resources if str(item.get("content") or "").strip()]
+    if not normalized:
+        return {"status": "empty", "total_chunks": 0}
+    resource_digests = [
+        hashlib.sha256(
+            f"{item.get('course_code')}|{item.get('document_title')}|{item.get('page')}|{item.get('paragraph')}|{item['content']}".encode()
+        ).hexdigest()
+        for item in normalized
+    ]
+    batch_key = hashlib.sha256(
+        f"{collection_name}|{'|'.join(sorted(resource_digests))}".encode()
+    ).hexdigest()
+    with _ingestion_lock:
+        if batch_key in _ingested_resource_sets:
+            return {"status": "unchanged", "total_chunks": len(normalized)}
+        qdrant = client or _get_qdrant_client(storage_path)
+        if not qdrant.collection_exists(collection_name):
+            qdrant.create_collection(
+                collection_name=collection_name,
+                vectors_config=VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE),
+            )
+        texts = [f"{item.get('document_title', '')}\n{item['content']}" for item in normalized]
+        vectors = list(_get_embedding_model().embed(texts))
+        points = []
+        for item, vector, digest in zip(normalized, vectors, resource_digests):
+            payload = dict(item)
+            payload["content_hash"] = digest
+            points.append(
+                PointStruct(
+                    id=str(uuid.UUID(digest[:32])),
+                    vector=vector.tolist() if hasattr(vector, "tolist") else list(vector),
+                    payload=payload,
+                )
+            )
+        qdrant.upsert(collection_name=collection_name, points=points, wait=True)
+        _ingested_resource_sets.add(batch_key)
+        return {"status": "success", "total_chunks": len(points)}
 
 
 def ingest_sample_documents(
@@ -242,7 +382,7 @@ def ingest_sample_documents(
 
 def search_course_materials(
     query: str,
-    top_k: int = 3,
+    top_k: int | None = None,
     score_threshold: float = DEFAULT_SCORE_THRESHOLD,
     course_code: str | None = None,
     collection_name: str = DEFAULT_COLLECTION_NAME,
@@ -255,10 +395,14 @@ def search_course_materials(
     """
     from qdrant_client.models import FieldCondition, Filter, MatchValue
 
+    started = time.perf_counter()
+    settings = get_settings()
+    candidate_k = top_k or settings.rag_top_k
     qdrant = client or _get_qdrant_client(storage_path)
 
     # Kiểm tra collection có tồn tại không
     if not qdrant.collection_exists(collection_name):
+        observe_rag("retrieve", "missing_collection", time.perf_counter() - started)
         return {
             "passages": [],
             "insufficient_sources": True,
@@ -281,7 +425,7 @@ def search_course_materials(
         collection_name=collection_name,
         query=query_vec.tolist() if hasattr(query_vec, "tolist") else list(query_vec),
         query_filter=query_filter,
-        limit=top_k,
+        limit=candidate_k,
         with_payload=True,
     )
 
@@ -310,14 +454,31 @@ def search_course_materials(
             }
         )
 
-    # Đánh giá xem có thỏa mãn ngưỡng an toàn hay không
-    is_insufficient = (len(passages) == 0) or (top_score < score_threshold)
+    passages = rerank_passages(query, passages, settings.rag_final_k)
+    top_rerank_score = float(passages[0].get("rerank_score", 0)) if passages else 0.0
+    trusted_cross_encoder = bool(
+        passages
+        and passages[0].get("rerank_method") == "cross_encoder"
+        and top_rerank_score >= settings.rag_rerank_threshold
+    )
+    # A calibrated semantic hit or a strong cross-encoder hit can ground an
+    # answer. The lexical emergency fallback may reorder candidates, but it
+    # never bypasses the abstention gate by itself.
+    is_insufficient = (len(passages) == 0) or (
+        top_score < score_threshold and not trusted_cross_encoder
+    )
+    outcome = "insufficient" if is_insufficient else "grounded"
+    latency_seconds = time.perf_counter() - started
+    observe_rag("retrieve", outcome, latency_seconds)
 
     return {
         "passages": passages,
         "insufficient_sources": is_insufficient,
         "top_score": round(top_score, 4),
+        "top_rerank_score": round(top_rerank_score, 4),
         "score_threshold": score_threshold,
+        "retrieval_latency_ms": round(latency_seconds * 1000, 2),
+        "reranked": bool(passages and passages[0].get("rerank_method") == "cross_encoder"),
     }
 
 

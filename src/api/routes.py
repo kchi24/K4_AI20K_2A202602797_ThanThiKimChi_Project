@@ -1,15 +1,21 @@
+import asyncio
+import logging
 import re
+import time
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from src.agents.graph import agent
+from src.agents.tools.qdrant_retriever import ingest_course_resources
 from src.config import Settings, get_settings
 from src.models.schemas import ChatRequest, ChatResponse
+from src.observability import observe_rag
 from src.security import SessionContext, require_csrf
 from src.services.lms_client import LMSClient
 
 router = APIRouter()
+logger = logging.getLogger("pacewise.rag")
 
 _CLIENT_CONTEXT_FIELDS = {
     "availability",
@@ -18,6 +24,7 @@ _CLIENT_CONTEXT_FIELDS = {
     "progress_metrics",
     "proposed_milestones",
     "goals",
+    "approved_rubric",
 }
 
 
@@ -96,11 +103,22 @@ async def _load_lms_agent_context(
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
     payload: ChatRequest,
+    request: Request,
     session: SessionContext = Depends(require_csrf),
     settings: Settings = Depends(get_settings),
 ) -> ChatResponse:
     """Run one agent turn with authenticated user, role, course and LMS context."""
     lms_context = await _load_lms_agent_context(session, settings)
+    if payload.workflow == "qa" and lms_context["learning_resources"]:
+        started = time.perf_counter()
+        outcome = "ok"
+        try:
+            await asyncio.to_thread(ingest_course_resources, lms_context["learning_resources"])
+        except Exception:
+            outcome = "fallback"
+            logger.exception("rag_ingestion_failed course_id=%s", session.course_id)
+        finally:
+            observe_rag("ingest", outcome, time.perf_counter() - started)
     safe_context = {
         key: value
         for key, value in payload.context.items()
@@ -108,7 +126,8 @@ async def chat(
     }
     config = {"configurable": {"thread_id": f"pacewise:{session.sid}"}}
     try:
-        result = await agent.ainvoke(
+        active_agent = getattr(request.app.state, "agent", agent)
+        result = await active_agent.ainvoke(
             {
                 **safe_context,
                 **lms_context,
@@ -147,6 +166,8 @@ async def chat(
         recovery_options=result.get("recovery_options") or [],
         reflection_draft=result.get("reflection_draft"),
         assessment_result=result.get("assessment_result"),
+        progress_metrics=result.get("progress_metrics") or {},
+        risk_signals=result.get("risk_signals") or [],
         source_refs=source_refs,
     )
 

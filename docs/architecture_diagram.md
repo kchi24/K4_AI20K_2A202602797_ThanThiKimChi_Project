@@ -1,25 +1,22 @@
 # PaceWise — Architecture
 
-**Trạng thái:** Target architecture cho production pilot · **Cập nhật:** 24/09/2026
+**Trạng thái:** Kiến trúc thực thi cho MVP + hướng mở rộng production pilot · **Cập nhật:** 28/09/2026
 
 ## 1. System context
 
 ```mermaid
 flowchart LR
-    Student[Student] --> Web[Next.js Web App]
+    Student[Student] --> Web[React/Vite Web App]
     Instructor[Instructor / Advisor] --> Web
     Canvas[Canvas LMS] -.->|P1: LTI 1.3 launch| Web
-    Web -->|HTTPS / JWT| API[FastAPI API]
+    Web -->|HTTPS / HttpOnly session + CSRF| API[FastAPI API]
     API -.->|Optional: REST read-only| Canvas
     API --> DB[(PostgreSQL)]
-    API --> Qdrant[(Qdrant Vector DB)]
-    API --> Redis[(Redis)]
-    Redis --> Worker[RQ Worker]
+    API --> Qdrant[(Qdrant embedded P0 / service P1)]
     API --> AI[LangGraph AI Harness]
     Worker --> AI
     AI --> Gateway[OpenRouter / OpenAI-compatible Models]
-    API --> Obs[OpenTelemetry + Logs + Prometheus]
-    AI --> LLMObs[LLM Traces]
+    API --> Obs[Request ID + structured logs + Prometheus/Grafana]
 ```
 
 Canvas là hệ thống bên ngoài. MVP luôn chạy bằng fixture; REST chỉ đọc chỉ bật khi có sandbox/token và LTI 1.3 là P1 khi có developer key. PaceWise không fork Canvas và không ghi điểm/nộp bài. Fixture dùng cùng schema nội bộ để CI/demo vẫn chạy khi sandbox không khả dụng.
@@ -28,8 +25,8 @@ Canvas là hệ thống bên ngoài. MVP luôn chạy bằng fixture; REST chỉ
 
 ```mermaid
 flowchart TB
-    UI[Next.js: /student + /instructor] --> API[FastAPI Router]
-    API --> Auth[JWT/LTI Verification + RBAC]
+    UI[React/Vite: /student + /instructor] --> API[FastAPI Router]
+    API --> Auth[HttpOnly session + CSRF + RBAC]
     API --> CanvasAdapter[Canvas Fixture/REST Adapter]
     API --> Plan[Plan + Progress + Risk Service]
     API --> Assess[Assessment + Evidence Service]
@@ -43,7 +40,7 @@ flowchart TB
     Graph --> Recover[Recovery Planner]
     Graph --> ItemBuilder[Assessment Builder]
     Graph --> RubricScorer[CR Rubric Scorer]
-    Graph --> Retriever[Qdrant Retriever + bge-reranker]
+    Graph --> Retriever[Qdrant Retriever + lazy FastEmbed + FlashRank ONNX]
     Graph --> Guardrail[Rules + Llama Guard]
 
     Plan --> Deterministic[Constraint + Risk Validators]
@@ -57,6 +54,7 @@ flowchart TB
     Assess --> DB
     Dashboard --> DB
     Retriever --> Qdrant[(Qdrant)]
+    Graph --> Checkpoint[(PostgreSQL LangGraph checkpoint)]
 ```
 
 Ranh giới quan trọng:
@@ -116,16 +114,24 @@ Staging và production dùng project/schema, secret và telemetry environment t�
 
 | Thành phần | Lựa chọn P0 | Lý do |
 |---|---|---|
-| Frontend | Next.js + TypeScript + Tailwind/shadcn-ui | Một codebase cho hai vai trò, responsive và test bằng Playwright |
+| Frontend | React 19 + TypeScript + Vite | Một codebase cho hai vai trò, production build phục vụ bằng Nginx |
 | Backend | Python 3.11 + FastAPI + Pydantic + SQLAlchemy/Alembic | Khớp repo, API/schema rõ, migration được kiểm soát |
-| Database/vector | PostgreSQL + Qdrant | Tách dữ liệu nghiệp vụ và vector; khớp stack đề bài |
-| Cache/job | Redis + RQ worker | Cache/rate limit và xử lý ingestion/eval ngoài request |
+| Database/vector | PostgreSQL + Qdrant embedded P0 | PostgreSQL lưu nghiệp vụ/checkpoint; vector nằm trên volume demo, nâng thành Qdrant service khi scale |
+| Cache/job | Chưa triển khai P0; Redis + worker là P1 | Chỉ thêm khi đo được bottleneck ingestion hoặc rate limit nhiều instance |
 | AI | LangGraph + OpenAI-compatible client/OpenRouter | Workflow có state/HITL, đổi model qua config |
-| RAG | Embedding đa ngôn ngữ + Qdrant + bge-reranker | Hỗ trợ tiếng Việt và hợp đồng trích dẫn; Cohere Rerank là tùy chọn |
+| RAG | FastEmbed đa ngôn ngữ + Qdrant + FlashRank ONNX | Pipeline ingest → retrieve → rerank → citation, lazy-load để giảm RAM |
 | Guardrail | Quy tắc xác định trước + Llama Guard | Không phụ thuộc một prompt/classifier duy nhất |
 | Canvas | Fixture bắt buộc; REST read-only có điều kiện; LTI 1.3 P1 | Demo tái lập, tích hợp thật khi có credential |
 | Quality | Pytest, Vitest, Playwright, Locust/k6, RAGAS + metric xác định trước | Unit, integration, E2E, load và chất lượng AI |
-| Observability | OpenTelemetry, structured logs, Prometheus/Grafana, LLM tracing | Nối request → service → LLM/job, theo dõi lỗi/latency/cost |
+| Observability | Request ID, structured logs, Prometheus/Grafana | Theo dõi lỗi/latency HTTP, agent node và RAG; OpenTelemetry/LLM tracing là P1 |
+
+Hiện trạng P0 đã triển khai gồm request ID, structured logs, metrics Prometheus và dashboard
+Grafana. OpenTelemetry/LLM tracing, Redis/RQ và Qdrant service tách riêng là bước nâng cấp cho
+production; bản Docker hiện tại dùng Qdrant embedded trên volume để giảm RAM cho demo.
+
+LangGraph dùng PostgreSQL checkpointer trong Docker/production. `MemorySaver` chỉ được giữ làm
+fallback cho unit test hoặc cấu hình SQLite local. Embedding FastEmbed và FlashRank ONNX đều
+lazy-load; chỉ workflow QA/RAG mới nạp model vào RAM.
 
 ## 6. Security and privacy boundaries
 

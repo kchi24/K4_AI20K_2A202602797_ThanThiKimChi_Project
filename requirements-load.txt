@@ -1,0 +1,2 @@
+# Optional load-test environment.
+locust>=2.32.0

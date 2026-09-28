@@ -3,13 +3,16 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 
+from src.agents.graph import runtime_agent
 from src.api.lms_integration import router as lms_router
 from src.api.routes import router
 from src.api.workspace import router as workspace_router
 from src.config import get_settings
 from src.db import initialize_database
 from src.middleware import ProductionSecurityMiddleware
+from src.observability import render_prometheus
 from src.services.sync_worker import poll_lms_events
 
 
@@ -20,10 +23,14 @@ async def lifespan(app: FastAPI):
     stop_sync = asyncio.Event()
     sync_task = asyncio.create_task(poll_lms_events(settings, stop_sync))
     print(f"Starting {settings.app_name} in {settings.app_env} mode")
-    yield
-    stop_sync.set()
-    await sync_task
-    print("Shutting down...")
+    try:
+        async with runtime_agent(settings) as durable_agent:
+            app.state.agent = durable_agent
+            yield
+    finally:
+        stop_sync.set()
+        await sync_task
+        print("Shutting down...")
 
 
 app = FastAPI(
@@ -50,4 +57,10 @@ app.include_router(workspace_router, prefix="/api/v1")
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "env": settings.app_env}
+    checkpoint = "postgres" if settings.use_postgres_checkpoint and settings.database_url.startswith("postgresql") else "memory"
+    return {"status": "ok", "env": settings.app_env, "checkpoint": checkpoint}
+
+
+@app.get("/metrics", response_class=PlainTextResponse, include_in_schema=False)
+async def metrics():
+    return render_prometheus()

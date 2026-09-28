@@ -261,6 +261,41 @@ Mỗi thay đổi được thực hiện trên một nhánh ngắn hạn tạo t
 request trở lại `develop` và xóa branch sau khi merge. Khi một phiên bản đã ổn
 định, đội mở pull request từ `develop` vào `main`.
 
+## AI runtime, observability và evaluation
+
+- LangGraph dùng PostgreSQL checkpointer khi `DATABASE_URL` là PostgreSQL; state của cùng một
+  PaceWise session được khôi phục qua `thread_id` phía server. `MemorySaver` chỉ còn là fallback
+  cho test/local SQLite.
+- RAG ingest học liệu đã được LMS phân quyền, tạo embedding đa ngôn ngữ bằng FastEmbed, truy xuất
+  từ Qdrant, rerank bằng FlashRank ONNX đa ngôn ngữ và trả citation theo tài liệu/trang/đoạn.
+  FastEmbed và reranker đều lazy-load, nên các workflow không dùng RAG không tốn RAM cho model.
+- Backend xuất structured request logs, `X-Request-ID` và Prometheus metrics tại `/metrics`.
+
+Chạy thêm Prometheus + Grafana (dashboard `PaceWise Overview`):
+
+```powershell
+docker compose --profile observability up -d --build
+```
+
+- Prometheus: <http://localhost:9090>
+- Grafana: <http://localhost:3001> (mặc định local: `admin` / `pacewise-local-only`)
+
+Chạy RAGAS với bộ JSONL đã gán nhãn tối thiểu 100 mẫu. Mỗi dòng cần `user_input`, `response`,
+`retrieved_contexts` và `reference`:
+
+```powershell
+pip install -r requirements-eval.txt
+python evals/run_ragas_eval.py evals/datasets/rag-pilot.jsonl
+```
+
+Chạy load test. Lệnh 1.000 virtual users là bài kiểm tra acceptance trên môi trường staging đủ
+tài nguyên, không nên chạy trên laptop yếu và không được coi là đã pass nếu chưa lưu report:
+
+```powershell
+pip install -r requirements-load.txt
+locust -f load_tests/locustfile.py --host http://localhost:5173 --headless -u 1000 -r 50 -t 5m --csv evals/reports/load-1000
+```
+
 ## License
 
 [MIT](LICENSE)

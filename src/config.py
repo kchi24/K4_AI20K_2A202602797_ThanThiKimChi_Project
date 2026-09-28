@@ -44,11 +44,21 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = "sqlite:///./data/pacewise.db"
+    use_postgres_checkpoint: bool = True
 
     # Vector Store
     vector_store_type: str = "qdrant"
-    qdrant_path: str = "./src/agents/data/qdrant"
+    qdrant_path: str = "./data/qdrant"
     chroma_persist_dir: str = "./src/agents/data/chroma"
+    embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    embedding_cache_dir: str = "./data/models/fastembed"
+    # Multilingual ONNX cross-encoder; loaded lazily only after retrieval.
+    reranker_model: str = "ms-marco-MultiBERT-L-12"
+    reranker_cache_dir: str = "./data/models/flashrank"
+    rag_top_k: int = Field(default=8, ge=3, le=30)
+    rag_final_k: int = Field(default=3, ge=1, le=10)
+    rag_rerank_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    metrics_enabled: bool = True
 
     def model_post_init(self, __context: object) -> None:
         """Support Docker/Kubernetes/cloud secrets mounted as read-only files."""

@@ -1,33 +1,43 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Badge } from '../../components/ui/Badge';
 import { Button, ButtonLink } from '../../components/ui/Button';
 import { Icon } from '../../components/ui/Icon';
 import { PageHeader } from '../../components/ui/PageHeader';
-import { EmptyState } from '../../components/ui/States';
+import { EmptyState, ErrorState, LoadingState } from '../../components/ui/States';
 import { useDerived } from '../../hooks/useDerived';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useAppStore } from '../../store/AppStore';
+import { generateRecoveryOptions } from '../../services/api';
 import { cx } from '../../utils/cx';
-import { buildRecoveryOptions } from '../../utils/recovery';
 import { formatDay, formatHours } from '../../utils/time';
 
 export function useRecoveryOptions() {
-  const { state } = useAppStore();
+  const { state, dispatch } = useAppStore();
   const { drifts } = useDerived();
   const drift = drifts[0];
-  const options = useMemo(
-    () => (drift && state.plan ? buildRecoveryOptions(state.plan, state.tasks, drift, state.availability, state.unavailable) : []),
-    [drift, state.plan, state.tasks, state.availability, state.unavailable],
-  );
-  return { drift, options };
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
+  useEffect(() => {
+    if (!drift || !state.plan || state.recoveryOptions.length) return;
+    let active = true;
+    setLoading(true);
+    setError(null);
+    void generateRecoveryOptions(state.plan, state.tasks, drift, state.availability, state.unavailable)
+      .then((options) => active && dispatch({ type: 'SET_RECOVERY_OPTIONS', options }))
+      .catch((reason: Error) => active && setError(reason))
+      .finally(() => active && setLoading(false));
+    return () => { active = false; };
+  }, [drift?.taskId, drift?.deficitMin, state.plan?.id, state.recoveryOptions.length, retryKey]);
+  return { drift, options: state.recoveryOptions, loading, error, retry: () => setRetryKey((value) => value + 1) };
 }
 
 export function RecoverPage() {
   useDocumentTitle('Phục hồi kế hoạch');
   const { state } = useAppStore();
   const { taskById } = useDerived();
-  const { drift, options } = useRecoveryOptions();
+  const { drift, options, loading, error, retry } = useRecoveryOptions();
   const navigate = useNavigate();
   const [selected, setSelected] = useState<string | null>(null);
 
@@ -61,6 +71,12 @@ export function RecoverPage() {
         />
       </div>
     );
+  }
+  if (loading) {
+    return <div className="page"><LoadingState title="Đang tạo phương án phục hồi" steps={['Đọc tiến độ', 'Bảo vệ deadline', 'Kiểm tra đánh đổi']} current={1} /></div>;
+  }
+  if (error) {
+    return <div className="page"><ErrorState title="Chưa tạo được phương án" description={error.message} onRetry={retry} /></div>;
   }
   const task = taskById.get(drift.taskId)!;
 

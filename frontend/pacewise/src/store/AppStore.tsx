@@ -17,6 +17,7 @@ import type {
   QAMessage,
   QuickCheckResult,
   Reflection,
+  RecoveryOption,
   ReviewItem,
   ReviewStatus,
   StudySession,
@@ -51,6 +52,7 @@ export interface AppState {
   quickChecks: QuickCheckResult[];
   guidance: ClassGuidance[];
   reflection: Reflection | null;
+  recoveryOptions: RecoveryOption[];
   settings: Settings;
   reviewQueue: ReviewItem[];
   assessments: AssessmentItem[];
@@ -99,6 +101,7 @@ export const initialState: AppState = {
     },
   ],
   reflection: null,
+  recoveryOptions: [],
   settings: { simulateAiError: false, staleData: false, lastSync: '2026-09-29T08:10:00+07:00' },
   reviewQueue: [],
   assessments: [],
@@ -133,7 +136,8 @@ export type Action =
   | { type: 'SUBMIT_QUICK_CHECK'; result: QuickCheckResult; reviewItem?: ReviewItem }
   | { type: 'ADD_CLASS_GUIDANCE'; topic: string; message: string }
   | { type: 'APPLY_RECOVERY'; blocks: TimeBlock[] }
-  | { type: 'SAVE_REFLECTION'; answers: [string, string, string] }
+  | { type: 'SAVE_REFLECTION'; answers: [string, string, string]; aiDraft?: Record<string, unknown>; aiSummary?: string }
+  | { type: 'SET_RECOVERY_OPTIONS'; options: RecoveryOption[] }
   | { type: 'SAVE_AVAILABILITY'; availability: AvailabilityDay[]; unavailable: UnavailableSlot[] }
   | { type: 'UPDATE_SETTINGS'; patch: Partial<Settings> }
   | { type: 'SET_REVIEW_STATUS'; id: string; status: ReviewStatus; note?: string }
@@ -235,6 +239,7 @@ export function reducer(state: AppState, action: Action): AppState {
         unavailable: state.planDraft.input.unavailable,
         planDraft: null,
         wizardInput: null,
+        recoveryOptions: [],
       };
     }
     case 'CLEAR_PLAN':
@@ -322,10 +327,12 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'APPLY_RECOVERY': {
       if (!state.plan) return state;
       const plan: Plan = { ...state.plan, id: uid('plan'), blocks: action.blocks, savedAt: new Date().toISOString(), version: state.plan.version + 1 };
-      return { ...state, plan, planHistory: [state.plan, ...state.planHistory], dismissedDrifts: [] };
+      return { ...state, plan, planHistory: [state.plan, ...state.planHistory], dismissedDrifts: [], recoveryOptions: [] };
     }
+    case 'SET_RECOVERY_OPTIONS':
+      return { ...state, recoveryOptions: action.options };
     case 'SAVE_REFLECTION':
-      return { ...state, reflection: { weekStart: WEEK_START, answers: action.answers, savedAt: new Date().toISOString() } };
+      return { ...state, reflection: { weekStart: WEEK_START, answers: action.answers, savedAt: new Date().toISOString(), aiDraft: action.aiDraft, aiSummary: action.aiSummary } };
     case 'SAVE_AVAILABILITY':
       return { ...state, availability: action.availability, unavailable: action.unavailable };
     case 'UPDATE_SETTINGS':
@@ -377,7 +384,7 @@ export function reducer(state: AppState, action: Action): AppState {
       };
     }
     case 'DISMISS_DRIFT':
-      return { ...state, dismissedDrifts: [...state.dismissedDrifts, action.taskId] };
+      return { ...state, dismissedDrifts: [...state.dismissedDrifts, action.taskId], recoveryOptions: [] };
     case 'RESET_DEMO': {
       if (state.user?.isNew) {
         return {

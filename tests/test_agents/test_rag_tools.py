@@ -7,6 +7,7 @@ import pytest
 
 from src.agents.tools import qdrant_retriever
 from src.agents.tools.qdrant_retriever import (
+    ingest_course_resources,
     ingest_sample_documents,
     parse_markdown_document,
     record_disputed_evidence,
@@ -60,6 +61,10 @@ class FakeQdrantClient:
         return self.exists
 
     def recreate_collection(self, **kwargs):
+        self.exists = True
+        self.recreated = kwargs
+
+    def create_collection(self, **kwargs):
         self.exists = True
         self.recreated = kwargs
 
@@ -126,6 +131,29 @@ def test_ingest_empty_directory_returns_warning(tmp_path, fake_qdrant_models):
     assert result["total_chunks"] == 0
 
 
+def test_course_resource_ingestion_skips_unchanged_batch(monkeypatch, fake_qdrant_models):
+    client = FakeQdrantClient(exists=False)
+    monkeypatch.setattr(qdrant_retriever, "_get_embedding_model", lambda: FakeEmbedding())
+    qdrant_retriever._ingested_resource_sets.clear()
+    resources = [
+        {
+            "document_title": "Week 1",
+            "course_code": "CS101",
+            "page": 1,
+            "paragraph": 1,
+            "citation": "[Week 1, Trang 1, Đoạn 1]",
+            "content": "Variables and basic data types.",
+        }
+    ]
+
+    first = ingest_course_resources(resources, client=client)
+    second = ingest_course_resources(resources, client=client)
+
+    assert first == {"status": "success", "total_chunks": 1}
+    assert second == {"status": "unchanged", "total_chunks": 1}
+    assert len(client.upserted) == 1
+
+
 def test_search_missing_collection_refuses_without_loading_embedding(monkeypatch, fake_qdrant_models):
     def unexpected_model_load():
         raise AssertionError("FastEmbed must stay unloaded when the collection is missing")
@@ -141,8 +169,9 @@ def test_embedding_model_is_lazy_singleton_for_concurrent_requests(monkeypatch):
     instances = []
 
     class FakeTextEmbedding:
-        def __init__(self, model_name):
+        def __init__(self, model_name, cache_dir):
             self.model_name = model_name
+            self.cache_dir = cache_dir
             instances.append(self)
 
     fastembed.TextEmbedding = FakeTextEmbedding
@@ -156,7 +185,55 @@ def test_embedding_model_is_lazy_singleton_for_concurrent_requests(monkeypatch):
     assert qdrant_retriever.is_embedding_model_loaded() is True
     assert len(instances) == 1
     assert all(model is instances[0] for model in models)
-    assert instances[0].model_name == "BAAI/bge-small-en-v1.5"
+    assert instances[0].model_name == qdrant_retriever.get_settings().embedding_model
+    assert instances[0].cache_dir == qdrant_retriever.get_settings().embedding_cache_dir
+
+
+def test_reranker_has_deterministic_fallback(monkeypatch):
+    monkeypatch.setattr(
+        qdrant_retriever,
+        "_get_reranker_model",
+        lambda: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+    passages = [
+        {"content": "mạng nơ ron và học sâu", "score": 0.7},
+        {"content": "cơ sở dữ liệu quan hệ", "score": 0.9},
+    ]
+    result = qdrant_retriever.rerank_passages("học sâu", passages, top_k=1)
+    assert result[0]["content"] == "mạng nơ ron và học sâu"
+    assert result[0]["rerank_score"] > 0
+    assert result[0]["rerank_method"] == "lexical_fallback"
+
+
+def test_flashrank_reranker_maps_scores_back_to_passages(monkeypatch):
+    flashrank = ModuleType("flashrank")
+
+    class FakeRequest:
+        def __init__(self, query, passages):
+            self.query = query
+            self.passages = passages
+
+    class FakeRanker:
+        def rerank(self, request):
+            assert request.query == "deadline"
+            return [
+                {"id": 1, "score": 0.93},
+                {"id": 0, "score": 0.21},
+            ]
+
+    flashrank.RerankRequest = FakeRequest
+    monkeypatch.setitem(sys.modules, "flashrank", flashrank)
+    monkeypatch.setattr(qdrant_retriever, "_get_reranker_model", lambda: FakeRanker())
+    passages = [
+        {"content": "tài liệu chung", "score": 0.9},
+        {"content": "hướng dẫn deadline", "score": 0.7},
+    ]
+
+    result = qdrant_retriever.rerank_passages("deadline", passages, top_k=2)
+
+    assert result[0]["content"] == "hướng dẫn deadline"
+    assert result[0]["rerank_score"] == 0.93
+    assert result[0]["rerank_method"] == "cross_encoder"
 
 
 def test_search_filters_course_and_returns_passage(monkeypatch, fake_qdrant_models):
@@ -181,3 +258,38 @@ def test_search_filters_course_and_returns_passage(monkeypatch, fake_qdrant_mode
     assert result["top_score"] == 0.91
     assert result["passages"][0]["citation"] == "[Giáo trình, Trang 2, Đoạn 3]"
     assert client.last_query["query_filter"] is not None
+
+
+@pytest.mark.parametrize(
+    ("method", "expected_insufficient"),
+    [("cross_encoder", False), ("lexical_fallback", True)],
+)
+def test_cross_encoder_can_pass_gate_but_lexical_fallback_cannot(
+    monkeypatch,
+    fake_qdrant_models,
+    method,
+    expected_insufficient,
+):
+    point = SimpleNamespace(
+        id=1,
+        score=0.5,
+        payload={
+            "content": "A short quiz covering variables and data types.",
+            "document_title": "Week 1 Knowledge Check",
+            "course_code": "CS101",
+            "citation": "[Week 1 Knowledge Check, Trang 1, Đoạn 1]",
+        },
+    )
+    monkeypatch.setattr(qdrant_retriever, "_get_embedding_model", lambda: FakeEmbedding())
+
+    def fake_rerank(_query, passages, _top_k):
+        return [dict(passages[0], rerank_score=0.98, rerank_method=method)]
+
+    monkeypatch.setattr(qdrant_retriever, "rerank_passages", fake_rerank)
+    result = search_course_materials(
+        "Week 1 Knowledge Check",
+        course_code="CS101",
+        client=FakeQdrantClient(points=[point]),
+    )
+
+    assert result["insufficient_sources"] is expected_insufficient

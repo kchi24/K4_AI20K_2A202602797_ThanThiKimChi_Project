@@ -59,7 +59,7 @@ python -m pytest tests/ -q
 
 Test bao phủ routing, guardrail, prompt injection, yêu cầu làm hộ, RAG theo course, citation, plan constraint, overlap/timezone, HITL, rubric, assessment escalation, recovery, reflection, xác thực PaceWise, phân quyền course và API. CI yêu cầu line coverage của `src.agents` tối thiểu 80%.
 
-Lần chạy local ngày 28/09/2026 đạt **106 test backend/agent pass** và **4 test LMS simulator pass**. CI dùng `pytest-cov` làm cổng chính thức và sẽ fail nếu line coverage của `src.agents` dưới 80%.
+Lần chạy local ngày 28/09/2026 đạt **116 test backend/agent pass** và **4 test LMS simulator pass**. CI dùng `pytest-cov` làm cổng chính thức và sẽ fail nếu line coverage của `src.agents` dưới 80%.
 
 CI dùng `requirements-ci.txt` để không tải Qdrant/FastEmbed/Chroma trong unit test. Adapter vector được kiểm thử bằng fake module; kiểm thử tích hợp Qdrant thật phải chạy ở job/service riêng.
 
@@ -86,6 +86,32 @@ Ba dataset chính đều có 120 mẫu; routing có thêm 120 mẫu hỗ trợ. 
 | Diagnosis macro-F1 | ≥0,80 | 1,00 |
 | Lỗi diagnosis độ tin cậy cao | ≤5% | 0% |
 | Routing accuracy | theo dõi | 100% |
+
+### RAGAS trên dữ liệu pilot
+
+`evals/run_ragas_eval.py` nhận JSONL tối thiểu 100 mẫu có bốn trường
+`user_input`, `response`, `retrieved_contexts`, `reference`, sau đó tính
+faithfulness, answer relevancy, context precision và context recall. Đây là eval tùy chọn cần
+credential của model judge; không chạy trong CI xác định và không được báo cáo là đã đạt khi chưa
+có dataset pilot được SME gán nhãn.
+
+```powershell
+pip install -r requirements-eval.txt
+python evals/run_ragas_eval.py evals/datasets/rag-pilot.jsonl
+```
+
+### Load test và quan sát hệ thống
+
+```powershell
+pip install -r requirements-load.txt
+locust -f load_tests/locustfile.py --host http://localhost:5173 --headless -u 1000 -r 50 -t 5m --csv evals/reports/load-1000
+docker compose --profile observability up -d
+```
+
+Backend xuất request ID, structured log và Prometheus metrics cho HTTP, agent node và RAG.
+Prometheus scrape `/metrics`; Grafana tự provision dashboard `PaceWise Overview`. Kịch bản 1.000
+virtual users chỉ là acceptance profile: phải chạy trên staging đủ tài nguyên và lưu report trước
+khi tuyên bố đạt tải.
 
 ## 5. Cách hiểu đúng kết quả
 

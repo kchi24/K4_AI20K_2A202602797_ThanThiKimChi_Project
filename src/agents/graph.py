@@ -5,6 +5,7 @@ Hỗ trợ quản lý phiên làm việc đa lượt (Multi-turn conversations) 
 
 import time
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
@@ -19,6 +20,8 @@ from src.agents.workflows.recover import recover_node
 from src.agents.workflows.reflect import reflect_node
 from src.agents.workflows.tracking import tracking_node
 from src.agents.workflows.understanding import understanding_node
+from src.config import Settings
+from src.observability import observe_agent_node
 
 
 def route_workflow(state: LearningGraphState) -> str:
@@ -40,6 +43,8 @@ def instrument_node(name: str, node: Callable[[LearningGraphState], dict[str, An
         try:
             result = node(state)
             outcome = "ok"
+            duration = time.perf_counter() - started
+            observe_agent_node(name, outcome, duration)
             node_events = result.get("audit_events") or []
             return result | {
                 "audit_events": [
@@ -49,12 +54,13 @@ def instrument_node(name: str, node: Callable[[LearningGraphState], dict[str, An
                         "node": name,
                         "workflow": result.get("current_node", name),
                         "outcome": outcome,
-                        "latency_ms": round((time.perf_counter() - started) * 1000, 2),
+                        "latency_ms": round(duration * 1000, 2),
                         "timestamp": datetime.now(UTC).isoformat(),
                     }
                 ]
             }
         except Exception as exc:
+            observe_agent_node(name, "error", time.perf_counter() - started)
             exc.add_note(f"agent_node={name}")
             raise
 
@@ -110,3 +116,22 @@ def create_agent(checkpointer: Any = default_checkpointer):
 # Instance agent chính dùng cho API và CLI (được trang bị Checkpointer)
 agent = create_agent()
 checkpointer = default_checkpointer
+
+
+def _postgres_checkpoint_url(database_url: str) -> str:
+    return database_url.replace("postgresql+psycopg://", "postgresql://", 1)
+
+
+@asynccontextmanager
+async def runtime_agent(settings: Settings):
+    """Use durable Postgres state in deployed environments and memory in local tests."""
+    if settings.use_postgres_checkpoint and settings.database_url.startswith("postgresql"):
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+        async with AsyncPostgresSaver.from_conn_string(
+            _postgres_checkpoint_url(settings.database_url)
+        ) as postgres_checkpointer:
+            await postgres_checkpointer.setup()
+            yield create_agent(postgres_checkpointer)
+        return
+    yield agent

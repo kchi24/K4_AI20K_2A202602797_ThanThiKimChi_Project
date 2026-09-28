@@ -1,14 +1,19 @@
 import type {
   AssessmentItem,
+  AvailabilityDay,
   AuditEntry,
   CanvasSyncResult,
   ClassGuidance,
   ClassGroup,
   GroupStats,
+  Drift,
+  Plan,
   PlanDraft,
   PlanInput,
   ReviewItem,
+  RecoveryOption,
   Task,
+  UnavailableSlot,
   User,
 } from '../types';
 import { explainPlan, schedule } from '../utils/scheduler';
@@ -125,13 +130,22 @@ export async function saveInstructorAction(
 
 export interface RequestOptions { simulateError?: boolean }
 
-interface AgentResponse {
+export interface AgentResponse {
   response: string;
   workflow: 'plan' | 'tracking' | 'qa' | 'understanding' | 'recover' | 'reflect';
   mode?: string;
   status: string;
   pending_action?: Record<string, unknown> | null;
   output?: { plan_validation?: { valid: boolean; errors: { code: string }[] } } | null;
+  progress_metrics?: Record<string, unknown>;
+  risk_signals?: Array<Record<string, unknown>>;
+  assessment_result?: {
+    status?: string;
+    confidence?: string;
+    evidence_quotes?: string[];
+  } | null;
+  recovery_options?: Array<Record<string, unknown>>;
+  reflection_draft?: Record<string, unknown> | null;
   source_refs: { citation: string }[];
 }
 
@@ -144,6 +158,115 @@ async function runAgent(
     method: 'POST',
     body: JSON.stringify({ message, workflow, context }),
   });
+}
+
+function fold(value: string) {
+  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
+export async function trackProgress(
+  plan: Plan | null,
+  availability: AvailabilityDay[],
+  unavailable: UnavailableSlot[],
+): Promise<AgentResponse> {
+  return runAgent('Kiểm tra tiến độ hiện tại và cảnh báo deadline có rủi ro.', 'tracking', {
+    current_plan: plan,
+    availability,
+    unavailable_slots: unavailable,
+  });
+}
+
+export interface UnderstandingResult {
+  evidenceState: 'demonstrated' | 'developing' | 'misconception' | 'abstained';
+  confidence: 'high' | 'medium' | 'low';
+  feedback: string;
+  requiresInstructorReview: boolean;
+  evidenceQuotes: string[];
+}
+
+export async function assessUnderstanding(assessment: AssessmentItem, answer: string): Promise<UnderstandingResult> {
+  const result = await runAgent(answer, 'understanding', {
+    approved_rubric: assessment.rubric.map((criterion, index) => ({
+      criterion_id: `${assessment.id}-${index + 1}`,
+      description: criterion,
+    })),
+  });
+  const assessmentResult = result.assessment_result ?? {};
+  const status = fold(assessmentResult.status ?? '');
+  const confidence = fold(assessmentResult.confidence ?? '');
+  return {
+    evidenceState: status.includes('the hien')
+      ? 'demonstrated'
+      : status.includes('hinh thanh')
+        ? 'developing'
+        : status.includes('nham lan')
+          ? 'misconception'
+          : 'abstained',
+    confidence: confidence.includes('cao') || confidence.includes('high')
+      ? 'high'
+      : confidence.includes('trung') || confidence.includes('medium')
+        ? 'medium'
+        : 'low',
+    feedback: result.response,
+    requiresInstructorReview: result.status === 'awaiting_teacher',
+    evidenceQuotes: assessmentResult.evidence_quotes ?? [],
+  };
+}
+
+export async function generateRecoveryOptions(
+  plan: Plan,
+  tasks: Task[],
+  drift: Drift,
+  availability: AvailabilityDay[],
+  unavailable: UnavailableSlot[],
+): Promise<RecoveryOption[]> {
+  const result = await runAgent(
+    `Kế hoạch đang thiếu ${drift.deficitMin} phút cho nhiệm vụ ${drift.taskId} trước deadline ${drift.deadline}.`,
+    'recover',
+    {
+      current_plan: plan,
+      progress_metrics: { drift },
+      availability,
+      unavailable_slots: unavailable,
+      proposed_milestones: tasks.map((task) => ({
+        milestone_id: task.id,
+        title: task.title,
+        estimated_minutes: Math.max(0, task.estimateMin - task.loggedMin),
+        deadline: task.deadline,
+      })),
+    },
+  );
+  return (result.recovery_options ?? []).map((raw, index) => ({
+    id: String(raw.id ?? String.fromCharCode(65 + index)) as RecoveryOption['id'],
+    title: String(raw.title ?? raw.option_name ?? `Phương án ${index + 1}`),
+    summary: String(raw.summary ?? raw.remaining_risks ?? ''),
+    changes: Array.isArray(raw.changes) ? raw.changes.map(String) : [],
+    impact: String(raw.impact ?? raw.remaining_risks ?? ''),
+    time: String(raw.time ?? `${raw.hours_short_or_free ?? 0} giờ`),
+    tradeoff: String(raw.tradeoff ?? raw.remaining_risks ?? ''),
+    newBlocks: Array.isArray(raw.new_blocks) ? raw.new_blocks as RecoveryOption['newBlocks'] : plan.blocks,
+    assumptions: Array.isArray(raw.assumptions) ? raw.assumptions.map(String) : [],
+    fullyRecovers: Boolean(raw.fully_recovers),
+  }));
+}
+
+export async function confirmRecovery(optionId: string): Promise<void> {
+  await runAgent(`Tôi xác nhận phương án ${optionId}.`, 'recover');
+}
+
+export async function createReflection(
+  answers: [string, string, string],
+  progressMetrics: Record<string, unknown>,
+): Promise<AgentResponse> {
+  return runAgent(
+    `Điều hiệu quả: ${answers[0]}\nNguyên nhân lệch: ${answers[1]}\nĐiều chỉnh tuần sau: ${answers[2]}`,
+    'reflect',
+    { progress_metrics: progressMetrics },
+  );
+}
+
+export async function confirmReflection(): Promise<void> {
+  await runAgent('Tôi xác nhận điều chỉnh cho tuần sau.', 'reflect');
 }
 
 export async function generatePlan(input: PlanInput, tasks: Task[], opts: RequestOptions = {}): Promise<PlanDraft> {

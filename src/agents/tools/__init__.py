@@ -1,4 +1,5 @@
 from src.agents.tools.qdrant_retriever import (
+    ingest_course_resources,
     ingest_sample_documents,
     parse_markdown_document,
     record_disputed_evidence,
@@ -20,6 +21,7 @@ __all__ = [
     "detect_schedule_conflicts",
     "evaluate_closed_question",
     "ingest_sample_documents",
+    "ingest_course_resources",
     "parse_approved_rubric",
     "parse_markdown_document",
     "record_disputed_evidence",

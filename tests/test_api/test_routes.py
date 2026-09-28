@@ -53,6 +53,13 @@ async def test_health(client):
 
 
 @pytest.mark.asyncio
+async def test_metrics_endpoint(client):
+    response = await client.get("/metrics")
+    assert response.status_code == 200
+    assert "# PaceWise application metrics" in response.text
+
+
+@pytest.mark.asyncio
 async def test_chat_empty_message(client, authenticated_student):
     response = await client.post("/api/v1/chat", json={"message": ""})
     assert response.status_code == 422
@@ -83,6 +90,8 @@ async def test_chat_uses_authenticated_identity_and_lms_context(
             "response": "Overfitting là học quá sát dữ liệu. [Giáo trình AI, Trang 1, Đoạn 1]",
             "workflow": "qa",
             "status": "completed",
+            "progress_metrics": {"completion_rate": 0.5},
+            "risk_signals": [{"assignment_id": "21", "level": "high"}],
             "source_refs": [{"citation": "[Giáo trình AI, Trang 1, Đoạn 1]"}],
         }
     )
@@ -93,18 +102,26 @@ async def test_chat_uses_authenticated_identity_and_lms_context(
         json={
             "message": "Giải thích overfitting",
             "workflow": "qa",
-            "context": {"student_id": "attacker", "course_id": "999", "role": "instructor"},
+            "context": {
+                "student_id": "attacker",
+                "course_id": "999",
+                "role": "instructor",
+                "approved_rubric": [{"criterion_id": "c1", "description": "Correct explanation"}],
+            },
         },
     )
 
     assert response.status_code == 200
     assert response.json()["mode"] == "grounded"
+    assert response.json()["progress_metrics"]["completion_rate"] == 0.5
+    assert response.json()["risk_signals"][0]["level"] == "high"
     state = ainvoke.await_args.args[0]
     config = ainvoke.await_args.kwargs["config"]
     assert state["student_id"] == str(authenticated_student.user_id)
     assert state["course_id"] == str(authenticated_student.course_id)
     assert state["course_code"] == "AI101"
     assert state["role"] == "student"
+    assert state["approved_rubric"][0]["criterion_id"] == "c1"
     assert state["assignments"][0]["title"] == "Bài giữa kỳ"
     assert state["learning_resources"][0]["document_title"] == "Giáo trình AI"
     assert config["configurable"]["thread_id"] == "pacewise:server-side-session"
