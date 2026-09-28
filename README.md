@@ -200,6 +200,7 @@ python -m evals.run_agent_eval
 | `GET` | `/api/v1/instructor/overview` | Dashboard tổng hợp, chỉ dành cho giảng viên |
 | `POST` | `/api/v1/instructor/actions` | Lưu duyệt assessment/review/hướng dẫn và audit log |
 | `GET/POST/DELETE` | `/api/v1/integrations/google-calendar/*` | OAuth, đọc busy/free, xuất study block đã xác nhận và thu hồi quyền |
+| `POST` | `/api/v1/calendar/pacewise-study-plan.ics` | Tải kế hoạch dạng `.ics` không cần Google OAuth |
 
 API chat hiện điều phối sáu workflow Plan, Tracking, QA, Understanding, Recover
 và Reflect. Plan/Recover/Reflect có bước xác nhận; QA có guardrail và kiểm tra
@@ -286,7 +287,7 @@ Chạy RAGAS với bộ JSONL đã gán nhãn tối thiểu 100 mẫu. Mỗi dò
 `retrieved_contexts` và `reference`:
 
 ```powershell
-pip install -r requirements-eval.txt
+pip install -r requirements.txt
 python evals/run_ragas_eval.py evals/datasets/rag-pilot.jsonl
 ```
 
@@ -294,7 +295,7 @@ Chạy load test. Lệnh 1.000 virtual users là bài kiểm tra acceptance trê
 tài nguyên, không nên chạy trên laptop yếu và không được coi là đã pass nếu chưa lưu report:
 
 ```powershell
-pip install -r requirements-load.txt
+pip install -r requirements.txt
 locust -f load_tests/locustfile.py --host http://localhost:5173 --headless -u 1000 -r 50 -t 5m --csv evals/reports/load-1000
 ```
 

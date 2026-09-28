@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 
 from src.agents.graph import runtime_agent
+from src.api.calendar_export import router as calendar_export_router
 from src.api.google_calendar import router as google_calendar_router
 from src.api.lms_integration import router as lms_router
 from src.api.routes import router
@@ -55,6 +56,7 @@ app.include_router(router, prefix="/api/v1")
 app.include_router(lms_router, prefix="/api/v1")
 app.include_router(workspace_router, prefix="/api/v1")
 app.include_router(google_calendar_router, prefix="/api/v1")
+app.include_router(calendar_export_router, prefix="/api/v1")
 
 
 @app.get("/health")

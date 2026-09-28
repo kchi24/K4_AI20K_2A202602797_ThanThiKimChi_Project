@@ -37,8 +37,8 @@ services:
 
   lms-simulator:
     build:
-      context: ./lms-simulator
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: lms-simulator/Dockerfile
     ports:
       - "8010:8010"
     environment:

@@ -10,6 +10,7 @@ import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import {
   connectGoogleCalendar,
   disconnectGoogleCalendar,
+  downloadPlanIcs,
   exportPlanToGoogleCalendar,
   getGoogleCalendarStatus,
   syncGoogleCalendarBusy,
@@ -122,6 +123,26 @@ export function SettingsPage() {
     }
   };
 
+  const downloadIcs = async () => {
+    setCalendarBusy(true);
+    try {
+      const file = await downloadPlanIcs(calendarBlocks);
+      const url = URL.createObjectURL(file);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = 'pacewise-study-plan.ics';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      toast({ tone: 'success', title: 'Đã tải file lịch .ics' });
+    } catch (error) {
+      toast({ tone: 'danger', title: 'Không thể xuất file lịch', description: error instanceof Error ? error.message : undefined });
+    } finally {
+      setCalendarBusy(false);
+    }
+  };
+
   return (
     <div className="page max-w-3xl">
       <PageHeader title="Cài đặt" description="Tài khoản, thời gian rảnh mặc định và dữ liệu demo." />
@@ -163,35 +184,50 @@ export function SettingsPage() {
         <Card aria-labelledby="google-calendar">
           <CardHeader
             id="google-calendar"
-            title="Google Calendar"
-            subtitle="Đọc khoảng bận để lập kế hoạch và chỉ tạo study block sau khi bạn xác nhận."
+            title="Lịch cá nhân"
+            subtitle="Kết nối Google Calendar hoặc tải file .ics dùng với ứng dụng lịch khác."
           />
-          {!calendarLoaded ? (
-            <p className="text-sm text-muted">Đang kiểm tra trạng thái kết nối…</p>
-          ) : !calendar?.configured ? (
-            <div className="rounded-xl border border-warning/40 bg-warning-light p-4 text-sm text-warning-ink">
-              Quản trị viên chưa cấu hình Google OAuth cho PaceWise.
-            </div>
-          ) : !calendar.connected ? (
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-sm text-muted">PaceWise chỉ xin quyền xem thời gian bận/rảnh và quản lý sự kiện do ứng dụng tạo.</p>
-              <Button icon="calendar" loading={calendarBusy} onClick={startGoogleConnect}>Kết nối Google Calendar</Button>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <div className="rounded-xl border border-success/40 bg-success-light p-4 text-sm text-success-ink">
-                Đã kết nối. Đồng bộ một chiều: PaceWise tạo sự kiện; không sửa hoặc xóa sự kiện khác của bạn.
+          <div className="space-y-5">
+            <section className="space-y-3" aria-labelledby="google-direct-title">
+              <h3 id="google-direct-title" className="font-semibold">Kết nối trực tiếp</h3>
+              {!calendarLoaded ? (
+                <p className="text-sm text-muted">Đang kiểm tra trạng thái kết nối…</p>
+              ) : !calendar?.configured ? (
+                <div className="rounded-xl border border-warning/40 bg-warning-light p-4 text-sm text-warning-ink">
+                  Quản trị viên chưa cấu hình Google OAuth. Bạn vẫn có thể tải file .ics bên dưới.
+                </div>
+              ) : !calendar.connected ? (
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm text-muted">Tài khoản Google có thể khác tài khoản trường. PaceWise chỉ đọc busy/free và quản lý sự kiện do ứng dụng tạo.</p>
+                  <Button icon="calendar" loading={calendarBusy} onClick={startGoogleConnect}>Kết nối Google Calendar</Button>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="rounded-xl border border-success/40 bg-success-light p-4 text-sm text-success-ink">
+                    Đã kết nối{calendar.accountEmail ? <> với <strong>{calendar.accountEmail}</strong></> : ''}. PaceWise không sửa hoặc xóa sự kiện khác của bạn.
+                  </div>
+                  <div className="flex flex-wrap gap-3">
+                    <Button variant="secondary" icon="refresh" loading={calendarBusy} onClick={importBusyTime}>Đọc lịch bận tuần này</Button>
+                    <Button icon="calendar" disabled={!calendarBlocks.length} onClick={() => setConfirmExport(true)}>
+                      Đưa kế hoạch lên Google
+                    </Button>
+                    <Button variant="danger" disabled={calendarBusy} onClick={disconnectCalendar}>Ngắt kết nối</Button>
+                  </div>
+                  {calendar.lastFreeBusySyncAt && <p className="caption">Đọc lịch bận gần nhất: {new Date(calendar.lastFreeBusySyncAt).toLocaleString('vi-VN')}</p>}
+                </div>
+              )}
+            </section>
+
+            <section className="flex flex-col gap-3 border-t border-line pt-5 sm:flex-row sm:items-center sm:justify-between" aria-labelledby="ics-title">
+              <div>
+                <h3 id="ics-title" className="font-semibold">Xuất file lịch</h3>
+                <p className="caption mt-1">Không cần Google OAuth; dùng được với Google Calendar, Outlook và Apple Calendar.</p>
               </div>
-              <div className="flex flex-wrap gap-3">
-                <Button variant="secondary" icon="refresh" loading={calendarBusy} onClick={importBusyTime}>Đọc lịch bận tuần này</Button>
-                <Button icon="calendar" disabled={!calendarBlocks.length} onClick={() => setConfirmExport(true)}>
-                  Đưa kế hoạch lên lịch
-                </Button>
-                <Button variant="danger" disabled={calendarBusy} onClick={disconnectCalendar}>Ngắt kết nối</Button>
-              </div>
-              {calendar.lastFreeBusySyncAt && <p className="caption">Đọc lịch bận gần nhất: {new Date(calendar.lastFreeBusySyncAt).toLocaleString('vi-VN')}</p>}
-            </div>
-          )}
+              <Button variant="secondary" icon="calendar" loading={calendarBusy} disabled={!calendarBlocks.length} onClick={downloadIcs}>
+                Tải file .ics
+              </Button>
+            </section>
+          </div>
         </Card>
 
         <Card aria-labelledby="privacy">
@@ -257,9 +293,10 @@ export function SettingsPage() {
           </>
         )}
       >
-        <p className="text-sm text-muted">
-          PaceWise sẽ tạo các study block của kế hoạch hiện tại. Những block đã xuất trước đó sẽ được bỏ qua để tránh trùng lịch.
-        </p>
+        <div className="space-y-2 text-sm text-muted">
+          {calendar?.accountEmail && <p>Tài khoản đích: <strong className="text-ink">{calendar.accountEmail}</strong></p>}
+          <p>PaceWise sẽ tạo các study block của kế hoạch hiện tại. Những block đã xuất trước đó sẽ được bỏ qua để tránh trùng lịch.</p>
+        </div>
       </Modal>
     </div>
   );

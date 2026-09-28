@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from src.config import Settings, get_settings
 from src.db import get_db
+from src.models.calendar import GoogleEventExportRequest
 from src.persistence_models import (
     GoogleCalendarConnection,
     GoogleCalendarEventLink,
@@ -46,35 +47,6 @@ class FreeBusyRequest(BaseModel):
             raise ValueError("timeMax must be after timeMin")
         if self.time_max - self.time_min > timedelta(days=31):
             raise ValueError("Availability window cannot exceed 31 days")
-        try:
-            ZoneInfo(self.time_zone)
-        except ZoneInfoNotFoundError as exc:
-            raise ValueError("Unsupported time zone") from exc
-        return self
-
-
-class CalendarBlock(BaseModel):
-    block_id: str = Field(alias="blockId", min_length=1, max_length=128)
-    title: str = Field(min_length=1, max_length=200)
-    start: AwareDatetime
-    end: AwareDatetime
-
-    @model_validator(mode="after")
-    def validate_duration(self) -> CalendarBlock:
-        if self.end <= self.start:
-            raise ValueError("Block end must be after start")
-        if self.end - self.start > timedelta(hours=12):
-            raise ValueError("A study block cannot exceed 12 hours")
-        return self
-
-
-class ExportEventsRequest(BaseModel):
-    confirmed: bool
-    time_zone: str = Field(default="Asia/Ho_Chi_Minh", alias="timeZone", max_length=64)
-    blocks: list[CalendarBlock] = Field(min_length=1, max_length=50)
-
-    @model_validator(mode="after")
-    def validate_time_zone(self) -> ExportEventsRequest:
         try:
             ZoneInfo(self.time_zone)
         except ZoneInfoNotFoundError as exc:
@@ -125,19 +97,28 @@ def _redirect(settings: Settings, **params: str) -> RedirectResponse:
 
 
 @router.get("/status")
-def status(
+async def status(
     session: SessionContext = Depends(get_current_session),
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),
 ) -> dict:
     _student(session)
     connection = db.get(GoogleCalendarConnection, session.user_id)
+    account_email = None
+    if connection and GoogleCalendarClient(settings).configured:
+        try:
+            client, cipher = _integration(settings)
+            access_token = await client.access_token(cipher.decrypt(connection.encrypted_refresh_token))
+            account_email = await client.account_email(access_token)
+        except GoogleCalendarError:
+            account_email = None
     return {
         "configured": GoogleCalendarClient(settings).configured,
         "connected": connection is not None,
         "calendarId": connection.calendar_id if connection else None,
         "connectedAt": connection.connected_at.isoformat() if connection else None,
         "lastFreeBusySyncAt": connection.last_freebusy_sync_at.isoformat() if connection and connection.last_freebusy_sync_at else None,
+        "accountEmail": account_email,
     }
 
 
@@ -291,7 +272,7 @@ async def freebusy(
 
 @router.post("/events")
 async def export_events(
-    payload: ExportEventsRequest,
+    payload: GoogleEventExportRequest,
     session: SessionContext = Depends(require_csrf),
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),

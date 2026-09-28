@@ -18,6 +18,7 @@ Khảo sát thăm dò 17 sinh viên ghi nhận nhu cầu về lịch, nhắc dea
 PaceWise là trợ lý học tập theo chu trình **Plan–Do–Reflect**, giúp sinh viên tự điều chỉnh thay vì chỉ nhắc việc.
 
 - **Plan:** đọc dữ liệu Canvas, chia assignment thành milestone và kiểm tra quỹ thời gian, phụ thuộc, deadline.
+- **Lịch:** lịch PaceWise hoạt động độc lập; Google Calendar là kết nối tùy chọn để đọc busy/free và tạo study block sau xác nhận, còn `.ics` là fallback không cần OAuth.
 - **Do:** ghi nhận thời gian thực tế và trả lời từ tài liệu môn học có trích dẫn.
 - **Check trong Do:** dùng 1–3 câu đã duyệt để thu bằng chứng theo một đơn vị kiến thức.
 - **Recover trong Do:** tạo 2–3 phương án khi tiến độ lệch; sinh viên xác nhận trước khi đổi lịch.
@@ -38,6 +39,7 @@ PaceWise tham khảo “check for understanding” nhưng chỉ pilot một môn
 - Không đánh giá toàn bộ môn/ngành hay triển khai cấp trường.
 - Không xếp hạng, kỷ luật hoặc tự động gắn nhãn “yếu/kém”.
 - Không tự đổi lịch, gửi hỗ trợ cá nhân hoặc chia sẻ dữ liệu khi chưa có xác nhận.
+- Không bắt buộc tài khoản Google trùng email trường và không làm PaceWise phụ thuộc vào một nhà cung cấp lịch.
 
 ## Đo thành công
 

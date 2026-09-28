@@ -14,7 +14,8 @@ flowchart LR
     API --> DB[(PostgreSQL)]
     API --> Qdrant[(Qdrant embedded P0 / service P1)]
     API --> AI[LangGraph AI Harness]
-    API -->|OAuth 2.0: freebusy + confirmed events| GCal[Google Calendar API]
+    API -->|OAuth 2.0: identity + freebusy + confirmed events| GCal[Google Calendar API]
+    API -->|RFC 5545 export, no OAuth| ICS[ICS file]
     Worker --> AI
     AI --> Gateway[OpenRouter / OpenAI-compatible Models]
     API --> Obs[Request ID + structured logs + Prometheus/Grafana]
@@ -126,7 +127,7 @@ Staging và production dùng project/schema, secret và telemetry environment t�
 | RAG | FastEmbed đa ngôn ngữ + Qdrant + FlashRank ONNX | Pipeline ingest → retrieve → rerank → citation, lazy-load để giảm RAM |
 | Guardrail | Quy tắc xác định trước + Llama Guard | Không phụ thuộc một prompt/classifier duy nhất |
 | Canvas | Fixture bắt buộc; REST read-only có điều kiện; LTI 1.3 P1 | Demo tái lập, tích hợp thật khi có credential |
-| Calendar | Google OAuth 2.0 + Calendar REST qua HTTPX | Scope tối thiểu, đọc busy/free và chỉ ghi study block sau HITL |
+| Calendar | Google OAuth 2.0 + Calendar REST qua HTTPX; RFC 5545 `.ics` | Kết nối trực tiếp có HITL và fallback không phụ thuộc Google |
 | Quality | Pytest, Vitest, Playwright, Locust/k6, RAGAS + metric xác định trước | Unit, integration, E2E, load và chất lượng AI |
 | Observability | Request ID, structured logs, Prometheus/Grafana | Theo dõi lỗi/latency HTTP, agent node và RAG; OpenTelemetry/LLM tracing là P1 |
 

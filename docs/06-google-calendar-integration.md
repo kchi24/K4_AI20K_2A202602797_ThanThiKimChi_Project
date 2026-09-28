@@ -9,10 +9,13 @@ Tích hợp này phục vụ trực tiếp luồng lập và phục hồi kế h
 - tạo study block trên lịch chính chỉ sau màn hình xác nhận của sinh viên;
 - đồng bộ một chiều từ PaceWise sang Google Calendar;
 - cho phép ngắt kết nối và thu hồi refresh token.
+- hiển thị email tài khoản Google đang kết nối; tài khoản này không bắt buộc trùng email đăng nhập trường;
+- cho phép tải file RFC 5545 `.ics` không cần Google OAuth.
 
-Hai OAuth scope được dùng:
+OAuth dùng OpenID `email` để hiển thị đúng tài khoản và hai Calendar scope tối thiểu:
 
 ```text
+openid email
 https://www.googleapis.com/auth/calendar.freebusy
 https://www.googleapis.com/auth/calendar.events.owned
 ```
@@ -68,5 +71,6 @@ Khi deploy, đổi cả hai URL sang HTTPS public URL và lưu client secret/kh�
 | `POST` | `/api/v1/integrations/google-calendar/freebusy` | Đọc khoảng bận và trả `UnavailableSlot` |
 | `POST` | `/api/v1/integrations/google-calendar/events` | Tạo study block đã xác nhận |
 | `DELETE` | `/api/v1/integrations/google-calendar` | Thu hồi token và ngắt kết nối |
+| `POST` | `/api/v1/calendar/pacewise-study-plan.ics` | Tạo file lịch từ kế hoạch mà không cần OAuth |
 
 Test tự động mock Google REST API; test không dùng tài khoản hoặc token thật.

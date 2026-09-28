@@ -34,6 +34,7 @@ Hai giao diện dùng chung backend và mô hình phân quyền. Dashboard giả
 - Đăng nhập mô phỏng và phân quyền sinh viên/giảng viên.
 - Nhập nhiệm vụ từ bộ dữ liệu Canvas mô phỏng; có thể dùng Canvas REST chỉ đọc khi có sandbox/token.
 - Tạo kế hoạch tuần có milestone, ước lượng thời gian, ưu tiên và ràng buộc deadline.
+- Lịch nội bộ luôn hoạt động; sinh viên có thể kết nối Google Calendar để đọc busy/free và xuất study block, hoặc tải `.ics` mà không cần OAuth.
 - Theo dõi thời gian dự kiến–thực tế, phát hiện nguy cơ và tạo phương án phục hồi.
 - Hỏi đáp từ tài liệu môn học, luôn kèm nguồn hoặc từ chối khi thiếu nguồn.
 - Kiểm tra nhanh 1–3 câu, tạo bằng chứng học tập và gợi ý bước tiếp theo.
@@ -135,6 +136,7 @@ KPI sản phẩm của pilot, không phải tuyên bố đã đạt:
 - Yêu cầu xóa dữ liệu được xử lý trong 30 ngày; bản sao lưu hết hạn trong 30 ngày tiếp theo.
 - Không dùng dữ liệu để xếp hạng, kỷ luật hoặc chấm điểm chính thức.
 - Sinh viên phải xác nhận trước khi ghi kế hoạch mới hoặc phục hồi lịch.
+- Sinh viên phải xác nhận trước khi PaceWise tạo sự kiện Google; kết nối có thể dùng tài khoản Google cá nhân khác email trường và luôn có nút thu hồi quyền.
 - Giảng viên duyệt mục tiêu, câu hỏi và rubric; xác nhận trước mọi hành động hỗ trợ hướng tới cá nhân.
 
 ## 9. Quyết định còn mở

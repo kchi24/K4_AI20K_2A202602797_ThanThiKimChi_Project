@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     google_redirect_uri: str = "http://localhost:8000/api/v1/integrations/google-calendar/callback"
     google_oauth_success_url: str = "http://localhost:5173/#/settings"
     google_calendar_scopes: str = (
+        "openid email "
         "https://www.googleapis.com/auth/calendar.freebusy "
         "https://www.googleapis.com/auth/calendar.events.owned"
     )

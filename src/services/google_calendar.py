@@ -17,6 +17,7 @@ from src.config import Settings
 GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
+GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 GOOGLE_CALENDAR_API = "https://www.googleapis.com/calendar/v3"
 
 
@@ -109,6 +110,19 @@ class GoogleCalendarClient:
             raise GoogleCalendarError(f"Google Calendar rejected the request ({response.status_code})")
         return response
 
+    async def _get(self, url: str, **kwargs: Any) -> httpx.Response:
+        try:
+            if self._client:
+                response = await self._client.get(url, timeout=15, **kwargs)
+            else:
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(url, timeout=15, **kwargs)
+        except httpx.HTTPError as exc:
+            raise GoogleCalendarError("Cannot reach Google Calendar") from exc
+        if response.status_code >= 400:
+            raise GoogleCalendarError(f"Google Calendar rejected the request ({response.status_code})")
+        return response
+
     async def exchange_code(self, code: str, code_verifier: str) -> OAuthTokens:
         response = await self._post(
             GOOGLE_TOKEN_URL,
@@ -144,6 +158,14 @@ class GoogleCalendarClient:
         if not token:
             raise GoogleCalendarError("Google did not refresh the access token")
         return str(token)
+
+    async def account_email(self, access_token: str) -> str | None:
+        response = await self._get(
+            GOOGLE_USERINFO_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        email = response.json().get("email")
+        return str(email) if email else None
 
     async def freebusy(
         self,

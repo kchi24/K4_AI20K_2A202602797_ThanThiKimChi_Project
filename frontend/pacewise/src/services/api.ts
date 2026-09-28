@@ -66,6 +66,28 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function requestBlob(path: string, body: unknown): Promise<Blob> {
+  const headers = new Headers({ 'Content-Type': 'application/json' });
+  const csrf = cookie('pacewise_csrf');
+  if (csrf) headers.set('X-CSRF-Token', decodeURIComponent(csrf));
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new ApiError('UPSTREAM', 'Không thể kết nối PaceWise API.');
+  }
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { detail?: string };
+    throw new ApiError('UNKNOWN', payload.detail || `Yêu cầu thất bại (${response.status}).`);
+  }
+  return response.blob();
+}
+
 export async function login(email: string, password: string, courseId?: number): Promise<User> {
   const result = await request<{ user: User }>('/auth/lms-login', {
     method: 'POST',
@@ -134,11 +156,19 @@ export interface GoogleCalendarStatus {
   calendarId: string | null;
   connectedAt: string | null;
   lastFreeBusySyncAt: string | null;
+  accountEmail: string | null;
 }
 
 export interface GoogleBusyResult {
   busy: { start: string; end: string }[];
   unavailableSlots: UnavailableSlot[];
+}
+
+export interface CalendarExportBlock {
+  blockId: string;
+  title: string;
+  start: string;
+  end: string;
 }
 
 export async function getGoogleCalendarStatus(): Promise<GoogleCalendarStatus> {
@@ -157,11 +187,18 @@ export async function syncGoogleCalendarBusy(timeMin: string, timeMax: string): 
 }
 
 export async function exportPlanToGoogleCalendar(
-  blocks: Array<{ blockId: string; title: string; start: string; end: string }>,
+  blocks: CalendarExportBlock[],
 ): Promise<{ created: Array<{ blockId: string; eventId: string; htmlLink?: string }>; skipped: string[] }> {
   return request('/integrations/google-calendar/events', {
     method: 'POST',
     body: JSON.stringify({ confirmed: true, timeZone: 'Asia/Ho_Chi_Minh', blocks }),
+  });
+}
+
+export async function downloadPlanIcs(blocks: CalendarExportBlock[]): Promise<Blob> {
+  return requestBlob('/calendar/pacewise-study-plan.ics', {
+    calendarName: 'PaceWise Study Plan',
+    blocks,
   });
 }
 

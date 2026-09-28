@@ -61,7 +61,7 @@ Test bao phủ routing, guardrail, prompt injection, yêu cầu làm hộ, RAG t
 
 Lần chạy local ngày 28/09/2026 đạt **116 test backend/agent pass** và **4 test LMS simulator pass**. CI dùng `pytest-cov` làm cổng chính thức và sẽ fail nếu line coverage của `src.agents` dưới 80%.
 
-CI dùng `requirements-ci.txt` để không tải Qdrant/FastEmbed/Chroma trong unit test. Adapter vector được kiểm thử bằng fake module; kiểm thử tích hợp Qdrant thật phải chạy ở job/service riêng.
+Toàn bộ dependency Python của backend, LMS simulator, test, eval và load test được quản lý tập trung trong `requirements.txt`. Adapter vector vẫn được kiểm thử bằng fake module; kiểm thử tích hợp Qdrant thật phải chạy ở job/service riêng.
 
 ## 4. Eval định lượng
 
@@ -96,14 +96,14 @@ credential của model judge; không chạy trong CI xác định và không đ�
 có dataset pilot được SME gán nhãn.
 
 ```powershell
-pip install -r requirements-eval.txt
+pip install -r requirements.txt
 python evals/run_ragas_eval.py evals/datasets/rag-pilot.jsonl
 ```
 
 ### Load test và quan sát hệ thống
 
 ```powershell
-pip install -r requirements-load.txt
+pip install -r requirements.txt
 locust -f load_tests/locustfile.py --host http://localhost:5173 --headless -u 1000 -r 50 -t 5m --csv evals/reports/load-1000
 docker compose --profile observability up -d
 ```

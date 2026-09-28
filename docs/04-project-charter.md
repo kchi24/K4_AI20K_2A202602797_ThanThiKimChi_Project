@@ -67,6 +67,7 @@ Ký hiệu: **R** thực hiện, **A** chịu trách nhiệm cuối, **C** tham 
 | Scope, backlog, release | C | C | A/R | C |
 | Kiến trúc và API contract | A/R | C | C | I |
 | Canvas fixture/REST/LTI | A/R | C | I | R |
+| Google Calendar và `.ics` | A/R | I | R | C |
 | Plan/Recover workflow | C | A/R | R | C |
 | RAG và guardrail | C | A/R | C | R |
 | Đánh giá hiểu bài | C | R | C | A/R |
@@ -95,7 +96,7 @@ Ký hiệu: **R** thực hiện, **A** chịu trách nhiệm cuối, **C** tham 
 
 **Mục tiêu:** sinh viên tạo, xác nhận và theo dõi một kế hoạch tuần.
 
-- Tech Lead: assignment API, plan persistence, audit/idempotency, adapter Canvas REST sau feature flag.
+- Tech Lead: assignment API, plan persistence, audit/idempotency, adapter Canvas REST sau feature flag và xuất `.ics` không cần OAuth.
 - AI Engineer: task decomposition, constraint validator, risk rules và prompt/version logging.
 - PO: màn S0–S5, loading/error/empty state, event tracking.
 - BA: Management Console skeleton, fixture edge cases, review milestone/output.
@@ -119,9 +120,9 @@ Ký hiệu: **R** thực hiện, **A** chịu trách nhiệm cuối, **C** tham 
 
 **Mục tiêu:** chạy trọn Plan–Do–Reflect cho hai vai trò.
 
-- Tech Lead: privacy threshold n≥5, rate limit, cache, dashboards, alert và backup/restore drill.
+- Tech Lead: privacy threshold n≥5, Google OAuth/Calendar, rate limit, cache, dashboards, alert và backup/restore drill.
 - AI Engineer: Reflect routing, RAGAS, LLM-as-Judge calibration, cost/latency report.
-- PO: Reflect, analytics, accessibility/responsive và UAT sinh viên.
+- PO: Reflect, màn hình kết nối/tải lịch, accessibility/responsive và UAT sinh viên.
 - BA: dashboard, hàng chờ giảng viên, luồng xác nhận và UAT giảng viên/SME.
 - Nếu credential đã sẵn sàng và P0 ổn: bật REST read-only; LTI chỉ làm sau đó.
 

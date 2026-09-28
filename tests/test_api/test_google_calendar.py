@@ -227,6 +227,22 @@ async def test_disconnect_revokes_google_token_before_removing_connection(client
 
 
 @pytest.mark.asyncio
+async def test_status_displays_the_connected_google_account(client, monkeypatch, calendar_settings):
+    await login_student(client, monkeypatch)
+    add_connection(calendar_settings)
+    monkeypatch.setattr("src.services.google_calendar.GoogleCalendarClient.access_token", AsyncMock(return_value="access"))
+    monkeypatch.setattr(
+        "src.services.google_calendar.GoogleCalendarClient.account_email",
+        AsyncMock(return_value="personal.calendar@gmail.com"),
+    )
+
+    response = await client.get("/api/v1/integrations/google-calendar/status")
+
+    assert response.status_code == 200
+    assert response.json()["accountEmail"] == "personal.calendar@gmail.com"
+
+
+@pytest.mark.asyncio
 async def test_instructor_cannot_connect_personal_calendar(client, monkeypatch, calendar_settings):
     headers = await login_student(client, monkeypatch, role="instructor")
     response = await client.post("/api/v1/integrations/google-calendar/connect", headers=headers)

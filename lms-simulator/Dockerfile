@@ -8,9 +8,9 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app ./app
-COPY static ./static
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY lms-simulator/app ./app
+COPY lms-simulator/static ./static
+COPY lms-simulator/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gosu \
