@@ -13,8 +13,8 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime
-from functools import lru_cache
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -32,13 +32,29 @@ DEFAULT_COLLECTION_NAME = "course_materials"
 DEFAULT_SCORE_THRESHOLD = 0.72  # Ngưỡng tương đồng cosine để phân định học liệu phù hợp (>0.73 cho bài học, <0.71 cho câu hỏi lạc đề)
 EMBEDDING_DIM = 384
 
+_embedding_model: TextEmbedding | None = None
+_embedding_model_lock = Lock()
 
-@lru_cache(maxsize=1)
+
+def is_embedding_model_loaded() -> bool:
+    """Return whether FastEmbed has been initialized in this process."""
+    return _embedding_model is not None
+
+
 def _get_embedding_model() -> TextEmbedding:
-    """Khởi tạo mô hình FastEmbed và lưu cache để tái sử dụng nhanh chóng."""
-    from fastembed import TextEmbedding
+    """Load FastEmbed once, on the first request that actually needs a vector."""
+    global _embedding_model
+    if _embedding_model is not None:
+        return _embedding_model
 
-    return TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+    # Double-checked locking prevents concurrent first requests from loading
+    # several ONNX sessions and temporarily multiplying memory usage.
+    with _embedding_model_lock:
+        if _embedding_model is None:
+            from fastembed import TextEmbedding
+
+            _embedding_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+    return _embedding_model
 
 
 def _get_qdrant_client(storage_path: str | None = None) -> QdrantClient:

@@ -1,4 +1,5 @@
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -125,10 +126,37 @@ def test_ingest_empty_directory_returns_warning(tmp_path, fake_qdrant_models):
     assert result["total_chunks"] == 0
 
 
-def test_search_missing_collection_refuses(fake_qdrant_models):
+def test_search_missing_collection_refuses_without_loading_embedding(monkeypatch, fake_qdrant_models):
+    def unexpected_model_load():
+        raise AssertionError("FastEmbed must stay unloaded when the collection is missing")
+
+    monkeypatch.setattr(qdrant_retriever, "_get_embedding_model", unexpected_model_load)
     result = search_course_materials("khái niệm", client=FakeQdrantClient(exists=False))
     assert result["insufficient_sources"] is True
     assert result["passages"] == []
+
+
+def test_embedding_model_is_lazy_singleton_for_concurrent_requests(monkeypatch):
+    fastembed = ModuleType("fastembed")
+    instances = []
+
+    class FakeTextEmbedding:
+        def __init__(self, model_name):
+            self.model_name = model_name
+            instances.append(self)
+
+    fastembed.TextEmbedding = FakeTextEmbedding
+    monkeypatch.setitem(sys.modules, "fastembed", fastembed)
+    monkeypatch.setattr(qdrant_retriever, "_embedding_model", None)
+
+    assert qdrant_retriever.is_embedding_model_loaded() is False
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        models = list(executor.map(lambda _index: qdrant_retriever._get_embedding_model(), range(16)))
+
+    assert qdrant_retriever.is_embedding_model_loaded() is True
+    assert len(instances) == 1
+    assert all(model is instances[0] for model in models)
+    assert instances[0].model_name == "BAAI/bge-small-en-v1.5"
 
 
 def test_search_filters_course_and_returns_passage(monkeypatch, fake_qdrant_models):
