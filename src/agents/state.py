@@ -10,7 +10,10 @@ class LearningGraphState(TypedDict, total=False):
 
     # --- 1. Định danh và định tuyến (Routing & ID) ---
     run_id: str
+    request_id: str
     student_id: str
+    course_id: str
+    role: str
     week_id: str
     workflow: str  # plan | tracking | qa | understanding | recover | reflect
     current_node: str

@@ -15,11 +15,11 @@ import re
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from fastembed import TextEmbedding
-from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, PointStruct, VectorParams
+if TYPE_CHECKING:
+    from fastembed import TextEmbedding
+    from qdrant_client import QdrantClient
 
 from src.config import get_settings
 
@@ -36,6 +36,8 @@ EMBEDDING_DIM = 384
 @lru_cache(maxsize=1)
 def _get_embedding_model() -> TextEmbedding:
     """Khởi tạo mô hình FastEmbed và lưu cache để tái sử dụng nhanh chóng."""
+    from fastembed import TextEmbedding
+
     return TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
 
 
@@ -45,6 +47,8 @@ def _get_qdrant_client(storage_path: str | None = None) -> QdrantClient:
     Ưu tiên lưu trữ cục bộ trong src/agents/data/qdrant.
     Nếu storage_path là ':memory:', khởi tạo in-memory (rất hữu ích cho testing).
     """
+    from qdrant_client import QdrantClient
+
     settings = get_settings()
     path = storage_path or getattr(settings, "qdrant_path", None) or DEFAULT_QDRANT_PATH
 
@@ -148,6 +152,8 @@ def ingest_sample_documents(
     Quét thư mục tài liệu mẫu và nạp (ingest) dữ liệu vào Qdrant Vector Store.
     Sử dụng FastEmbed để sinh vector embeddings và lưu trữ payload đầy đủ metadata.
     """
+    from qdrant_client.models import Distance, PointStruct, VectorParams
+
     if docs_dir is None:
         docs_dir = DEFAULT_DOCS_DIR if DEFAULT_DOCS_DIR.exists() else Path("data/sample_documents")
     else:
@@ -157,7 +163,6 @@ def ingest_sample_documents(
         raise FileNotFoundError(f"Thư mục tài liệu mẫu không tồn tại: {docs_dir}")
 
     qdrant = client or _get_qdrant_client(storage_path)
-    embed_model = _get_embedding_model()
 
     all_chunks: list[dict[str, Any]] = []
     files_processed: list[str] = []
@@ -174,6 +179,8 @@ def ingest_sample_documents(
             "total_chunks": 0,
             "files": files_processed,
         }
+
+    embed_model = _get_embedding_model()
 
     # Tạo hoặc khởi tạo lại collection trong Qdrant
     if force_recreate or not qdrant.collection_exists(collection_name):
@@ -221,6 +228,7 @@ def search_course_materials(
     query: str,
     top_k: int = 3,
     score_threshold: float = DEFAULT_SCORE_THRESHOLD,
+    course_code: str | None = None,
     collection_name: str = DEFAULT_COLLECTION_NAME,
     storage_path: str | None = None,
     client: QdrantClient | None = None,
@@ -229,6 +237,8 @@ def search_course_materials(
     Truy xuất các đoạn văn bản liên quan nhất từ Qdrant cho câu hỏi của sinh viên.
     Tự động tính similarity score và đánh giá độ tin cậy của nguồn (insufficient_sources).
     """
+    from qdrant_client.models import FieldCondition, Filter, MatchValue
+
     qdrant = client or _get_qdrant_client(storage_path)
 
     # Kiểm tra collection có tồn tại không
@@ -245,9 +255,16 @@ def search_course_materials(
     query_vec = list(embed_model.embed([query]))[0]
 
     # Truy vấn điểm tương đồng gần nhất từ Qdrant
+    query_filter = None
+    if course_code:
+        query_filter = Filter(
+            must=[FieldCondition(key="course_code", match=MatchValue(value=course_code))]
+        )
+
     query_res = qdrant.query_points(
         collection_name=collection_name,
         query=query_vec.tolist() if hasattr(query_vec, "tolist") else list(query_vec),
+        query_filter=query_filter,
         limit=top_k,
         with_payload=True,
     )

@@ -14,9 +14,11 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from src.agents.guardrails import normalize_text
 from src.agents.llm import get_agent_llm
 from src.agents.prompts.milestone import MILESTONE_SYSTEM_PROMPT
 from src.agents.state import LearningGraphState
+from src.agents.validators import build_pending_action, validate_plan_constraints
 
 
 def _parse_int_minutes(val: Any) -> int:
@@ -227,6 +229,27 @@ def plan_node(state: LearningGraphState) -> dict[str, Any]:
 
     existing_milestones = state.get("proposed_milestones") or []
     q_lower = query.lower()
+    normalized_query = normalize_text(query)
+    pending_action = state.get("pending_action") or {}
+    if pending_action.get("workflow") == "plan":
+        if any(word in normalized_query for word in ("xac nhan", "dong y", "chap nhan", "confirm")):
+            confirmed_plan = pending_action.get("payload", {})
+            return {
+                "current_node": "plan",
+                "response": "Kế hoạch đã được xác nhận.",
+                "status": "completed",
+                "pending_action": None,
+                "student_decision": {"action": "confirmed", "workflow": "plan"},
+                "output": {"confirmed_plan": confirmed_plan},
+            }
+        if any(word in normalized_query for word in ("huy", "tu choi", "cancel")):
+            return {
+                "current_node": "plan",
+                "response": "Đã hủy bản kế hoạch nháp; lịch hiện tại không bị thay đổi.",
+                "status": "completed",
+                "pending_action": None,
+                "student_decision": {"action": "cancelled", "workflow": "plan"},
+            }
 
     # Nhận diện nếu đây là lượt điều chỉnh kế hoạch đã có (Multi-turn Human-in-the-loop)
     is_adjustment = bool(
@@ -264,8 +287,8 @@ def plan_node(state: LearningGraphState) -> dict[str, Any]:
             ]
             res = llm.invoke(messages)
             response_text = res.content.strip()
-        except Exception as e:
-            response_text = f"[Lỗi kết nối Milestone Agent]: {e}"
+        except Exception:
+            response_text = "Mình chưa thể tạo kế hoạch bằng AI lúc này; hệ thống sẽ dùng bản nháp an toàn để bạn kiểm tra."
     else:
         response_text = "[Thông báo]: Đang hoạt động ở chế độ fallback baseline."
 
@@ -293,9 +316,33 @@ def plan_node(state: LearningGraphState) -> dict[str, Any]:
     if not clean_response:
         clean_response = response_text
 
+    validation = validate_plan_constraints(
+        proposed_milestones,
+        state.get("availability"),
+        state.get("unavailable_slots"),
+    )
+    pending = None
+    status = "awaiting_student"
+    if validation["valid"]:
+        pending = build_pending_action(
+            "plan",
+            "confirm_plan",
+            {"milestones": proposed_milestones, "validation": validation},
+        )
+        clean_response += "\n\nKế hoạch này mới là bản nháp. Hãy xác nhận trước khi lưu."
+    else:
+        clean_response += (
+            "\n\nKế hoạch chưa thể xác nhận vì vi phạm ràng buộc: "
+            + ", ".join(error["code"] for error in validation["errors"])
+        )
+
     return {
         "current_node": "plan",
         "response": clean_response,
         "proposed_milestones": proposed_milestones,
         "analysis": default_analysis,
+        "status": status,
+        "pending_action": pending,
+        "validation_errors": validation["errors"],
+        "output": {"plan_validation": validation},
     }

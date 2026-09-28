@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     cors_origins: str = "http://localhost:3000"
+    agent_session_secret: str = "development-only-change-me"
+    agent_session_ttl_seconds: int = Field(default=86400, ge=300, le=604800)
 
     # LLM
     openai_api_key: str = ""

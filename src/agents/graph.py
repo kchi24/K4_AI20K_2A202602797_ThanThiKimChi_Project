@@ -3,6 +3,9 @@ Master LangGraph: Kết nối Coordinator và 6 workflow nhánh kèm LangGraph C
 Hỗ trợ quản lý phiên làm việc đa lượt (Multi-turn conversations) qua thread_id.
 """
 
+import time
+from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
 from langgraph.checkpoint.memory import MemorySaver
@@ -29,6 +32,35 @@ def route_workflow(state: LearningGraphState) -> str:
 default_checkpointer = MemorySaver()
 
 
+def instrument_node(name: str, node: Callable[[LearningGraphState], dict[str, Any]]):
+    """Attach privacy-safe latency/status telemetry to every workflow node."""
+
+    def wrapped(state: LearningGraphState) -> dict[str, Any]:
+        started = time.perf_counter()
+        try:
+            result = node(state)
+            outcome = "ok"
+            node_events = result.get("audit_events") or []
+            return result | {
+                "audit_events": [
+                    *node_events,
+                    {
+                        "event": "AGENT_NODE_COMPLETED",
+                        "node": name,
+                        "workflow": result.get("current_node", name),
+                        "outcome": outcome,
+                        "latency_ms": round((time.perf_counter() - started) * 1000, 2),
+                        "timestamp": datetime.now(UTC).isoformat(),
+                    }
+                ]
+            }
+        except Exception as exc:
+            exc.add_note(f"agent_node={name}")
+            raise
+
+    return wrapped
+
+
 def create_agent(checkpointer: Any = default_checkpointer):
     """
     Khởi tạo và biên dịch StateGraph cho Multi-Agent system.
@@ -37,13 +69,13 @@ def create_agent(checkpointer: Any = default_checkpointer):
     builder = StateGraph(LearningGraphState)
 
     # 1. Thêm các Node
-    builder.add_node("coordinator", coordinator_node)
-    builder.add_node("plan", plan_node)
-    builder.add_node("tracking", tracking_node)
-    builder.add_node("qa", qa_node)
-    builder.add_node("understanding", understanding_node)
-    builder.add_node("recover", recover_node)
-    builder.add_node("reflect", reflect_node)
+    builder.add_node("coordinator", instrument_node("coordinator", coordinator_node))
+    builder.add_node("plan", instrument_node("plan", plan_node))
+    builder.add_node("tracking", instrument_node("tracking", tracking_node))
+    builder.add_node("qa", instrument_node("qa", qa_node))
+    builder.add_node("understanding", instrument_node("understanding", understanding_node))
+    builder.add_node("recover", instrument_node("recover", recover_node))
+    builder.add_node("reflect", instrument_node("reflect", reflect_node))
 
     # 2. Đặt điểm bắt đầu
     builder.set_entry_point("coordinator")

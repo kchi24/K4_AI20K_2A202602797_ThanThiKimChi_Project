@@ -125,8 +125,9 @@ Không commit `.env`, API key hoặc token Canvas lên GitHub.
 ## Kiểm thử
 
 ```powershell
-pytest
-ruff check .
+python -m ruff check src/ evals/ tests/
+python -m pytest tests/ -q
+python -m evals.run_agent_eval
 ```
 
 ## API hiện có
@@ -137,9 +138,11 @@ ruff check .
 | `GET` | `/api/v1/status` | Kiểm tra trạng thái agent |
 | `POST` | `/api/v1/chat` | Gửi tin nhắn tới LangGraph agent mẫu |
 
-Các API nghiệp vụ Plan–Do–Reflect, bao gồm Check/Recover trong bước Do, chưa
-được triển khai. Phạm vi dự kiến được quản lý trong PRD, không được xem là tính
-năng đã hoàn thành.
+API chat hiện điều phối sáu workflow Plan, Tracking, QA, Understanding, Recover
+và Reflect. Plan/Recover/Reflect có bước xác nhận; QA có guardrail và kiểm tra
+trích dẫn; Understanding chuyển ca thiếu bằng chứng/rubric cho giảng viên. Đây là
+AI harness đã qua kiểm thử xác định, chưa thay thế kiểm thử pilot với model và dữ
+liệu thật.
 
 ## Tài liệu Gate 01
 
@@ -149,6 +152,7 @@ năng đã hoàn thành.
 - [Wireframe & UI Flow](docs/03-wireframe-uiflow.md)
 - [Architecture Diagram](docs/architecture_diagram.md)
 - [Project Charter & 5-week Delivery Plan](docs/04-project-charter.md)
+- [AI Workflows & Evaluation](docs/05-ai-workflows-and-evaluation.md)
 
 ## Cấu trúc repository
 

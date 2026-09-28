@@ -1,0 +1,14 @@
+# Lightweight deterministic CI dependencies.
+# Production-only vector/runtime packages remain in requirements.txt.
+fastapi>=0.115.0
+pydantic>=2.10.0
+pydantic-settings>=2.7.0
+python-dotenv>=1.0.0
+langchain>=0.3.0
+langchain-openai>=0.3.0
+langgraph>=0.2.0
+ruff>=0.8.0
+pytest>=8.0.0
+pytest-asyncio>=0.24.0
+pytest-cov>=5.0.0
+httpx>=0.28.0

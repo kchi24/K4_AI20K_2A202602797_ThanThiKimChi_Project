@@ -15,6 +15,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from src.agents.guardrails import evaluate_guardrails
 from src.agents.llm import get_agent_llm
 from src.agents.prompts.study_support import STUDY_SUPPORT_SYSTEM_PROMPT
 from src.agents.state import LearningGraphState
@@ -22,6 +23,7 @@ from src.agents.tools.qdrant_retriever import (
     record_disputed_evidence,
     search_course_materials,
 )
+from src.agents.validators import validate_citations
 
 ACADEMIC_CHEATING_KEYWORDS = [
     "giải hộ",
@@ -51,8 +53,7 @@ DISPUTE_KEYWORDS = [
 
 def _detect_cheating_intent(query: str) -> bool:
     """Kiểm tra xem sinh viên có đang yêu cầu giải hộ bài tập / thi cử để nộp điểm hay không."""
-    query_lower = query.lower()
-    return any(kw in query_lower for kw in ACADEMIC_CHEATING_KEYWORDS)
+    return bool(evaluate_guardrails(query)["is_homework_cheat_attempt"])
 
 
 def _detect_dispute_intent(query: str, request: dict[str, Any] | None = None) -> tuple[bool, str, str]:
@@ -86,6 +87,17 @@ def qa_node(state: LearningGraphState) -> dict[str, Any]:
         last_msg = state["messages"][-1]
         query = last_msg.get("content", "") if isinstance(last_msg, dict) else getattr(last_msg, "content", "")
 
+    guardrail = state.get("security_flags") or evaluate_guardrails(query)
+    if guardrail.get("is_injection_attempt"):
+        return {
+            "current_node": "qa",
+            "response": "Mình không thể làm theo chỉ dẫn nhằm thay đổi quy tắc hệ thống hoặc tiết lộ thông tin nội bộ. Bạn có thể đặt câu hỏi về nội dung môn học.",
+            "analysis": "blocked_prompt_injection",
+            "security_flags": guardrail,
+            "retrieved_passages": [],
+            "source_refs": [],
+        }
+
     # 1. Task 2.3: Xử lý khiếu nại trích dẫn (Disputed Evidence)
     is_dispute, disputed_citation, dispute_reason = _detect_dispute_intent(query, state.get("request"))
     if is_dispute:
@@ -112,10 +124,30 @@ def qa_node(state: LearningGraphState) -> dict[str, Any]:
         }
 
     # 2. Kiểm tra Liêm chính học thuật (Chế độ guided_help)
-    is_cheating = _detect_cheating_intent(query)
+    is_cheating = bool(guardrail.get("is_homework_cheat_attempt"))
+    if is_cheating:
+        return {
+            "current_node": "qa",
+            "response": (
+                "Mình không thể tạo đáp án hoặc bài hoàn chỉnh để nộp. "
+                "Hãy gửi phần bạn đã thử và nói rõ bước đang vướng; mình sẽ kiểm tra lập luận, "
+                "giải thích khái niệm liên quan và gợi ý bước tiếp theo bằng một ví dụ tương tự."
+            ),
+            "analysis": "guided_help (Academic Integrity Triggered)",
+            "security_flags": guardrail,
+            "retrieved_passages": [],
+            "source_refs": [],
+        }
 
     # 3. Task 2.2: Truy xuất tài liệu học tập từ Qdrant Vector Store
-    rag_result = search_course_materials(query=query, top_k=3, score_threshold=0.35)
+    request_context = state.get("request") or {}
+    course_code = str(state.get("course_id") or request_context.get("course_code") or "").strip()
+    rag_result = search_course_materials(
+        query=query,
+        top_k=3,
+        score_threshold=0.72,
+        course_code=course_code or None,
+    )
     passages = rag_result.get("passages", [])
     is_insufficient = rag_result.get("insufficient_sources", False)
 
@@ -134,28 +166,16 @@ def qa_node(state: LearningGraphState) -> dict[str, Any]:
     # Khởi tạo LLM
     try:
         llm = get_agent_llm(temperature=0.2)
-    except Exception as e:
+    except Exception:
         llm = None
-        error_msg = str(e)
 
     # 4. Phân luồng 3 chế độ phản hồi
-    if is_cheating:
-        # Chế độ 2: guided_help
-        user_prompt = (
-            f"Sinh viên đang yêu cầu làm bài tập hộ hoặc hỏi đáp án để nộp: '{query}'.\n\n"
-            f"QUY TẮC BẮT BUỘC:\n"
-            f"- KHÔNG đưa ra đáp án trực tiếp / code hoàn chỉnh để nộp bài.\n"
-            f"- Áp dụng phương pháp Socratic, hướng dẫn phương pháp giải từng bước thông qua một ví dụ tương tự.\n"
-            f"- Khuyến khích sinh viên tự làm bước đầu tiên và gửi lại để nhận xét."
-        )
-        analysis_mode = "guided_help (Academic Integrity Triggered)"
-
-    elif is_insufficient:
+    if is_insufficient:
         # Chế độ 3: insufficient_sources
         user_prompt = (
             f"Thắc mắc của sinh viên: '{query}'.\n\n"
             f"HỆ THỐNG THÔNG BÁO:\n"
-            f"Kho tài liệu học liệu môn học hiện tại không tìm thấy văn bản phù hợp hoặc độ tương đồng quá thấp (điểm cao nhất: {rag_result.get('top_score', 0.0)} < ngưỡng 0.35).\n"
+            f"Kho tài liệu học liệu môn học hiện tại không tìm thấy văn bản phù hợp hoặc độ tương đồng quá thấp (điểm cao nhất: {rag_result.get('top_score', 0.0)} < ngưỡng 0.72).\n"
             f"YÊU CẦU: Phản hồi theo chế độ 'insufficient_sources'. Trung thực thừa nhận kho học liệu môn học chưa đủ dữ kiện chứng minh 100%, gợi ý từ khóa học thuật cần tra cứu và khuyến khích sinh viên gặp giảng viên trong giờ Office Hour."
         )
         analysis_mode = "insufficient_sources (Low similarity or missing context)"
@@ -185,10 +205,23 @@ def qa_node(state: LearningGraphState) -> dict[str, Any]:
             ]
             res = llm.invoke(messages)
             response_text = res.content.strip()
-        except Exception as e:
-            response_text = f"[Lỗi kết nối Study Support Agent]: {e}"
+        except Exception:
+            response_text = "Mình chưa thể tạo câu trả lời lúc này. Hãy thử lại sau."
     else:
-        response_text = f"[Lỗi cấu hình LLM]: {error_msg}"
+        response_text = "Mình chưa thể tạo câu trả lời lúc này. Hãy thử lại sau."
+
+    citation_check = validate_citations(response_text, passages) if passages else {
+        "valid": False,
+        "citations": [],
+        "valid_citations": [],
+        "invalid_citations": [],
+        "coverage": 0.0,
+    }
+    if passages and not citation_check["valid"]:
+        response_text = "Mình chưa thể xác nhận câu trả lời sinh tự động. Các đoạn học liệu liên quan:\n\n" + "\n\n".join(
+            f"- {passage['content'][:300]} {passage['citation']}" for passage in passages
+        )
+        citation_check = validate_citations(response_text, passages)
 
     return {
         "current_node": "qa",
@@ -198,4 +231,6 @@ def qa_node(state: LearningGraphState) -> dict[str, Any]:
         "source_refs": source_refs,
         "disputed_evidence": state.get("disputed_evidence", []),
         "audit_events": state.get("audit_events", []),
+        "security_flags": guardrail,
+        "output": {"citation_validation": citation_check},
     }

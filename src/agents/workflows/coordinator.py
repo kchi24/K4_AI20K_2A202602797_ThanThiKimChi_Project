@@ -6,6 +6,7 @@ import json
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from src.agents.guardrails import classify_workflow, evaluate_guardrails
 from src.agents.llm import get_agent_llm
 from src.agents.prompts.coordinator import COORDINATOR_SYSTEM_PROMPT
 from src.agents.state import LearningGraphState
@@ -22,13 +23,27 @@ def coordinator_node(state: LearningGraphState) -> dict:
         last_msg = state["messages"][-1]
         query = last_msg.get("content", "") if isinstance(last_msg, dict) else getattr(last_msg, "content", "")
 
-    workflow = "qa"
-    reasoning = "Mặc định hỏi đáp học tập."
+    security_flags = evaluate_guardrails(query)
+    workflow, route_confidence = classify_workflow(query, state.get("pending_action"))
+    reasoning = "Định tuyến bằng quy tắc xác định trước."
+    intent_summary = query[:160]
+
+    if security_flags["is_injection_attempt"]:
+        return {
+            "workflow": "qa",
+            "current_node": "coordinator",
+            "analysis": "Guardrail chặn prompt injection trước khi gọi mô hình.",
+            "security_flags": security_flags,
+            "status": "failed",
+        }
 
     has_existing_milestones = bool(state.get("proposed_milestones"))
     context_note = f" (Ngữ cảnh: Phiên học đã có {len(state.get('proposed_milestones') or [])} milestones)" if has_existing_milestones else ""
 
+    # Chỉ dùng model để phân xử ca mơ hồ; rule route là fallback có thể kiểm thử.
     try:
+        if route_confidence >= 0.8:
+            raise RuntimeError("deterministic_route_confident")
         llm = get_agent_llm(temperature=0.0)
         messages = [
             SystemMessage(content=COORDINATOR_SYSTEM_PROMPT),
@@ -48,27 +63,21 @@ def coordinator_node(state: LearningGraphState) -> dict:
         if detected_workflow in {"plan", "tracking", "qa", "understanding", "recover", "reflect"}:
             workflow = detected_workflow
             reasoning = data.get("reasoning", "")
+            intent_summary = str(data.get("intent_summary", intent_summary))[:160]
+            model_flags = data.get("security_flags")
+            if isinstance(model_flags, dict):
+                security_flags["model_flags"] = model_flags
     except Exception:
-        # Fallback heuristic nếu LLM gặp sự cố mạng/json parse
-        q_lower = query.lower()
-        if any(k in q_lower for k in ["tiểu luận", "kế hoạch", "plan", "milestone", "chia việc", "bắt đầu từ đâu", "bài tập lớn", "dời milestone", "sửa milestone", "thời lượng", "mốc", "lộ trình"]):
-            workflow = "plan"
-            reasoning = "Heuristic: Sinh viên cần lên kế hoạch hoặc điều chỉnh mốc milestone."
-        elif any(k in q_lower for k in ["tiến độ", "tracking", "đã học", "hoàn thành"]):
-            workflow = "tracking"
-            reasoning = "Heuristic: Báo cáo tiến độ học tập."
-        elif any(k in q_lower for k in ["hiểu bài", "quiz", "rubric", "kiểm tra"]):
-            workflow = "understanding"
-            reasoning = "Heuristic: Đánh giá mức độ hiểu bài."
-        elif any(k in q_lower for k in ["trễ", "cứu", "đổi lịch", "recover", "quá tải"]):
-            workflow = "recover"
-            reasoning = "Heuristic: Xử lý rủi ro / dời lịch."
-        elif any(k in q_lower for k in ["tổng kết", "cuối tuần", "phản tư", "reflect"]):
-            workflow = "reflect"
-            reasoning = "Heuristic: Tổng kết phản tư cuối tuần."
+        pass
 
     return {
         "workflow": workflow,
         "current_node": "coordinator",
         "analysis": reasoning,
+        "security_flags": security_flags,
+        "request": {
+            **(state.get("request") or {}),
+            "intent_summary": intent_summary,
+            "route_confidence": route_confidence,
+        },
     }

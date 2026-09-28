@@ -6,7 +6,7 @@ class ChatRequest(BaseModel):
     session_id: str | None = Field(
         default=None,
         min_length=1,
-        max_length=128,
+        max_length=512,
         description="Mã phiên hội thoại; bỏ trống để hệ thống tạo phiên mới",
     )
 

@@ -17,6 +17,8 @@ def tracking_node(state: LearningGraphState) -> dict:
     availability = state.get("availability") or []
     unavailable_slots = state.get("unavailable_slots") or []
     assignments = state.get("assignments") or []
+    request = state.get("request") or {}
+    current_time = request.get("current_time")
 
     available_hours = calculate_available_hours(availability, unavailable_slots)
 
@@ -26,7 +28,7 @@ def tracking_node(state: LearningGraphState) -> dict:
         dl = assign.get("deadline") or assign.get("due_at")
         est = assign.get("estimated_hours") or assign.get("expected_hours") or 5.0
         if dl:
-            slack_info = check_deadline_slack(dl, est)
+            slack_info = check_deadline_slack(dl, est, current_time=current_time)
             slack_results.append(slack_info)
             if slack_info["is_at_risk"]:
                 risk_signals.append({
@@ -59,5 +61,7 @@ def tracking_node(state: LearningGraphState) -> dict:
         "risk_signals": risk_signals,
         "response": summary_resp,
         "analysis": f"Tracking Tool đã tính toán slack và quỹ thời gian ({available_hours:.1f}h).",
+        "status": "completed",
+        "output": {"recover_recommended": bool(risk_signals)},
     }
 

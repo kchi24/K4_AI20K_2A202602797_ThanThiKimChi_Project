@@ -9,9 +9,11 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from src.agents.guardrails import normalize_text
 from src.agents.llm import get_agent_llm
 from src.agents.prompts.recovery import RECOVERY_SYSTEM_PROMPT
 from src.agents.state import LearningGraphState
+from src.agents.validators import build_pending_action, validate_recovery_options
 
 
 def _parse_hours_float(val: Any) -> float:
@@ -179,6 +181,45 @@ def _clean_json_from_response(text: str, options: list[dict[str, Any]] | None = 
     return cleaned
 
 
+def _deterministic_recovery_options(state: LearningGraphState) -> list[dict[str, Any]]:
+    """Build safe recovery alternatives from real state instead of domain-specific examples."""
+    milestones = state.get("proposed_milestones") or []
+    assignments = state.get("assignments") or []
+    ordered = sorted(
+        milestones,
+        key=lambda item: (str(item.get("deadline", "9999")), -int(item.get("estimated_minutes", 0) or 0)),
+    )
+    protected = [
+        str(item.get("title") or item.get("name") or item.get("deadline"))
+        for item in assignments
+        if item.get("deadline") or item.get("due_at")
+    ][:3]
+    if not protected:
+        protected = ["Deadline gần nhất trong kế hoạch hiện tại"]
+    keep_core = [str(item.get("title") or item.get("milestone_id")) for item in ordered[:2]]
+    movable = [str(item.get("title") or item.get("milestone_id")) for item in ordered[2:]]
+    shortage = sum(float(item.get("estimated_minutes", 0) or 0) for item in milestones) / 60.0
+
+    return [
+        {
+            "option_name": "Ưu tiên deadline gần nhất",
+            "kept_items": keep_core,
+            "moved_items": movable,
+            "hours_short_or_free": round(-shortage, 2),
+            "protected_deadlines": protected,
+            "remaining_risks": "Các nhiệm vụ ít ưu tiên được dời và cần sinh viên xác nhận.",
+        },
+        {
+            "option_name": "Giảm phạm vi từng phiên",
+            "kept_items": keep_core + movable,
+            "moved_items": [],
+            "hours_short_or_free": round(-(shortage * 0.75), 2),
+            "protected_deadlines": protected,
+            "remaining_risks": "Giữ đủ nhiệm vụ nhưng giảm đầu ra; cần kiểm tra lại yêu cầu môn học.",
+        },
+    ]
+
+
 def recover_node(state: LearningGraphState) -> dict:
     """
     Recovery Agent: Diễn giải và phân tích các phương án đánh đổi (trade-offs) để cứu vãn tiến độ.
@@ -189,6 +230,27 @@ def recover_node(state: LearningGraphState) -> dict:
     if not query and state.get("messages"):
         last_msg = state["messages"][-1]
         query = last_msg.get("content", "") if isinstance(last_msg, dict) else getattr(last_msg, "content", "")
+
+    normalized_query = normalize_text(query)
+    pending_action = state.get("pending_action") or {}
+    if pending_action.get("workflow") == "recover":
+        if any(word in normalized_query for word in ("xac nhan", "dong y", "chap nhan", "confirm")):
+            return {
+                "current_node": "recover",
+                "response": "Phương án phục hồi đã được xác nhận.",
+                "status": "completed",
+                "pending_action": None,
+                "student_decision": {"action": "confirmed", "workflow": "recover"},
+                "output": {"confirmed_recovery": pending_action.get("payload", {})},
+            }
+        if any(word in normalized_query for word in ("huy", "tu choi", "cancel")):
+            return {
+                "current_node": "recover",
+                "response": "Đã bỏ phương án phục hồi; kế hoạch hiện tại không bị thay đổi.",
+                "status": "completed",
+                "pending_action": None,
+                "student_decision": {"action": "cancelled", "workflow": "recover"},
+            }
 
     try:
         llm = get_agent_llm(temperature=0.3)
@@ -208,47 +270,33 @@ def recover_node(state: LearningGraphState) -> dict:
         response_text = res.content.strip()
         recovery_options = _extract_recovery_options(response_text)
     except Exception:
-        default_options = [
-            {
-                "option_name": "Phương án A (Ưu tiên an toàn - Minimal Pipeline)",
-                "kept_items": ["Xây dựng pipeline RAG tối giản (LangChain + Qdrant)", "Nộp đúng hạn 5 ngày"],
-                "moved_items": ["Lược bỏ giao diện web phức tạp", "Dời tính năng đánh giá nâng cao"],
-                "hours_short_or_free": 2.0,
-                "protected_deadlines": ["Hạn nộp đồ án môn AI (5 ngày tới)"],
-                "remaining_risks": "Cần tập trung 3-4 giờ mỗi ngày để hoàn thiện code và báo cáo",
-            },
-            {
-                "option_name": "Phương án B (Ưu tiên giảm tải - Descope mạnh)",
-                "kept_items": ["Sử dụng script Terminal demo với 2 tài liệu mẫu", "Hoàn thành các tiêu chí bắt buộc trong barem"],
-                "moved_items": ["Tạm hoãn các thuật toán re-ranking", "Rút ngắn báo cáo thuyết minh"],
-                "hours_short_or_free": 4.5,
-                "protected_deadlines": ["Hạn nộp chính thức trên Canvas"],
-                "remaining_risks": "Điểm đồ án có thể dừng ở mức Khá (7.5-8.0), không tối đa điểm cộng",
-            },
-        ]
-        response_text = (
-            "### 🚨 PHƯƠNG ÁN CỨU NGUY ĐỒ ÁN (CÒN 5 NGÀY — RAG CƠ BẢN)\n\n"
-            "Chào bạn, với tình huống chỉ còn 5 ngày mà chưa bắt đầu viết code đồ án RAG, bạn cần áp dụng ngay chiến lược **Descope (Thu hẹp phạm vi) & Timeboxing**:\n\n"
-            "#### 📅 Lộ trình cứu vãn 5 ngày hành động:\n"
-            "- **Ngày 1:** Setup môi trường, chọn Vector Store cục bộ nhanh nhất (như Qdrant local hoặc ChromaDB) và chuẩn bị 2-3 tài liệu mẫu `.md`.\n"
-            "- **Ngày 2:** Viết script nạp dữ liệu và hàm truy vấn tương đồng Cosine (Retrieve 3 đoạn liên quan).\n"
-            "- **Ngày 3:** Kết nối LLM để sinh câu trả lời có trích dẫn nguồn (Augmented Generation).\n"
-            "- **Ngày 4:** Kiểm thử trên 5 câu hỏi mẫu, chụp màn hình kết quả và đóng gói mã nguồn.\n"
-            "- **Ngày 5:** Soạn thảo báo cáo tóm tắt 5 trang (Kiến trúc, Thử nghiệm, Đánh giá) và nộp trước deadline 2 tiếng.\n\n"
-            "#### ⚖️ Hai phương án đánh đổi để bạn quyết định:\n"
-            "1. **Phương án A (Ưu tiên an toàn):** Giữ đúng tiến độ 3-4 giờ/ngày, hoàn thành pipeline tối giản (MVP) và nộp đúng hạn.\n"
-            "2. **Phương án B (Ưu tiên giảm tải):** Bỏ qua hoàn toàn giao diện đồ họa, chỉ dùng script CLI Terminal để kịp tiến độ.\n\n"
-            "*(Chi tiết 2 phương án đã được lưu vào hệ thống State để theo dõi)*"
-        )
-        recovery_options = default_options
+        recovery_options = _deterministic_recovery_options(state)
+        response_text = _format_options_as_text(recovery_options)
+
+    recovery_validation = validate_recovery_options(recovery_options, state.get("assignments") or [])
+    if not recovery_validation["valid"]:
+        recovery_options = _deterministic_recovery_options(state)
+        response_text = _format_options_as_text(recovery_options)
+        recovery_validation = validate_recovery_options(recovery_options, state.get("assignments") or [])
 
     # LOẠI BỎ KHỐI JSON KHỎI RESPONSE_TEXT ĐỂ NGƯỜI DÙNG CHỈ THẤY DẠNG TEXT THÂN THIỆN
     clean_user_response = _clean_json_from_response(response_text, recovery_options)
+
+    pending = build_pending_action(
+        "recover",
+        "confirm_recovery",
+        {"options": recovery_options, "snapshot": state.get("current_plan")},
+    )
+    clean_user_response += "\n\nChưa có thay đổi nào được áp dụng. Hãy chọn và xác nhận một phương án."
 
     return {
         "current_node": "recover",
         "response": clean_user_response,
         "recovery_options": recovery_options,
         "analysis": f"Recovery Agent đã đề xuất {len(recovery_options)} phương án cứu vãn lịch trình.",
+        "recovery_snapshot": state.get("current_plan"),
+        "pending_action": pending,
+        "status": "awaiting_student",
+        "output": {"recovery_validation": recovery_validation},
     }
 

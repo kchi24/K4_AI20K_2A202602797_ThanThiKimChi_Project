@@ -12,6 +12,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from src.agents.llm import get_agent_llm
 from src.agents.prompts.understanding import UNDERSTANDING_SYSTEM_PROMPT
 from src.agents.state import LearningGraphState
+from src.agents.tools.rubric_evaluator import evaluate_closed_question, parse_approved_rubric
+from src.agents.validators import build_pending_action, validate_assessment_result
 
 VALID_STATUSES = {
     "chưa đủ bằng chứng",
@@ -122,6 +124,27 @@ def understanding_node(state: LearningGraphState) -> dict:
         last_msg = state["messages"][-1]
         query = last_msg.get("content", "") if isinstance(last_msg, dict) else getattr(last_msg, "content", "")
 
+    request = state.get("request") or {}
+    approved_rubric = parse_approved_rubric(state.get("approved_rubric"))
+    if request.get("question_type") == "closed" and request.get("correct_answer") is not None:
+        closed_result = evaluate_closed_question(query, str(request["correct_answer"]))
+        status = "đã thể hiện được" if closed_result["is_correct"] else "còn nhầm lẫn"
+        assessment_result = {
+            "status": status,
+            "confidence": "Cao",
+            "evidence_quotes": [query],
+            "dimensions": {"concept": status},
+            "closed_question": closed_result,
+        }
+        return {
+            "current_node": "understanding",
+            "response": closed_result["feedback"],
+            "assessment_result": assessment_result,
+            "analysis": "Câu đóng được chấm bằng quy tắc xác định trước.",
+            "status": "completed",
+        }
+
+    rubric_context = json.dumps(approved_rubric, ensure_ascii=False, indent=2)
     try:
         llm = get_agent_llm(temperature=0.2)
         messages = [
@@ -129,6 +152,7 @@ def understanding_node(state: LearningGraphState) -> dict:
             HumanMessage(
                 content=(
                     f"Câu trả lời/nội dung sinh viên nộp để kiểm tra mức hiểu: '{query}'\n\n"
+                    f"RUBRIC ĐÃ ĐƯỢC DUYỆT:\n{rubric_context}\n\n"
                     "Hãy đánh giá chi tiết theo 4 khía cạnh rubric và đính kèm khối JSON ```json ở cuối bài "
                     "với các trường: status, confidence, evidence_quotes."
                 )
@@ -136,15 +160,28 @@ def understanding_node(state: LearningGraphState) -> dict:
         ]
         res = llm.invoke(messages)
         response_text = res.content.strip()
-    except Exception as e:
-        response_text = f"[Lỗi kết nối Understanding Agent]: {e}"
+    except Exception:
+        response_text = "Mình chưa đủ dữ kiện để đánh giá lúc này; kết quả sẽ được chuyển cho giảng viên xem lại."
 
     assessment_result = _extract_assessment_result(response_text, student_answer=query)
+    assessment_result["rubric_criteria"] = [item["criterion_id"] for item in approved_rubric]
+    quality = validate_assessment_result(assessment_result, approved_rubric)
 
     # Loại bỏ khối JSON thô để sinh viên chỉ nhìn thấy nhận xét dạng text/markdown
     clean_response = re.sub(r"```json[\s\S]*?```", "", response_text).strip()
     if not clean_response:
         clean_response = response_text
+
+    pending_action = None
+    status = "completed"
+    if quality["requires_instructor_review"]:
+        pending_action = build_pending_action(
+            "understanding",
+            "instructor_review",
+            {"assessment_result": assessment_result, "reasons": quality["reasons"]},
+        )
+        status = "awaiting_teacher"
+        clean_response += "\n\nKết quả này chưa đủ điều kiện kết luận và đã được đưa vào hàng chờ giảng viên."
 
     return {
         "current_node": "understanding",
@@ -154,5 +191,8 @@ def understanding_node(state: LearningGraphState) -> dict:
             f"Đánh giá mức hiểu bài: '{assessment_result['status']}' "
             f"(Độ tin cậy: {assessment_result['confidence']}). Không ghi điểm số."
         ),
+        "status": status,
+        "pending_action": pending_action,
+        "output": {"assessment_validation": quality},
     }
 
