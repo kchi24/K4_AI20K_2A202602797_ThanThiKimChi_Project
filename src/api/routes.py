@@ -1,51 +1,156 @@
-from fastapi import APIRouter, HTTPException
+import re
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException
 
 from src.agents.graph import agent
-from src.agents.session_tokens import InvalidSessionTokenError, create_session_token, verify_session_token
-from src.config import get_settings
+from src.config import Settings, get_settings
 from src.models.schemas import ChatRequest, ChatResponse
+from src.security import SessionContext, require_csrf
+from src.services.lms_client import LMSClient
 
 router = APIRouter()
 
+_CLIENT_CONTEXT_FIELDS = {
+    "availability",
+    "unavailable_slots",
+    "current_plan",
+    "progress_metrics",
+    "proposed_milestones",
+    "goals",
+}
+
+
+def _plain_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", str(value or ""))).strip()
+
+
+async def _load_lms_agent_context(
+    session: SessionContext,
+    settings: Settings,
+) -> dict[str, Any]:
+    """Load only LMS data authorized by the server-side PaceWise session."""
+    client = LMSClient(settings)
+    courses = await client.service_get(
+        "/api/pacewise/v1/courses",
+        {"user_id": session.user_id},
+    )
+    course = next((item for item in courses if int(item["id"]) == session.course_id), None)
+    if not course:
+        raise HTTPException(status_code=403, detail="LMS enrollment no longer grants this course")
+
+    assignments = await client.service_get(
+        f"/api/pacewise/v1/courses/{session.course_id}/assignments"
+    )
+    content = await client.service_get(f"/api/pacewise/v1/courses/{session.course_id}/content")
+    submissions = []
+    if session.role == "student":
+        submissions = await client.service_get(
+            f"/api/pacewise/v1/courses/{session.course_id}/submissions",
+            {"user_id": session.user_id},
+        )
+    submissions_by_assignment = {int(item["assignment_id"]): item for item in submissions}
+
+    normalized_assignments = []
+    for item in assignments:
+        points = float(item.get("points_possible") or 5)
+        normalized_assignments.append(
+            {
+                "id": str(item["id"]),
+                "title": item["title"],
+                "description": _plain_text(item.get("description")),
+                "deadline": item.get("due_at"),
+                "estimated_hours": round(max(0.5, min(4.0, points * 0.2)), 2),
+                "submission": submissions_by_assignment.get(int(item["id"])),
+            }
+        )
+
+    course_code = str(course.get("code") or session.course_id)
+    resources = []
+    for index, item in enumerate(content, start=1):
+        body = _plain_text(item.get("body"))
+        if not body:
+            continue
+        title = str(item.get("title") or f"Học liệu {index}")
+        resources.append(
+            {
+                "document_title": title,
+                "course_code": course_code,
+                "page": 1,
+                "paragraph": index,
+                "citation": f"[{title}, Trang 1, Đoạn {index}]",
+                "content": body,
+            }
+        )
+
+    return {
+        "student_id": str(session.user_id) if session.role == "student" else "",
+        "course_id": str(session.course_id),
+        "course_code": course_code,
+        "role": session.role,
+        "assignments": normalized_assignments,
+        "learning_resources": resources,
+    }
+
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest) -> ChatResponse:
-    """Chat với AI agent."""
-    settings = get_settings()
-    if settings.app_env == "production" and settings.agent_session_secret == "development-only-change-me":
-        raise HTTPException(status_code=503, detail="Agent session secret is not configured")
-    try:
-        if request.session_id:
-            thread_id = verify_session_token(request.session_id, settings.agent_session_secret)
-            session_token = request.session_id
-        else:
-            session_token, thread_id = create_session_token(
-                settings.agent_session_secret,
-                settings.agent_session_ttl_seconds,
-            )
-    except InvalidSessionTokenError as exc:
-        raise HTTPException(status_code=401, detail="Invalid or expired session") from exc
-
-    config = {"configurable": {"thread_id": thread_id}}
+async def chat(
+    payload: ChatRequest,
+    session: SessionContext = Depends(require_csrf),
+    settings: Settings = Depends(get_settings),
+) -> ChatResponse:
+    """Run one agent turn with authenticated user, role, course and LMS context."""
+    lms_context = await _load_lms_agent_context(session, settings)
+    safe_context = {
+        key: value
+        for key, value in payload.context.items()
+        if key in _CLIENT_CONTEXT_FIELDS
+    }
+    config = {"configurable": {"thread_id": f"pacewise:{session.sid}"}}
     try:
         result = await agent.ainvoke(
             {
-                "query": request.message,
-                "request": {"channel": "api"},
-                "role": "student",
+                **safe_context,
+                **lms_context,
+                "query": payload.message,
+                "request": {
+                    "channel": "pacewise_web",
+                    "workflow_hint": payload.workflow,
+                },
             },
             config=config,
         )
-        return ChatResponse(
-            response=result.get("response", ""),
-            analysis="",
-            session_id=session_token,
-        )
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Agent request failed") from exc
 
+    security_action = str((result.get("security_flags") or {}).get("action") or "")
+    source_refs = result.get("source_refs") or []
+    if security_action == "guided_help":
+        mode = "integrity"
+    elif source_refs:
+        mode = "grounded"
+    elif result.get("workflow", payload.workflow) == "qa":
+        mode = "abstained"
+    else:
+        mode = result.get("workflow", payload.workflow)
+
+    return ChatResponse(
+        response=result.get("response", ""),
+        workflow=result.get("workflow", payload.workflow or "qa"),
+        mode=mode,
+        status=result.get("status", "completed"),
+        pending_action=result.get("pending_action"),
+        output=result.get("output"),
+        proposed_milestones=result.get("proposed_milestones") or [],
+        recovery_options=result.get("recovery_options") or [],
+        reflection_draft=result.get("reflection_draft"),
+        assessment_result=result.get("assessment_result"),
+        source_refs=source_refs,
+    )
+
 
 @router.get("/status")
-async def agent_status():
-    """Kiểm tra trạng thái agent."""
-    return {"status": "ready", "agent": "LangGraph Agent v1.0"}
+async def agent_status() -> dict:
+    return {"status": "ready", "agent": "PaceWise LangGraph Agent v1.0"}

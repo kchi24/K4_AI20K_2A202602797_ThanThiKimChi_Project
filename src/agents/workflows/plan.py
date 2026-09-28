@@ -272,8 +272,16 @@ def plan_node(state: LearningGraphState) -> dict[str, Any]:
         )
         default_analysis = f"Milestone Agent đã cập nhật kế hoạch ({len(existing_milestones)} milestones) theo yêu cầu chỉnh sửa."
     else:
+        planning_context = {
+            "assignments": state.get("assignments") or [],
+            "availability": state.get("availability") or [],
+            "unavailable_slots": state.get("unavailable_slots") or [],
+            "goals": state.get("goals") or [],
+        }
         prompt_content = (
             f"Nhiệm vụ của sinh viên: '{query}'\n\n"
+            f"DỮ LIỆU LMS VÀ QUỸ THỜI GIAN ĐÃ XÁC THỰC:\n"
+            f"{json.dumps(planning_context, ensure_ascii=False, indent=2)}\n\n"
             f"Hãy lập bảng lộ trình milestone súc tích gồm 4 mốc cụ thể, đầu ra kiểm chứng được và thời lượng thực tế. "
             f"BẮT BUỘC đính kèm khối JSON ```json chứa danh sách milestones ở cuối bài!"
         )

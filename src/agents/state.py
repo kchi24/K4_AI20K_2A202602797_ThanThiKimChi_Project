@@ -13,6 +13,7 @@ class LearningGraphState(TypedDict, total=False):
     request_id: str
     student_id: str
     course_id: str
+    course_code: str
     role: str
     week_id: str
     workflow: str  # plan | tracking | qa | understanding | recover | reflect

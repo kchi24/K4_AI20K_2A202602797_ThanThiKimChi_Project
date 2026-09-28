@@ -25,6 +25,9 @@ def coordinator_node(state: LearningGraphState) -> dict:
 
     security_flags = evaluate_guardrails(query)
     workflow, route_confidence = classify_workflow(query, state.get("pending_action"))
+    workflow_hint = str((state.get("request") or {}).get("workflow_hint") or "").lower()
+    if workflow_hint in {"plan", "tracking", "qa", "understanding", "recover", "reflect"}:
+        workflow, route_confidence = workflow_hint, 1.0
     reasoning = "Định tuyến bằng quy tắc xác định trước."
     intent_summary = query[:160]
 

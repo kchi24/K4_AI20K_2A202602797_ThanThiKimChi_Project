@@ -67,7 +67,7 @@ LTI cấp trường và việc ghi dữ liệu ngược vào Canvas nằm ngoài
 | LLM | OpenAI-compatible API qua OpenRouter; model cấu hình bằng `.env` |
 | Database/vector | SQLite hiện tại; mục tiêu PostgreSQL + Qdrant |
 | Cache/job | Redis + RQ worker — chưa triển khai |
-| Frontend | Next.js + TypeScript — chưa triển khai |
+| Frontend | React 19 + TypeScript + Vite, HashRouter |
 | Guardrail | Quy tắc xác định trước + Llama Guard |
 | Test/eval | pytest/Ruff; mục tiêu Vitest, Playwright, Locust/k6, RAGAS và metric xác định trước |
 | Observability | Mục tiêu OpenTelemetry, structured logs, Prometheus/Grafana và LLM tracing |
@@ -122,6 +122,48 @@ uvicorn src.main:app --reload --port 8000
 
 Không commit `.env`, API key hoặc token Canvas lên GitHub.
 
+### Chạy LMS simulator + PaceWise frontend
+
+Ba tiến trình chạy riêng, theo thứ tự sau:
+
+```powershell
+# Terminal 1: PostgreSQL của PaceWise + LMS simulator tại http://127.0.0.1:8010
+docker compose up -d postgres
+Copy-Item lms-simulator\.env.example lms-simulator\.env
+# Đặt cùng PACEWISE_API_KEY trong .env và lms-simulator/.env.
+docker compose -f lms-simulator/docker-compose.yml up -d --build
+
+# Terminal 2: PaceWise API tại http://127.0.0.1:8000
+.\.venv\Scripts\python.exe -m uvicorn src.main:app --reload --port 8000
+
+# Terminal 3: React frontend tại http://localhost:5173
+cd frontend\pacewise
+npm.cmd ci
+npm.cmd run dev
+```
+
+Tài khoản simulator dùng mật khẩu `demo123`: `student@canvas.local` và
+`teacher@canvas.local`. Đăng nhập thủ công chỉ phục vụ local; luồng tích hợp chuẩn là
+Canvas tạo one-time launch URL tới `/#/launch?token=...`.
+
+Mô hình bảo mật:
+
+- Trình duyệt không nhận `PACEWISE_API_KEY`; chỉ PaceWise backend gọi service API của LMS.
+- Launch token chỉ dùng một lần. Sau xác thực, backend cấp cookie session `HttpOnly` và
+  cookie CSRF tách biệt.
+- Session được lưu và có thể thu hồi trong PostgreSQL, nên logout có hiệu lực với mọi
+  backend instance; đăng nhập bị rate-limit dùng chung qua database.
+- `user_id`, `course_id` và role lấy từ session đã ký; client không được tự chọn người dùng.
+- Sinh viên chỉ đọc dữ liệu của mình. Endpoint tổng quan lớp yêu cầu role giảng viên và
+  chỉ trả dữ liệu tổng hợp, không trả tên/email sinh viên.
+- Production hỗ trợ bắt buộc HTTPS, HSTS/security headers và đọc secret từ file mount qua
+  `PACEWISE_API_KEY_FILE`/`PACEWISE_SESSION_SECRET_FILE`.
+
+Dữ liệu kế hoạch, phiên học và reflection được lưu trong PostgreSQL thay vì chỉ nằm ở
+`localStorage`. Sau đăng nhập, frontend tự đồng bộ LMS mỗi 30 giây, tổng hợp deadline của
+tất cả môn đã đăng ký và cho phép đổi môn đang xem. Backend đồng thời đọc event feed của
+LMS và lưu cursor để tiếp tục đúng vị trí sau khi restart.
+
 ## Kiểm thử
 
 ```powershell
@@ -136,13 +178,26 @@ python -m evals.run_agent_eval
 |---|---|---|
 | `GET` | `/health` | Kiểm tra backend |
 | `GET` | `/api/v1/status` | Kiểm tra trạng thái agent |
-| `POST` | `/api/v1/chat` | Gửi tin nhắn tới LangGraph agent mẫu |
+| `POST` | `/api/v1/chat` | Chạy LangGraph agent bằng PaceWise session và dữ liệu LMS đã phân quyền |
+| `POST` | `/api/v1/auth/lms-launch` | Đổi one-time LMS launch token lấy PaceWise session |
+| `POST` | `/api/v1/auth/lms-login` | Đăng nhập LMS dành cho môi trường local |
+| `GET` | `/api/v1/auth/me` | Khôi phục session hiện tại |
+| `POST` | `/api/v1/auth/course` | Đổi môn đang xem trong phạm vi enrollment |
+| `POST` | `/api/v1/auth/logout` | Đăng xuất có kiểm tra CSRF |
+| `GET` | `/api/v1/lms/sync` | Đồng bộ course, assignment và trạng thái nộp bài theo session |
+| `GET/PUT` | `/api/v1/workspace` | Đọc/lưu kế hoạch và dữ liệu học tập cá nhân trong PostgreSQL |
+| `GET` | `/api/v1/instructor/overview` | Dashboard tổng hợp, chỉ dành cho giảng viên |
+| `POST` | `/api/v1/instructor/actions` | Lưu duyệt assessment/review/hướng dẫn và audit log |
 
 API chat hiện điều phối sáu workflow Plan, Tracking, QA, Understanding, Recover
 và Reflect. Plan/Recover/Reflect có bước xác nhận; QA có guardrail và kiểm tra
 trích dẫn; Understanding chuyển ca thiếu bằng chứng/rubric cho giảng viên. Đây là
 AI harness đã qua kiểm thử xác định, chưa thay thế kiểm thử pilot với model và dữ
 liệu thật.
+
+Frontend gọi API AI bằng PaceWise session `HttpOnly`; backend tự lấy user, role,
+course, assignment và học liệu từ LMS simulator. Client không được tự truyền
+`user_id`, `role`, `course_id` hoặc `thread_id` cho agent.
 
 ## Tài liệu Gate 01
 

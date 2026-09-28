@@ -92,6 +92,39 @@ def test_qa_replaces_answer_when_model_omits_citation(monkeypatch):
     assert result["output"]["citation_validation"]["valid"] is True
 
 
+def test_qa_falls_back_to_authenticated_lms_content(monkeypatch):
+    monkeypatch.setattr(
+        "src.agents.workflows.qa.search_course_materials",
+        lambda **_kwargs: {"passages": [], "insufficient_sources": True, "top_score": 0.0},
+    )
+    citation = "[Giáo trình AI, Trang 1, Đoạn 1]"
+    monkeypatch.setattr(
+        "src.agents.workflows.qa.get_agent_llm",
+        lambda **_kwargs: SimpleNamespace(
+            invoke=lambda _messages: SimpleNamespace(content=f"Overfitting học quá sát dữ liệu. {citation}")
+        ),
+    )
+    result = qa_node(
+        {
+            "query": "Overfitting là gì?",
+            "course_id": "7",
+            "course_code": "AI101",
+            "learning_resources": [
+                {
+                    "course_code": "AI101",
+                    "document_title": "Giáo trình AI",
+                    "citation": citation,
+                    "content": "Overfitting là hiện tượng mô hình học quá sát dữ liệu huấn luyện.",
+                    "page": 1,
+                    "paragraph": 1,
+                }
+            ],
+        }
+    )
+    assert result["source_refs"][0]["course_code"] == "AI101"
+    assert result["output"]["citation_validation"]["valid"] is True
+
+
 def test_qa_does_not_leak_provider_error(monkeypatch):
     monkeypatch.setattr(
         "src.agents.workflows.qa.search_course_materials",

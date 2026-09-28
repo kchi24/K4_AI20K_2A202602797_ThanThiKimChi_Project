@@ -5,7 +5,9 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
+from src.db import SessionLocal, initialize_database
 from src.main import app
+from src.persistence_models import LoginAttempt
 
 
 @pytest_asyncio.fixture
@@ -14,6 +16,14 @@ async def client():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+
+
+@pytest.fixture(autouse=True)
+def initialize_test_database():
+    initialize_database()
+    with SessionLocal() as db:
+        db.query(LoginAttempt).delete()
+        db.commit()
 
 
 @pytest.fixture

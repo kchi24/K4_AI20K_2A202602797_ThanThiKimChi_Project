@@ -7,7 +7,7 @@
 
 ```mermaid
 flowchart TD
-    A[Request + session token] --> B[Coordinator]
+    A[Request + PaceWise session] --> B[Coordinator]
     B --> C{Guardrail xác định}
     C -->|Prompt injection| X[Chặn an toàn]
     C -->|Yêu cầu làm hộ| Q[QA guided_help]
@@ -46,7 +46,7 @@ Coordinator chạy lớp guardrail xác định trước khi gọi model. Khi in
 | Recover | plan hiện tại, milestone, assignment | ít nhất hai phương án, đủ schema, bảo vệ deadline | snapshot + phương án; chưa sửa lịch trước xác nhận |
 | Reflect | progress metrics, lịch sử tuần | draft có điều hiệu quả, nguyên nhân, một điều chỉnh, evidence | điều chỉnh tuần sau; chỉ áp dụng sau xác nhận |
 
-API dùng session token HMAC có hạn sử dụng thay vì nhận `thread_id` tùy ý từ client. Production từ chối khởi động luồng chat nếu vẫn dùng secret mặc định. Lỗi nội bộ không được trả nguyên văn cho client.
+API dùng PaceWise session trong cookie `HttpOnly` và bắt buộc CSRF cho request ghi dữ liệu. Backend tự lấy `user_id`, vai trò, môn đang chọn và `thread_id` từ session phía server; client không được tự chọn danh tính hoặc phạm vi course. Trước khi chạy graph, backend kiểm tra enrollment rồi nạp assignment, submission và tài liệu đúng môn từ LMS. Lỗi nội bộ không được trả nguyên văn cho client.
 
 ## 3. Test tự động
 
@@ -57,9 +57,9 @@ python -m ruff check src/ evals/ tests/
 python -m pytest tests/ -q
 ```
 
-Test bao phủ routing, guardrail, prompt injection, yêu cầu làm hộ, RAG theo course, citation, plan constraint, overlap/timezone, HITL, rubric, assessment escalation, recovery, reflection, signed session và API. CI yêu cầu line coverage của `src.agents` tối thiểu 80%.
+Test bao phủ routing, guardrail, prompt injection, yêu cầu làm hộ, RAG theo course, citation, plan constraint, overlap/timezone, HITL, rubric, assessment escalation, recovery, reflection, xác thực PaceWise, phân quyền course và API. CI yêu cầu line coverage của `src.agents` tối thiểu 80%.
 
-Lần chạy local ngày 28/09/2026 đạt **101 test pass**; phép đo độc lập bằng Python `trace` ghi nhận **89,6%** dòng thực thi trong `src.agents`. CI dùng `pytest-cov` làm cổng chính thức nên con số trên máy runner có thể chênh nhẹ, nhưng build sẽ fail nếu dưới 80%.
+Lần chạy local ngày 28/09/2026 đạt **106 test backend/agent pass** và **4 test LMS simulator pass**. CI dùng `pytest-cov` làm cổng chính thức và sẽ fail nếu line coverage của `src.agents` dưới 80%.
 
 CI dùng `requirements-ci.txt` để không tải Qdrant/FastEmbed/Chroma trong unit test. Adapter vector được kiểm thử bằng fake module; kiểm thử tích hợp Qdrant thật phải chạy ở job/service riêng.
 
