@@ -10,6 +10,7 @@ import { useToast } from '../../components/ui/Toast';
 import { useDerived } from '../../hooks/useDerived';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useAppStore } from '../../store/AppStore';
+import { confirmRecovery } from '../../services/api';
 import type { DiffType } from '../../types';
 import { diffBlocks } from '../../utils/recovery';
 import { useRecoveryOptions } from './RecoverPage';
@@ -23,6 +24,7 @@ export function RecoverDiffPage() {
   const navigate = useNavigate();
   const toast = useToast();
   const [showUnchanged, setShowUnchanged] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const option = options.find((o) => o.id === optionId);
 
   const diff = useMemo(() => (option && state.plan ? diffBlocks(state.plan.blocks, option.newBlocks) : []), [option, state.plan]);
@@ -32,7 +34,15 @@ export function RecoverDiffPage() {
   const changed = diff.filter((d) => d.type !== 'unchanged');
   const visible = showUnchanged ? diff : changed;
 
-  const confirm = () => {
+  const confirm = async () => {
+    setConfirming(true);
+    try {
+      await confirmRecovery(option.id);
+    } catch (error) {
+      toast({ tone: 'danger', title: 'Chưa xác nhận được phương án', description: error instanceof Error ? error.message : 'Hãy thử lại.' });
+      setConfirming(false);
+      return;
+    }
     if (option.id === 'C') {
       if (drift) dispatch({ type: 'DISMISS_DRIFT', taskId: drift.taskId });
       toast({ tone: 'info', title: 'Đã giữ nguyên lịch', description: 'Không có buổi học nào thay đổi.' });
@@ -85,7 +95,7 @@ export function RecoverDiffPage() {
           Quay lại
         </Button>
         <span className="flex-1" />
-        <Button icon="check" onClick={confirm}>
+        <Button icon="check" onClick={confirm} loading={confirming}>
           {option.id === 'C' ? 'Xác nhận giữ nguyên' : 'Xác nhận thay đổi'}
         </Button>
       </div>

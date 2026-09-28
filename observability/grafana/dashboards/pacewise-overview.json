@@ -1,0 +1,34 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "HTTP request rate",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (path, status) (rate(pacewise_http_requests_total[5m]))", "legendFormat": "{{status}} {{path}}"}],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+    },
+    {
+      "type": "timeseries",
+      "title": "Agent node mean latency",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (node) (rate(pacewise_agent_node_duration_seconds_sum[5m])) / sum by (node) (rate(pacewise_agent_node_duration_seconds_count[5m]))", "legendFormat": "{{node}}"}],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+    },
+    {
+      "type": "timeseries",
+      "title": "RAG operations",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (stage, outcome) (rate(pacewise_rag_operations_total[5m]))", "legendFormat": "{{stage}} {{outcome}}"}],
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8}
+    }
+  ],
+  "schemaVersion": 41,
+  "tags": ["pacewise"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "title": "PaceWise Overview",
+  "uid": "pacewise-overview",
+  "version": 1
+}

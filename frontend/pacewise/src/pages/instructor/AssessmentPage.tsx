@@ -8,6 +8,7 @@ import { PageHeader } from '../../components/ui/PageHeader';
 import { useToast } from '../../components/ui/Toast';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useAppStore } from '../../store/AppStore';
+import { saveInstructorAction } from '../../services/api';
 import type { AssessmentItem, AssessmentStatus, Tone } from '../../types';
 
 const meta: Record<AssessmentStatus, { label: string; tone: Tone }> = {
@@ -49,7 +50,7 @@ export function AssessmentPage() {
             {a.note && <p className="mt-3 rounded-xl bg-danger-light px-3 py-2 text-sm text-danger-ink">Ghi chú khi trả lại: {a.note}</p>}
             <div className="mt-4 flex flex-col gap-3 sm:flex-row">
               {a.status === 'draft' && (
-                <Button size="sm" variant="secondary" onClick={() => dispatch({ type: 'SET_ASSESSMENT_STATUS', id: a.id, status: 'review' })}>
+                <Button size="sm" variant="secondary" onClick={() => { dispatch({ type: 'SET_ASSESSMENT_STATUS', id: a.id, status: 'review' }); void saveInstructorAction('assessment', a.id, { status: 'review' }); }}>
                   Gửi duyệt
                 </Button>
               )}
@@ -60,6 +61,7 @@ export function AssessmentPage() {
                     icon="check"
                     onClick={() => {
                       dispatch({ type: 'SET_ASSESSMENT_STATUS', id: a.id, status: 'approved' });
+                      void saveInstructorAction('assessment', a.id, { status: 'approved' });
                       toast({ tone: 'success', title: 'Đã duyệt và xuất bản cho pilot' });
                     }}
                   >
@@ -108,6 +110,7 @@ export function AssessmentPage() {
                   return;
                 }
                 dispatch({ type: 'SET_ASSESSMENT_STATUS', id: returning!.id, status: 'rejected', note: note.trim() });
+                void saveInstructorAction('assessment', returning!.id, { status: 'rejected', note: note.trim() });
                 toast({ tone: 'info', title: 'Đã trả lại kèm ghi chú' });
                 setReturning(null);
               }}

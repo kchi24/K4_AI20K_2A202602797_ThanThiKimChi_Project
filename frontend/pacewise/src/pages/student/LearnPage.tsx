@@ -11,7 +11,7 @@ import { Banner, EmptyState, ErrorState } from '../../components/ui/States';
 import { useToast } from '../../components/ui/Toast';
 import { sources, suggestedQuestions } from '../../data/knowledge';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
-import { ApiError, askHint, askQuestion } from '../../services/api';
+import { ApiError, askHint, askQuestion, assessUnderstanding } from '../../services/api';
 import { useAppStore } from '../../store/AppStore';
 import type { QAMessage, QuickCheckResult, ReviewItem, Source, Tone } from '../../types';
 import type { QAResult } from '../../utils/qa';
@@ -173,58 +173,48 @@ export function LearnPage() {
     ask(q);
   };
 
-  const submitQuickCheck = (e: FormEvent) => {
+  const submitQuickCheck = async (e: FormEvent) => {
     e.preventDefault();
     if (!selectedAssessment || !checkAnswer.trim()) return;
     setSubmittingCheck(true);
-
     const text = checkAnswer.trim();
-    const isUncertain = text.length < 25 || /h0 có 3%|tự tìm ra email nào/i.test(text);
     const resultId = uid('qc');
-
-    setTimeout(() => {
-      if (isUncertain) {
-        const reviewId = `PW-${Math.floor(100 + Math.random() * 900)}`;
-        const result: QuickCheckResult = {
-          id: resultId,
-          topic: selectedAssessment.topic,
-          question: selectedAssessment.question,
-          answer: text,
-          evidenceState: 'abstained',
-          confidence: 'low',
-          feedback: 'Chưa đủ bằng chứng để kết luận chắc chắn. Câu trả lời của bạn có điểm chưa khớp với Rubric và đã được đưa vào Review Queue ẩn danh để Giảng viên xem xét.',
-          submittedAt: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
-          reviewItemId: reviewId,
-        };
-        const reviewItem: ReviewItem = {
-          id: reviewId,
-          topic: selectedAssessment.topic,
-          question: selectedAssessment.question,
-          responseExcerpt: `“${text}”`,
-          confidence: 'low',
-          reason: 'Câu trả lời nằm ngoài rubric mẫu hoặc có dấu hiệu mâu thuẫn.',
-          status: 'pending',
-          submittedAt: `${new Date().toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })} ${new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}`,
-        };
-        dispatch({ type: 'SUBMIT_QUICK_CHECK', result, reviewItem });
-        toast({ tone: 'warning', title: 'Chuyển hàng chờ giảng viên', description: 'Độ tin cậy thấp: hệ thống không tự kết luận bừa mà nhờ Giảng viên xem xét.' });
-      } else {
-        const result: QuickCheckResult = {
-          id: resultId,
-          topic: selectedAssessment.topic,
-          question: selectedAssessment.question,
-          answer: text,
-          evidenceState: 'demonstrated',
-          confidence: 'high',
-          feedback: 'Đã thể hiện được các tiêu chí cốt lõi trong Rubric. Khái niệm và lập luận phù hợp.',
-          submittedAt: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
-        };
-        dispatch({ type: 'SUBMIT_QUICK_CHECK', result });
-        toast({ tone: 'success', title: 'Đã thu thập bằng chứng hiểu bài', description: 'Trạng thái: Đã thể hiện được.' });
-      }
+    try {
+      const assessment = await assessUnderstanding(selectedAssessment, text);
+      const reviewId = assessment.requiresInstructorReview ? `PW-${crypto.randomUUID().slice(0, 8)}` : undefined;
+      const result: QuickCheckResult = {
+        id: resultId,
+        topic: selectedAssessment.topic,
+        question: selectedAssessment.question,
+        answer: text,
+        evidenceState: assessment.evidenceState,
+        confidence: assessment.confidence,
+        feedback: assessment.feedback,
+        submittedAt: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+        reviewItemId: reviewId,
+      };
+      const reviewItem: ReviewItem | undefined = reviewId ? {
+        id: reviewId,
+        topic: selectedAssessment.topic,
+        question: selectedAssessment.question,
+        responseExcerpt: `“${text}”`,
+        confidence: assessment.confidence === 'medium' ? 'medium' : 'low',
+        reason: assessment.feedback,
+        status: 'pending',
+        submittedAt: new Date().toLocaleString('vi-VN'),
+      } : undefined;
+      dispatch({ type: 'SUBMIT_QUICK_CHECK', result, reviewItem });
       setCheckAnswer('');
+      toast({
+        tone: reviewItem ? 'warning' : 'success',
+        title: reviewItem ? 'Đã chuyển giảng viên xem xét' : 'Đã đánh giá theo rubric',
+        description: assessment.feedback,
+      });
+    } catch (error) {
+      toast({ tone: 'danger', title: 'Chưa đánh giá được câu trả lời', description: error instanceof Error ? error.message : 'Hãy thử lại.' });
+    } finally {
       setSubmittingCheck(false);
-    }, 400);
+    }
   };
 
   return (

@@ -132,7 +132,7 @@ def create_launch(course_id: int, request: Request, db: Session = Depends(get_db
         "nonce": nonce,
     }
     token = _sign_launch(payload)
-    launch_url = os.getenv("PACEWISE_URL", "http://localhost:3000").rstrip("/") + "/launch?" + urlencode(
+    launch_url = os.getenv("PACEWISE_URL", "http://localhost:5173").rstrip("/") + "/#/launch?" + urlencode(
         {"token": token}
     )
     record_change(

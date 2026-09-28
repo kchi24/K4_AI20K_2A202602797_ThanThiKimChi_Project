@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Button } from '../components/ui/Button';
+import { CourseSwitcher } from '../components/domain/CourseSwitcher';
 import { Banner } from '../components/ui/States';
 import { useToast } from '../components/ui/Toast';
 import { useDerived } from '../hooks/useDerived';
@@ -24,10 +25,13 @@ function StaleBanner() {
             loading={busy}
             onClick={async () => {
               setBusy(true);
-              const r = await syncCanvas();
-              setBusy(false);
-              dispatch({ type: 'UPDATE_SETTINGS', patch: { staleData: false, lastSync: r.syncedAt } });
-              toast({ tone: 'success', title: 'Đã đồng bộ dữ liệu Canvas' });
+              try {
+                const r = await syncCanvas();
+                dispatch({ type: 'SYNC_CANVAS', courses: r.courses, tasks: r.tasks });
+                toast({ tone: 'success', title: 'Đã đồng bộ dữ liệu Canvas' });
+              } finally {
+                setBusy(false);
+              }
             }}
           >
             Đồng bộ lại
@@ -52,5 +56,12 @@ export function StudentLayout() {
     { to: '/reflect', label: 'Tổng kết', icon: 'notebook' },
     { to: '/settings', label: 'Cài đặt', icon: 'settings' },
   ];
-  return <AppShell items={items} roleLabel="Sinh viên" roleTone="primary" banner={state.settings.staleData ? <StaleBanner /> : null} />;
+  return (
+    <AppShell
+      items={items}
+      roleLabel="Sinh viên"
+      roleTone="primary"
+      banner={<><CourseSwitcher />{state.settings.staleData ? <StaleBanner /> : null}</>}
+    />
+  );
 }

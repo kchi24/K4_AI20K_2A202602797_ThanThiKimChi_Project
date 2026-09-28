@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { StatTile } from '../../components/domain/StatTile';
 import { TaskCard } from '../../components/domain/TaskCard';
@@ -8,10 +8,12 @@ import { Card, CardHeader } from '../../components/ui/Card';
 import { Input, Select, Textarea } from '../../components/ui/Field';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { ProgressBar } from '../../components/ui/ProgressBar';
+import { Banner } from '../../components/ui/States';
 import { useToast } from '../../components/ui/Toast';
 import { useDerived } from '../../hooks/useDerived';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useAppStore } from '../../store/AppStore';
+import { trackProgress, type AgentResponse } from '../../services/api';
 import { DEMO_TODAY, formatDay, formatDuration, formatHours, weekDates } from '../../utils/time';
 
 export function ProgressPage() {
@@ -26,6 +28,15 @@ export function ProgressPage() {
   const [studyTask, setStudyTask] = useState(open[0]?.id ?? '');
   const [form, setForm] = useState({ taskId: open[0]?.id ?? '', minutes: '', date: DEMO_TODAY, note: '' });
   const [errors, setErrors] = useState<{ minutes?: string; taskId?: string }>({});
+  const [tracking, setTracking] = useState<AgentResponse | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void trackProgress(state.plan, state.availability, state.unavailable)
+      .then((result) => active && setTracking(result))
+      .catch(() => active && setTracking(null));
+    return () => { active = false; };
+  }, [state.plan?.id, state.settings.lastSync]);
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -44,6 +55,14 @@ export function ProgressPage() {
   return (
     <div className="page">
       <PageHeader title="Tiến độ" description="Thời gian thực tế so với kế hoạch tuần này." />
+
+      {tracking && (
+        <div className="mb-5">
+          <Banner tone={tracking.risk_signals?.length ? 'warning' : 'success'} icon={tracking.risk_signals?.length ? 'info' : 'checkCircle'}>
+            {tracking.response}
+          </Banner>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile icon="checkCircle" label="Đã hoàn thành" value={`${stats.done} / ${stats.total}`} hint="nhiệm vụ" />

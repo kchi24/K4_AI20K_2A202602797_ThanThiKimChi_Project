@@ -25,7 +25,7 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-canvas}:${POSTGRES_PASSWORD:-canvas}@postgres:5432/${POSTGRES_DB:-canvas_development}
       PACEWISE_API_KEY: ${PACEWISE_API_KEY}
       PACEWISE_LAUNCH_SECRET: ${PACEWISE_LAUNCH_SECRET}
-      PACEWISE_URL: ${PACEWISE_URL:-http://localhost:3000}
+      PACEWISE_URL: ${PACEWISE_URL:-http://localhost:5173}
       SESSION_LIFETIME_HOURS: ${SESSION_LIFETIME_HOURS:-12}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
     volumes:

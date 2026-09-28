@@ -10,6 +10,7 @@ import { EmptyState } from '../../components/ui/States';
 import { useToast } from '../../components/ui/Toast';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useAppStore } from '../../store/AppStore';
+import { saveInstructorAction } from '../../services/api';
 import type { AssessmentStatus, Tone } from '../../types';
 
 const statusMeta: Record<AssessmentStatus, { label: string; tone: Tone }> = {
@@ -75,18 +76,21 @@ export function AssessmentEditPage() {
   const approve = () => {
     if (!validate()) return;
     dispatch({ type: 'UPDATE_ASSESSMENT', item: payload, status: 'approved', historyText: 'Duyệt và xuất bản' });
+    void saveInstructorAction('assessment', payload.id, { ...payload, status: 'approved' });
     toast({ tone: 'success', title: 'Đã duyệt và xuất bản' });
     navigate('/instructor/assessment');
   };
   const saveDraft = () => {
     if (!validate()) return;
     dispatch({ type: 'UPDATE_ASSESSMENT', item: payload, historyText: 'Lưu thay đổi' });
+    void saveInstructorAction('assessment', payload.id, payload);
     toast({ tone: 'info', title: 'Đã lưu nháp' });
     navigate('/instructor/assessment');
   };
   const sendBack = () => {
     if (!validate(true)) return;
     dispatch({ type: 'UPDATE_ASSESSMENT', item: payload, status: 'rejected', note: note.trim(), historyText: 'Trả lại kèm ghi chú' });
+    void saveInstructorAction('assessment', payload.id, { ...payload, status: 'rejected', note: note.trim() });
     toast({ tone: 'info', title: 'Đã trả lại kèm ghi chú' });
     navigate('/instructor/assessment');
   };

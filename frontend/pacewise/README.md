@@ -1,12 +1,20 @@
 # PaceWise — Frontend
 
-React + Vite + TypeScript + React Router + Tailwind CSS. Mock data/API, chưa cần backend.
+React + Vite + TypeScript + React Router + Tailwind CSS. Giao diện dùng PaceWise FastAPI cho đăng nhập, LMS sync, workspace, instructor actions và LangGraph agent; dữ liệu mẫu trong `src/data` chỉ phục vụ trạng thái demo/fallback.
 
 ```bash
 npm install
 npm run dev      # http://localhost:5173
 npm run build
 ```
+
+Từ thư mục gốc repo, có thể chạy toàn bộ frontend, backend, LMS simulator và hai PostgreSQL bằng:
+
+```bash
+docker compose up -d --build
+```
+
+Container frontend dùng Nginx phục vụ bản build và reverse proxy `/api` sang backend, nên browser không cần biết địa chỉ nội bộ của backend hoặc service key của LMS.
 
 Tài khoản demo (mật khẩu `demo123`):
 - `sinhvienmoi@pacewise.edu`: sinh viên mới, chưa có kế hoạch → Dashboard trống → Tạo kế hoạch
@@ -21,7 +29,7 @@ Tài khoản demo (mật khẩu `demo123`):
 - `src/layouts` — AppShell (sidebar desktop, bottom nav mobile), StudentLayout, InstructorLayout
 - `src/routes` — AppRoutes, guards (RequireRole)
 - `src/store` — AppStore (Context + useReducer, lưu localStorage)
-- `src/services/api.ts` — mock API bất đồng bộ; thay bằng fetch tới backend thật tại đây
+- `src/services/api.ts` — client HTTP tới FastAPI, gửi cookie PaceWise và CSRF; Plan, QA và Hint gọi `/api/v1/chat`
 - `src/utils` — scheduler (xếp lịch + tính khả thi), progress (drift, việc tiếp theo), recovery (phương án + diff), qa (guardrail + trả lời có nguồn)
 - `src/data` — mock data
 

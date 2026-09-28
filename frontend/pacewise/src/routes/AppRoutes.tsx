@@ -3,6 +3,7 @@ import { InstructorLayout } from '../layouts/InstructorLayout';
 import { StudentLayout } from '../layouts/StudentLayout';
 import { ForbiddenPage } from '../pages/auth/ForbiddenPage';
 import { LoginPage } from '../pages/auth/LoginPage';
+import { LaunchPage } from '../pages/auth/LaunchPage';
 import { AssessmentEditPage } from '../pages/instructor/AssessmentEditPage';
 import { AssessmentPage } from '../pages/instructor/AssessmentPage';
 import { InstructorOverviewPage } from '../pages/instructor/InstructorOverviewPage';
@@ -25,6 +26,7 @@ import { RequireRole, homeFor } from './guards';
 
 function RootRedirect() {
   const { state } = useAppStore();
+  if (!state.authReady) return <div className="flex min-h-screen items-center justify-center text-muted">Đang kiểm tra phiên đăng nhập…</div>;
   return <Navigate to={homeFor(state.user?.role)} replace />;
 }
 
@@ -33,6 +35,7 @@ export function AppRoutes() {
     <Routes>
       <Route path="/" element={<RootRedirect />} />
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/launch" element={<LaunchPage />} />
       <Route path="/403" element={<ForbiddenPage />} />
 
       <Route

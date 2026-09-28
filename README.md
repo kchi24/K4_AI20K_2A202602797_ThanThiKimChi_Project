@@ -67,7 +67,7 @@ LTI cấp trường và việc ghi dữ liệu ngược vào Canvas nằm ngoài
 | LLM | OpenAI-compatible API qua OpenRouter; model cấu hình bằng `.env` |
 | Database/vector | SQLite hiện tại; mục tiêu PostgreSQL + Qdrant |
 | Cache/job | Redis + RQ worker — chưa triển khai |
-| Frontend | Next.js + TypeScript — chưa triển khai |
+| Frontend | React 19 + TypeScript + Vite, HashRouter |
 | Guardrail | Quy tắc xác định trước + Llama Guard |
 | Test/eval | pytest/Ruff; mục tiêu Vitest, Playwright, Locust/k6, RAGAS và metric xác định trước |
 | Observability | Mục tiêu OpenTelemetry, structured logs, Prometheus/Grafana và LLM tracing |
@@ -122,11 +122,65 @@ uvicorn src.main:app --reload --port 8000
 
 Không commit `.env`, API key hoặc token Canvas lên GitHub.
 
+### Chạy toàn bộ hệ thống bằng Docker
+
+Compose ở thư mục gốc chạy PaceWise frontend, backend, LMS Simulator và hai PostgreSQL bằng một lệnh:
+
+```powershell
+Copy-Item .env.example .env
+# Điền OPENAI_API_KEY và thay các secret mẫu trong .env.
+docker compose up -d --build
+docker compose ps
+```
+
+Mở các địa chỉ sau:
+
+- PaceWise frontend: <http://localhost:5173>
+- PaceWise API/Swagger: <http://localhost:8000/docs>
+- LMS Simulator: <http://localhost:8010>
+- PaceWise PostgreSQL: `localhost:5433`
+- LMS PostgreSQL: `localhost:5434`
+
+Frontend production build được phục vụ bởi Nginx. Request `/api/*` được reverse proxy nội bộ tới
+FastAPI; FastAPI gọi LMS qua `http://lms-simulator:8010`. Vì vậy service key LMS không xuất hiện
+trong JavaScript hoặc trình duyệt.
+
+```powershell
+# Xem log
+docker compose logs -f backend frontend lms-simulator
+
+# Dừng nhưng giữ dữ liệu database
+docker compose down
+```
+
+Tài khoản simulator dùng mật khẩu `demo123`: `student@canvas.local` và
+`teacher@canvas.local`. Đăng nhập thủ công chỉ phục vụ local; luồng tích hợp chuẩn là
+Canvas tạo one-time launch URL tới `/#/launch?token=...`.
+
+Mô hình bảo mật:
+
+- Trình duyệt không nhận `PACEWISE_API_KEY`; chỉ PaceWise backend gọi service API của LMS.
+- Launch token chỉ dùng một lần. Sau xác thực, backend cấp cookie session `HttpOnly` và
+  cookie CSRF tách biệt.
+- Session được lưu và có thể thu hồi trong PostgreSQL, nên logout có hiệu lực với mọi
+  backend instance; đăng nhập bị rate-limit dùng chung qua database.
+- `user_id`, `course_id` và role lấy từ session đã ký; client không được tự chọn người dùng.
+- Sinh viên chỉ đọc dữ liệu của mình. Endpoint tổng quan lớp yêu cầu role giảng viên và
+  chỉ trả dữ liệu tổng hợp, không trả tên/email sinh viên.
+- Production hỗ trợ bắt buộc HTTPS, HSTS/security headers và đọc secret từ file mount qua
+  `PACEWISE_API_KEY_FILE`/`PACEWISE_SESSION_SECRET_FILE`.
+
+Dữ liệu kế hoạch, phiên học và reflection được lưu trong PostgreSQL thay vì chỉ nằm ở
+`localStorage`. Sau đăng nhập, frontend tự đồng bộ LMS mỗi 30 giây, tổng hợp deadline của
+tất cả môn đã đăng ký và cho phép đổi môn đang xem. Backend đồng thời đọc event feed của
+LMS và lưu cursor để tiếp tục đúng vị trí sau khi restart.
+
 ## Kiểm thử
 
 ```powershell
-pytest
-ruff check .
+python -m ruff check src/ evals/ tests/
+python -m pytest tests/ -q
+python -m evals.run_agent_eval
 ```
 
 ## API hiện có
@@ -135,11 +189,26 @@ ruff check .
 |---|---|---|
 | `GET` | `/health` | Kiểm tra backend |
 | `GET` | `/api/v1/status` | Kiểm tra trạng thái agent |
-| `POST` | `/api/v1/chat` | Gửi tin nhắn tới LangGraph agent mẫu |
+| `POST` | `/api/v1/chat` | Chạy LangGraph agent bằng PaceWise session và dữ liệu LMS đã phân quyền |
+| `POST` | `/api/v1/auth/lms-launch` | Đổi one-time LMS launch token lấy PaceWise session |
+| `POST` | `/api/v1/auth/lms-login` | Đăng nhập LMS dành cho môi trường local |
+| `GET` | `/api/v1/auth/me` | Khôi phục session hiện tại |
+| `POST` | `/api/v1/auth/course` | Đổi môn đang xem trong phạm vi enrollment |
+| `POST` | `/api/v1/auth/logout` | Đăng xuất có kiểm tra CSRF |
+| `GET` | `/api/v1/lms/sync` | Đồng bộ course, assignment và trạng thái nộp bài theo session |
+| `GET/PUT` | `/api/v1/workspace` | Đọc/lưu kế hoạch và dữ liệu học tập cá nhân trong PostgreSQL |
+| `GET` | `/api/v1/instructor/overview` | Dashboard tổng hợp, chỉ dành cho giảng viên |
+| `POST` | `/api/v1/instructor/actions` | Lưu duyệt assessment/review/hướng dẫn và audit log |
 
-Các API nghiệp vụ Plan–Do–Reflect, bao gồm Check/Recover trong bước Do, chưa
-được triển khai. Phạm vi dự kiến được quản lý trong PRD, không được xem là tính
-năng đã hoàn thành.
+API chat hiện điều phối sáu workflow Plan, Tracking, QA, Understanding, Recover
+và Reflect. Plan/Recover/Reflect có bước xác nhận; QA có guardrail và kiểm tra
+trích dẫn; Understanding chuyển ca thiếu bằng chứng/rubric cho giảng viên. Đây là
+AI harness đã qua kiểm thử xác định, chưa thay thế kiểm thử pilot với model và dữ
+liệu thật.
+
+Frontend gọi API AI bằng PaceWise session `HttpOnly`; backend tự lấy user, role,
+course, assignment và học liệu từ LMS simulator. Client không được tự truyền
+`user_id`, `role`, `course_id` hoặc `thread_id` cho agent.
 
 ## Tài liệu Gate 01
 
@@ -149,6 +218,7 @@ năng đã hoàn thành.
 - [Wireframe & UI Flow](docs/03-wireframe-uiflow.md)
 - [Architecture Diagram](docs/architecture_diagram.md)
 - [Project Charter & 5-week Delivery Plan](docs/04-project-charter.md)
+- [AI Workflows & Evaluation](docs/05-ai-workflows-and-evaluation.md)
 
 ## Cấu trúc repository
 
@@ -190,6 +260,41 @@ presentation/     # Pitch deck và video demo
 Mỗi thay đổi được thực hiện trên một nhánh ngắn hạn tạo từ `develop`, mở pull
 request trở lại `develop` và xóa branch sau khi merge. Khi một phiên bản đã ổn
 định, đội mở pull request từ `develop` vào `main`.
+
+## AI runtime, observability và evaluation
+
+- LangGraph dùng PostgreSQL checkpointer khi `DATABASE_URL` là PostgreSQL; state của cùng một
+  PaceWise session được khôi phục qua `thread_id` phía server. `MemorySaver` chỉ còn là fallback
+  cho test/local SQLite.
+- RAG ingest học liệu đã được LMS phân quyền, tạo embedding đa ngôn ngữ bằng FastEmbed, truy xuất
+  từ Qdrant, rerank bằng FlashRank ONNX đa ngôn ngữ và trả citation theo tài liệu/trang/đoạn.
+  FastEmbed và reranker đều lazy-load, nên các workflow không dùng RAG không tốn RAM cho model.
+- Backend xuất structured request logs, `X-Request-ID` và Prometheus metrics tại `/metrics`.
+
+Chạy thêm Prometheus + Grafana (dashboard `PaceWise Overview`):
+
+```powershell
+docker compose --profile observability up -d --build
+```
+
+- Prometheus: <http://localhost:9090>
+- Grafana: <http://localhost:3001> (mặc định local: `admin` / `pacewise-local-only`)
+
+Chạy RAGAS với bộ JSONL đã gán nhãn tối thiểu 100 mẫu. Mỗi dòng cần `user_input`, `response`,
+`retrieved_contexts` và `reference`:
+
+```powershell
+pip install -r requirements-eval.txt
+python evals/run_ragas_eval.py evals/datasets/rag-pilot.jsonl
+```
+
+Chạy load test. Lệnh 1.000 virtual users là bài kiểm tra acceptance trên môi trường staging đủ
+tài nguyên, không nên chạy trên laptop yếu và không được coi là đã pass nếu chưa lưu report:
+
+```powershell
+pip install -r requirements-load.txt
+locust -f load_tests/locustfile.py --host http://localhost:5173 --headless -u 1000 -r 50 -t 5m --csv evals/reports/load-1000
+```
 
 ## License
 
