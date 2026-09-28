@@ -61,7 +61,7 @@ Test bao phủ routing, guardrail, prompt injection, yêu cầu làm hộ, RAG t
 
 Lần chạy local ngày 28/09/2026 đạt **116 test backend/agent pass** và **4 test LMS simulator pass**. CI dùng `pytest-cov` làm cổng chính thức và sẽ fail nếu line coverage của `src.agents` dưới 80%.
 
-Toàn bộ dependency Python của backend, LMS simulator, test, eval và load test được quản lý tập trung trong `requirements.txt`. Adapter vector vẫn được kiểm thử bằng fake module; kiểm thử tích hợp Qdrant thật phải chạy ở job/service riêng.
+Toàn bộ dependency Python của backend, LMS simulator, test, eval và load test được quản lý tập trung trong `requirements.txt`. Hai Dockerfile chỉ cài section runtime tương ứng để tránh đưa pytest/RAGAS/Locust hoặc AI stack vào image không cần chúng. Adapter vector vẫn được kiểm thử bằng fake module; kiểm thử tích hợp Qdrant thật phải chạy ở job/service riêng.
 
 ## 4. Eval định lượng
 

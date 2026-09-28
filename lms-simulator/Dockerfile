@@ -6,7 +6,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# The simulator only needs the shared API section of the single requirements file.
+RUN sed '/^# Backend-only runtime$/,$d' requirements.txt > /tmp/requirements-lms.txt \
+    && pip install --no-cache-dir -r /tmp/requirements-lms.txt
 
 COPY lms-simulator/app ./app
 COPY lms-simulator/static ./static
