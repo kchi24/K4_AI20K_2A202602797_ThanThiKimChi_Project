@@ -122,24 +122,35 @@ uvicorn src.main:app --reload --port 8000
 
 Không commit `.env`, API key hoặc token Canvas lên GitHub.
 
-### Chạy LMS simulator + PaceWise frontend
+### Chạy toàn bộ hệ thống bằng Docker
 
-Ba tiến trình chạy riêng, theo thứ tự sau:
+Compose ở thư mục gốc chạy PaceWise frontend, backend, LMS Simulator và hai PostgreSQL bằng một lệnh:
 
 ```powershell
-# Terminal 1: PostgreSQL của PaceWise + LMS simulator tại http://127.0.0.1:8010
-docker compose up -d postgres
-Copy-Item lms-simulator\.env.example lms-simulator\.env
-# Đặt cùng PACEWISE_API_KEY trong .env và lms-simulator/.env.
-docker compose -f lms-simulator/docker-compose.yml up -d --build
+Copy-Item .env.example .env
+# Điền OPENAI_API_KEY và thay các secret mẫu trong .env.
+docker compose up -d --build
+docker compose ps
+```
 
-# Terminal 2: PaceWise API tại http://127.0.0.1:8000
-.\.venv\Scripts\python.exe -m uvicorn src.main:app --reload --port 8000
+Mở các địa chỉ sau:
 
-# Terminal 3: React frontend tại http://localhost:5173
-cd frontend\pacewise
-npm.cmd ci
-npm.cmd run dev
+- PaceWise frontend: <http://localhost:5173>
+- PaceWise API/Swagger: <http://localhost:8000/docs>
+- LMS Simulator: <http://localhost:8010>
+- PaceWise PostgreSQL: `localhost:5433`
+- LMS PostgreSQL: `localhost:5434`
+
+Frontend production build được phục vụ bởi Nginx. Request `/api/*` được reverse proxy nội bộ tới
+FastAPI; FastAPI gọi LMS qua `http://lms-simulator:8010`. Vì vậy service key LMS không xuất hiện
+trong JavaScript hoặc trình duyệt.
+
+```powershell
+# Xem log
+docker compose logs -f backend frontend lms-simulator
+
+# Dừng nhưng giữ dữ liệu database
+docker compose down
 ```
 
 Tài khoản simulator dùng mật khẩu `demo123`: `student@canvas.local` và

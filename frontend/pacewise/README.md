@@ -8,6 +8,14 @@ npm run dev      # http://localhost:5173
 npm run build
 ```
 
+Từ thư mục gốc repo, có thể chạy toàn bộ frontend, backend, LMS simulator và hai PostgreSQL bằng:
+
+```bash
+docker compose up -d --build
+```
+
+Container frontend dùng Nginx phục vụ bản build và reverse proxy `/api` sang backend, nên browser không cần biết địa chỉ nội bộ của backend hoặc service key của LMS.
+
 Tài khoản demo (mật khẩu `demo123`):
 - `sinhvienmoi@pacewise.edu`: sinh viên mới, chưa có kế hoạch → Dashboard trống → Tạo kế hoạch
 - `sinhvien@pacewise.edu`: sinh viên đã có lịch tuần
