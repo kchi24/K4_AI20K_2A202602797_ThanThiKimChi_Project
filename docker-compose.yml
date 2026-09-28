@@ -83,6 +83,8 @@ services:
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
       FORCE_HTTPS: ${FORCE_HTTPS:-false}
       LANGGRAPH_STRICT_MSGPACK: "true"
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8000/api/v1/integrations/google-calendar/callback}
+      GOOGLE_OAUTH_SUCCESS_URL: ${GOOGLE_OAUTH_SUCCESS_URL:-http://localhost:5173/#/settings}
     volumes:
       - ./data:/app/data
     depends_on:

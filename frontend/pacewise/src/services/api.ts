@@ -128,6 +128,47 @@ export async function saveInstructorAction(
   });
 }
 
+export interface GoogleCalendarStatus {
+  configured: boolean;
+  connected: boolean;
+  calendarId: string | null;
+  connectedAt: string | null;
+  lastFreeBusySyncAt: string | null;
+}
+
+export interface GoogleBusyResult {
+  busy: { start: string; end: string }[];
+  unavailableSlots: UnavailableSlot[];
+}
+
+export async function getGoogleCalendarStatus(): Promise<GoogleCalendarStatus> {
+  return request<GoogleCalendarStatus>('/integrations/google-calendar/status');
+}
+
+export async function connectGoogleCalendar(): Promise<{ authorizationUrl: string }> {
+  return request<{ authorizationUrl: string }>('/integrations/google-calendar/connect', { method: 'POST' });
+}
+
+export async function syncGoogleCalendarBusy(timeMin: string, timeMax: string): Promise<GoogleBusyResult> {
+  return request<GoogleBusyResult>('/integrations/google-calendar/freebusy', {
+    method: 'POST',
+    body: JSON.stringify({ timeMin, timeMax, timeZone: 'Asia/Ho_Chi_Minh' }),
+  });
+}
+
+export async function exportPlanToGoogleCalendar(
+  blocks: Array<{ blockId: string; title: string; start: string; end: string }>,
+): Promise<{ created: Array<{ blockId: string; eventId: string; htmlLink?: string }>; skipped: string[] }> {
+  return request('/integrations/google-calendar/events', {
+    method: 'POST',
+    body: JSON.stringify({ confirmed: true, timeZone: 'Asia/Ho_Chi_Minh', blocks }),
+  });
+}
+
+export async function disconnectGoogleCalendar(): Promise<void> {
+  await request('/integrations/google-calendar', { method: 'DELETE' });
+}
+
 export interface RequestOptions { simulateError?: boolean }
 
 export interface AgentResponse {

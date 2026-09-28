@@ -14,6 +14,7 @@ flowchart LR
     API --> DB[(PostgreSQL)]
     API --> Qdrant[(Qdrant embedded P0 / service P1)]
     API --> AI[LangGraph AI Harness]
+    API -->|OAuth 2.0: freebusy + confirmed events| GCal[Google Calendar API]
     Worker --> AI
     AI --> Gateway[OpenRouter / OpenAI-compatible Models]
     API --> Obs[Request ID + structured logs + Prometheus/Grafana]
@@ -32,6 +33,7 @@ flowchart TB
     API --> Assess[Assessment + Evidence Service]
     API --> Tutor[Grounded Tutor Service]
     API --> Dashboard[Aggregate Dashboard Service]
+    API --> Calendar[Google Calendar Adapter]
 
     Plan --> Graph[LangGraph Typed Workflow]
     Assess --> Graph
@@ -53,6 +55,8 @@ flowchart TB
     Plan --> DB
     Assess --> DB
     Dashboard --> DB
+    Calendar --> DB
+    Calendar --> GoogleAPI[Google Calendar REST API]
     Retriever --> Qdrant[(Qdrant)]
     Graph --> Checkpoint[(PostgreSQL LangGraph checkpoint)]
 ```
@@ -122,6 +126,7 @@ Staging và production dùng project/schema, secret và telemetry environment t�
 | RAG | FastEmbed đa ngôn ngữ + Qdrant + FlashRank ONNX | Pipeline ingest → retrieve → rerank → citation, lazy-load để giảm RAM |
 | Guardrail | Quy tắc xác định trước + Llama Guard | Không phụ thuộc một prompt/classifier duy nhất |
 | Canvas | Fixture bắt buộc; REST read-only có điều kiện; LTI 1.3 P1 | Demo tái lập, tích hợp thật khi có credential |
+| Calendar | Google OAuth 2.0 + Calendar REST qua HTTPX | Scope tối thiểu, đọc busy/free và chỉ ghi study block sau HITL |
 | Quality | Pytest, Vitest, Playwright, Locust/k6, RAGAS + metric xác định trước | Unit, integration, E2E, load và chất lượng AI |
 | Observability | Request ID, structured logs, Prometheus/Grafana | Theo dõi lỗi/latency HTTP, agent node và RAG; OpenTelemetry/LLM tracing là P1 |
 
@@ -136,6 +141,7 @@ lazy-load; chỉ workflow QA/RAG mới nạp model vào RAM.
 ## 6. Security and privacy boundaries
 
 - Token Canvas, model key và DSN chỉ nằm trong secret store; không vào Git, prompt hoặc log.
+- Google refresh token được mã hóa bằng Fernet trong PostgreSQL; access token và OAuth code không được lưu hoặc ghi log.
 - Backend kiểm tra RBAC/tenant ở service layer; frontend ẩn nút không được xem là kiểm soát quyền.
 - Log dùng mã giả, loại nội dung nhạy cảm; log vận hành giữ 30 ngày và dữ liệu pilot đã thay định danh giữ 90 ngày.
 - Dashboard chỉ trả aggregate khi n≥5; chat/Reflect thô không hiển thị.

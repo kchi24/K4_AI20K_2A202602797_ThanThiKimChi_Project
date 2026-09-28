@@ -36,6 +36,20 @@ class Settings(BaseSettings):
     lms_sync_interval_seconds: int = Field(default=30, ge=5, le=3600)
     force_https: bool = False
 
+    # Google Calendar OAuth. Keep the client secret and token-encryption key on
+    # the server; neither value is ever returned to the browser.
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_client_secret_file: str = ""
+    google_token_encryption_key: str = ""
+    google_token_encryption_key_file: str = ""
+    google_redirect_uri: str = "http://localhost:8000/api/v1/integrations/google-calendar/callback"
+    google_oauth_success_url: str = "http://localhost:5173/#/settings"
+    google_calendar_scopes: str = (
+        "https://www.googleapis.com/auth/calendar.freebusy "
+        "https://www.googleapis.com/auth/calendar.events.owned"
+    )
+
     # LLM
     openai_api_key: str = ""
     openai_base_url: str = "https://openrouter.ai/api/v1"
@@ -65,6 +79,8 @@ class Settings(BaseSettings):
         for value_field, file_field in (
             ("pacewise_api_key", "pacewise_api_key_file"),
             ("pacewise_session_secret", "pacewise_session_secret_file"),
+            ("google_client_secret", "google_client_secret_file"),
+            ("google_token_encryption_key", "google_token_encryption_key_file"),
         ):
             secret_file = getattr(self, file_field).strip()
             if secret_file:

@@ -199,6 +199,7 @@ python -m evals.run_agent_eval
 | `GET/PUT` | `/api/v1/workspace` | Đọc/lưu kế hoạch và dữ liệu học tập cá nhân trong PostgreSQL |
 | `GET` | `/api/v1/instructor/overview` | Dashboard tổng hợp, chỉ dành cho giảng viên |
 | `POST` | `/api/v1/instructor/actions` | Lưu duyệt assessment/review/hướng dẫn và audit log |
+| `GET/POST/DELETE` | `/api/v1/integrations/google-calendar/*` | OAuth, đọc busy/free, xuất study block đã xác nhận và thu hồi quyền |
 
 API chat hiện điều phối sáu workflow Plan, Tracking, QA, Understanding, Recover
 và Reflect. Plan/Recover/Reflect có bước xác nhận; QA có guardrail và kiểm tra
@@ -219,6 +220,7 @@ course, assignment và học liệu từ LMS simulator. Client không được t
 - [Architecture Diagram](docs/architecture_diagram.md)
 - [Project Charter & 5-week Delivery Plan](docs/04-project-charter.md)
 - [AI Workflows & Evaluation](docs/05-ai-workflows-and-evaluation.md)
+- [Google Calendar Integration](docs/06-google-calendar-integration.md)
 
 ## Cấu trúc repository
 

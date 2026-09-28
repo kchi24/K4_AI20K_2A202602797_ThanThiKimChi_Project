@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Integer, String, Text
+from sqlalchemy import DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.db import Base
@@ -63,3 +63,50 @@ class SyncCursor(Base):
     key: Mapped[str] = mapped_column(String(128), primary_key=True)
     last_event_id: Mapped[int] = mapped_column(Integer, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class GoogleCalendarConnection(Base):
+    __tablename__ = "google_calendar_connections"
+
+    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    encrypted_refresh_token: Mapped[str] = mapped_column(Text)
+    granted_scopes: Mapped[str] = mapped_column(Text)
+    calendar_id: Mapped[str] = mapped_column(String(255), default="primary")
+    connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    last_freebusy_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class GoogleOAuthState(Base):
+    __tablename__ = "google_oauth_states"
+
+    state_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    session_id: Mapped[str] = mapped_column(String(64), index=True)
+    encrypted_code_verifier: Mapped[str] = mapped_column(Text)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class GoogleCalendarEventLink(Base):
+    __tablename__ = "google_calendar_event_links"
+    __table_args__ = (UniqueConstraint("user_id", "block_id", name="uq_google_calendar_user_block"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    block_id: Mapped[str] = mapped_column(String(128), index=True)
+    google_event_id: Mapped[str] = mapped_column(String(255))
+    event_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    event_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class IntegrationAuditLog(Base):
+    __tablename__ = "pacewise_integration_audit_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    provider: Mapped[str] = mapped_column(String(64), index=True)
+    action: Mapped[str] = mapped_column(String(64), index=True)
+    details_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
