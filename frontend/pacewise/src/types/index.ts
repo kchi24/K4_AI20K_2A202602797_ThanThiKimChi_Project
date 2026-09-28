@@ -7,8 +7,20 @@ export interface User {
   name: string;
   email: string;
   role: Role;
+  /** Course bound to the authenticated LMS launch/session. */
+  courseId?: string;
+  courseIds?: string[];
   /** Demo flag: a first-time student who has no saved plan yet. */
   isNew?: boolean;
+}
+
+export interface CanvasSyncResult {
+  courses: Course[];
+  tasks: Task[];
+  guidance?: ClassGuidance[];
+  syncedAt: string;
+  source: string;
+  activeCourseId: string;
 }
 
 export interface Course {

@@ -17,3 +17,7 @@ docker-compose.yml
 canvas-lms/
 P-008-ci-fix/
 .tmp-cursus-media/
+frontend/
+lms-simulator/
+tests/
+.ai-log/

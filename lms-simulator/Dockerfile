@@ -17,6 +17,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home appuser \
     && chown -R appuser:appuser /app \
+    && sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
     && chmod 0755 /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8010

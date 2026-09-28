@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Icon, type IconName } from '../components/ui/Icon';
 import { Badge } from '../components/ui/Badge';
 import { useAppStore } from '../store/AppStore';
+import { logout as logoutApi } from '../services/api';
 import { cx } from '../utils/cx';
 
 export interface NavItem {
@@ -35,9 +36,13 @@ export function AppShell({ items, roleLabel, roleTone, banner }: { items: NavIte
   const [moreOpen, setMoreOpen] = useState(false);
   useEffect(() => setMoreOpen(false), [location.pathname]);
 
-  const logout = () => {
-    dispatch({ type: 'LOGOUT' });
-    navigate('/login', { replace: true });
+  const logout = async () => {
+    try {
+      await logoutApi();
+    } finally {
+      dispatch({ type: 'LOGOUT' });
+      navigate('/login', { replace: true });
+    }
   };
   const primary = items.filter((i) => i.primary).slice(0, 4);
   const rest = items.filter((i) => !primary.includes(i));
@@ -80,7 +85,7 @@ export function AppShell({ items, roleLabel, roleTone, banner }: { items: NavIte
           ))}
         </nav>
         <div className="mt-auto">
-          <button onClick={logout} className="flex min-h-[44px] w-full items-center gap-3 rounded-xl px-3 text-[15px] font-medium text-slate-600 hover:bg-slate-50 hover:text-ink">
+          <button onClick={() => void logout()} className="flex min-h-[44px] w-full items-center gap-3 rounded-xl px-3 text-[15px] font-medium text-slate-600 hover:bg-slate-50 hover:text-ink">
             <Icon name="logout" size={20} />
             Đăng xuất
           </button>
@@ -139,7 +144,7 @@ export function AppShell({ items, roleLabel, roleTone, banner }: { items: NavIte
                   {!!i.badge && <Badge tone="warning">{i.badge}</Badge>}
                 </NavLink>
               ))}
-              <button onClick={logout} className="flex min-h-[44px] items-center gap-3 rounded-xl px-3 text-[15px] font-medium text-slate-600 hover:bg-slate-50">
+              <button onClick={() => void logout()} className="flex min-h-[44px] items-center gap-3 rounded-xl px-3 text-[15px] font-medium text-slate-600 hover:bg-slate-50">
                 <Icon name="logout" size={20} />
                 Đăng xuất
               </button>

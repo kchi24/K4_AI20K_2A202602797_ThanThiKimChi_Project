@@ -5,14 +5,14 @@ import { Input } from '../../components/ui/Field';
 import { Icon } from '../../components/ui/Icon';
 import { Logo } from '../../layouts/AppShell';
 import { homeFor } from '../../routes/guards';
-import { ApiError, login } from '../../services/api';
+import { ApiError, login, syncCanvas } from '../../services/api';
 import { useAppStore } from '../../store/AppStore';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 
 const demoAccounts = [
-  { email: 'sinhvienmoi@pacewise.edu', label: 'SV mới', icon: 'plus' as const },
-  { email: 'sinhvien@pacewise.edu', label: 'SV có lịch', icon: 'calendar' as const },
-  { email: 'giangvien@pacewise.edu', label: 'Giảng viên', icon: 'users' as const },
+  { email: 'student@canvas.local', label: 'Sinh viên', icon: 'calendar' as const },
+  { email: 'minh@canvas.local', label: 'SV Minh', icon: 'book' as const },
+  { email: 'teacher@canvas.local', label: 'Giảng viên', icon: 'users' as const },
 ];
 
 export function LoginPage() {
@@ -24,6 +24,7 @@ export function LoginPage() {
   const [errors, setErrors] = useState<{ email?: string; password?: string; form?: string }>({});
   const [loading, setLoading] = useState(false);
 
+  if (!state.authReady) return <div className="flex min-h-screen items-center justify-center text-muted">Đang kiểm tra phiên đăng nhập…</div>;
   if (state.user) return <Navigate to={homeFor(state.user.role)} replace />;
 
   const submit = async (e: FormEvent) => {
@@ -38,6 +39,10 @@ export function LoginPage() {
     try {
       const user = await login(email, password);
       dispatch({ type: 'LOGIN', user });
+      if (user.role === 'student') {
+        const synced = await syncCanvas();
+        dispatch({ type: 'SYNC_CANVAS', courses: synced.courses, tasks: synced.tasks });
+      }
       navigate(homeFor(user.role), { replace: true });
     } catch (err) {
       setErrors({ form: err instanceof ApiError ? err.message : 'Chưa thể đăng nhập. Vui lòng thử lại.' });

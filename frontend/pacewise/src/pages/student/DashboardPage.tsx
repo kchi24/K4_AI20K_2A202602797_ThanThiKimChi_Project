@@ -11,7 +11,6 @@ import { useDerived } from '../../hooks/useDerived';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useAppStore } from '../../store/AppStore';
 import { syncCanvas } from '../../services/api';
-import { tasks as seedTasks } from '../../data/courses';
 import { diffDays } from '../../utils/time';
 import { formatDay, formatHours, TIMEZONE_LABEL, DEMO_TODAY, DEMO_NOW } from '../../utils/time';
 
@@ -25,10 +24,13 @@ export function DashboardPage() {
 
   const handleSyncCanvas = async () => {
     setSyncing(true);
-    await syncCanvas();
-    dispatch({ type: 'SYNC_CANVAS', tasks: seedTasks });
-    setSyncing(false);
-    toast({ tone: 'success', title: 'Đã đồng bộ dữ liệu môn học từ Canvas', description: 'Các bài tập và deadline đã được cập nhật vào hệ thống.' });
+    try {
+      const synced = await syncCanvas();
+      dispatch({ type: 'SYNC_CANVAS', courses: synced.courses, tasks: synced.tasks });
+      toast({ tone: 'success', title: 'Đã đồng bộ dữ liệu môn học từ Canvas', description: 'Các bài tập và deadline đã được cập nhật vào hệ thống.' });
+    } finally {
+      setSyncing(false);
+    }
   };
 
   const weekTasks = state.tasks

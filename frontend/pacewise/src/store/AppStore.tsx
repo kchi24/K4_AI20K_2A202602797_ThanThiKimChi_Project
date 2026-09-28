@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useReducer } from 'react';
-import { courses as seedCourses, tasks as seedTasks } from '../data/courses';
 import { defaultAvailability, defaultUnavailable, savedPlan, sessions as seedSessions } from '../data/plan';
-import { assessments as seedAssessments, auditLog as seedAudit, reviewQueue as seedReview } from '../data/instructor';
+import { getCurrentSession, loadWorkspace, saveWorkspace, syncCanvas } from '../services/api';
 import type {
   ActiveSession,
   AssessmentItem,
@@ -9,7 +8,9 @@ import type {
   AuditEntry,
   AvailabilityDay,
   ClassGuidance,
+  ClassGroup,
   Course,
+  GroupStats,
   Plan,
   PlanDraft,
   PlanInput,
@@ -34,6 +35,8 @@ export interface Settings {
 
 export interface AppState {
   user: User | null;
+  authReady: boolean;
+  workspaceReady: boolean;
   courses: Course[];
   tasks: Task[];
   plan: Plan | null;
@@ -52,14 +55,18 @@ export interface AppState {
   reviewQueue: ReviewItem[];
   assessments: AssessmentItem[];
   audit: AuditEntry[];
+  classGroups: ClassGroup[];
+  groupStats: Record<string, GroupStats>;
   /** Tasks whose drift warning the student chose to keep as-is (plan unchanged). */
   dismissedDrifts: string[];
 }
 
 export const initialState: AppState = {
   user: null,
-  courses: seedCourses,
-  tasks: seedTasks,
+  authReady: false,
+  workspaceReady: false,
+  courses: [],
+  tasks: [],
   plan: savedPlan,
   planHistory: [],
   availability: defaultAvailability,
@@ -93,14 +100,19 @@ export const initialState: AppState = {
   ],
   reflection: null,
   settings: { simulateAiError: false, staleData: false, lastSync: '2026-09-29T08:10:00+07:00' },
-  reviewQueue: seedReview,
-  assessments: seedAssessments,
-  audit: seedAudit,
+  reviewQueue: [],
+  assessments: [],
+  audit: [],
+  classGroups: [],
+  groupStats: {},
   dismissedDrifts: [],
 };
 
 export type Action =
   | { type: 'LOGIN'; user: User }
+  | { type: 'AUTH_READY' }
+  | { type: 'HYDRATE_WORKSPACE'; state: Partial<AppState> }
+  | { type: 'SET_ACTIVE_COURSE'; courseId: string }
   | { type: 'LOGOUT' }
   | { type: 'SET_WIZARD_INPUT'; input: PlanInput }
   | { type: 'SET_DRAFT'; draft: PlanDraft | null }
@@ -128,7 +140,8 @@ export type Action =
   | { type: 'SET_ASSESSMENT_STATUS'; id: string; status: AssessmentStatus; note?: string }
   | { type: 'UPDATE_ASSESSMENT'; item: Pick<AssessmentItem, 'id' | 'question' | 'rubric' | 'level' | 'source'>; status?: AssessmentStatus; note?: string; historyText: string }
   | { type: 'DISMISS_DRIFT'; taskId: string }
-  | { type: 'SYNC_CANVAS'; tasks: Task[]; courses?: Course[] }
+  | { type: 'SYNC_CANVAS'; tasks: Task[]; courses?: Course[]; guidance?: ClassGuidance[] }
+  | { type: 'SET_INSTRUCTOR_DATA'; classGroups: ClassGroup[]; groupStats: Record<string, GroupStats>; reviewQueue: ReviewItem[]; assessments: AssessmentItem[]; audit: AuditEntry[]; guidance: ClassGuidance[] }
   | { type: 'RESET_DEMO' };
 
 function audit(state: AppState, action: string): AuditEntry[] {
@@ -147,7 +160,9 @@ export function reducer(state: AppState, action: Action): AppState {
         return {
           ...initialState,
           user: action.user,
-          courses: seedCourses,
+          authReady: true,
+          workspaceReady: false,
+          courses: [],
           tasks: [], // Sinh viên mới: hoàn toàn chưa có bài tập hay deadline nào
           plan: null,
           sessions: [],
@@ -155,18 +170,40 @@ export function reducer(state: AppState, action: Action): AppState {
           reflection: null,
         };
       }
-      return { ...state, user: action.user };
+      return { ...state, user: action.user, authReady: true, workspaceReady: false };
+    case 'AUTH_READY':
+      return { ...state, authReady: true };
+    case 'HYDRATE_WORKSPACE':
+      return { ...state, ...action.state, user: state.user, authReady: true, workspaceReady: true };
+    case 'SET_ACTIVE_COURSE':
+      return { ...state, user: state.user ? { ...state.user, courseId: action.courseId } : null };
     case 'SYNC_CANVAS': {
-      const incomingTasks = action.tasks.map((t) => ({ ...t, loggedMin: 0, status: 'todo' as const }));
+      const incomingTasks = action.tasks.map((task) => {
+        const current = state.tasks.find((item) => item.id === task.id);
+        return current
+          ? { ...task, loggedMin: current.loggedMin, status: task.status === 'done' ? 'done' as const : current.status }
+          : task;
+      });
       return {
         ...state,
         tasks: incomingTasks,
         courses: action.courses ?? state.courses,
+        guidance: action.guidance ?? state.guidance,
         settings: { ...state.settings, staleData: false, lastSync: new Date().toISOString() },
       };
     }
     case 'LOGOUT':
-      return { ...state, user: null, activeSession: null };
+      return { ...state, user: null, authReady: true, workspaceReady: false, activeSession: null };
+    case 'SET_INSTRUCTOR_DATA':
+      return {
+        ...state,
+        classGroups: action.classGroups,
+        groupStats: action.groupStats,
+        reviewQueue: action.reviewQueue,
+        assessments: action.assessments,
+        audit: action.audit,
+        guidance: action.guidance,
+      };
     case 'SET_WIZARD_INPUT':
       return { ...state, wizardInput: action.input };
     case 'SET_DRAFT':
@@ -346,7 +383,8 @@ export function reducer(state: AppState, action: Action): AppState {
         return {
           ...initialState,
           user: state.user,
-          courses: seedCourses,
+          authReady: true,
+          courses: [],
           tasks: [],
           plan: null,
           sessions: [],
@@ -354,39 +392,15 @@ export function reducer(state: AppState, action: Action): AppState {
           reflection: null,
         };
       }
-      return { ...initialState, user: state.user };
+      return { ...initialState, user: state.user, authReady: true, courses: [], tasks: [] };
     }
     default:
       return state;
   }
 }
 
-const STORAGE_KEY = 'pacewise-state-v2';
-
 function load(): AppState {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return initialState;
-    const parsed = JSON.parse(raw) as Partial<AppState>;
-    if (parsed.user?.isNew) {
-      return {
-        ...initialState,
-        ...parsed,
-        courses: seedCourses,
-        plan: parsed.plan ?? null,
-        sessions: parsed.sessions ?? [],
-        tasks: parsed.plan ? (parsed.tasks ?? []) : [],
-      };
-    }
-    return {
-      ...initialState,
-      ...parsed,
-      quickChecks: parsed.quickChecks ?? initialState.quickChecks,
-      guidance: parsed.guidance ?? initialState.guidance,
-    };
-  } catch {
-    return initialState;
-  }
+  return initialState;
 }
 
 interface StoreValue {
@@ -398,11 +412,41 @@ const StoreContext = createContext<StoreValue | null>(null);
 export function AppStoreProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, undefined, load);
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch {
-      /* storage unavailable: state stays in memory */
-    }
+    let active = true;
+    getCurrentSession()
+      .then((user) => {
+        if (!active) return;
+        dispatch(user ? { type: 'LOGIN', user } : { type: 'AUTH_READY' });
+      })
+      .catch(() => active && dispatch({ type: 'AUTH_READY' }));
+    return () => {
+      active = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (!state.user) return;
+    let active = true;
+    loadWorkspace()
+      .then((workspace) => active && dispatch({ type: 'HYDRATE_WORKSPACE', state: workspace.state as Partial<AppState> }))
+      .catch(() => active && dispatch({ type: 'HYDRATE_WORKSPACE', state: {} }));
+    const refresh = () => {
+      void syncCanvas()
+        .then((result) => active && dispatch({ type: 'SYNC_CANVAS', courses: result.courses, tasks: result.tasks, guidance: result.guidance }))
+        .catch(() => active && dispatch({ type: 'UPDATE_SETTINGS', patch: { staleData: true } }));
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 30_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [state.user?.id]);
+  useEffect(() => {
+    if (!state.user || !state.workspaceReady) return;
+    const timer = window.setTimeout(() => {
+      void saveWorkspace(state as unknown as Record<string, unknown>);
+    }, 750);
+    return () => window.clearTimeout(timer);
   }, [state]);
   const value = useMemo(() => ({ state, dispatch }), [state]);
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;

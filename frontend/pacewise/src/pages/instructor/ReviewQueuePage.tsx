@@ -9,6 +9,7 @@ import { EmptyState } from '../../components/ui/States';
 import { useToast } from '../../components/ui/Toast';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useAppStore } from '../../store/AppStore';
+import { saveInstructorAction } from '../../services/api';
 import type { ReviewItem, ReviewStatus, Tone } from '../../types';
 import { cx } from '../../utils/cx';
 
@@ -59,13 +60,15 @@ export function ReviewQueuePage() {
 
   const items = state.reviewQueue.filter((r) => filter === 'all' || r.status === 'pending' || r.status === 'in_review');
 
-  const decide = (status: ReviewStatus) => {
+  const decide = async (status: ReviewStatus) => {
     if (!active) return;
     if (status === 'needs_review' && !note.trim()) {
       setNoteError('Thêm ghi chú để người xem tiếp theo biết cần kiểm tra gì.');
       return;
     }
-    dispatch({ type: 'SET_REVIEW_STATUS', id: active.id, status, note: note.trim() || undefined });
+    const payload = { status, note: note.trim() || undefined };
+    await saveInstructorAction('review', active.id, payload);
+    dispatch({ type: 'SET_REVIEW_STATUS', id: active.id, ...payload });
     toast({ tone: 'success', title: status === 'approved' ? `Đã duyệt ca #${active.id}` : `Đã yêu cầu xem lại ca #${active.id}`, description: 'Quyết định đã được ghi vào audit.' });
     setActive(null);
   };
@@ -103,7 +106,10 @@ export function ReviewQueuePage() {
                 setActive(r);
                 setNote(r.note ?? '');
                 setNoteError('');
-                if (r.status === 'pending') dispatch({ type: 'SET_REVIEW_STATUS', id: r.id, status: 'in_review' });
+                if (r.status === 'pending') {
+                  dispatch({ type: 'SET_REVIEW_STATUS', id: r.id, status: 'in_review' });
+                  void saveInstructorAction('review', r.id, { status: 'in_review' });
+                }
               }}
             />
           ))}
@@ -135,10 +141,10 @@ export function ReviewQueuePage() {
             <Button variant="secondary" onClick={() => setActive(null)}>
               Để sau
             </Button>
-            <Button variant="soft" icon="refresh" onClick={() => decide('needs_review')}>
+            <Button variant="soft" icon="refresh" onClick={() => void decide('needs_review')}>
               Yêu cầu xem lại
             </Button>
-            <Button icon="check" onClick={() => decide('approved')}>
+            <Button icon="check" onClick={() => void decide('approved')}>
               Phê duyệt
             </Button>
           </>

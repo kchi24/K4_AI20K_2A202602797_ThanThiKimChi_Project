@@ -1,4 +1,5 @@
 import { useAppStore } from '../store/AppStore';
+import { CourseSwitcher } from '../components/domain/CourseSwitcher';
 import { AppShell, type NavItem } from './AppShell';
 
 export function InstructorLayout() {
@@ -10,5 +11,5 @@ export function InstructorLayout() {
     { to: '/instructor/assessment', label: 'Ngân hàng câu hỏi', icon: 'clipboard', badge: toReview, primary: true },
     { to: '/instructor/review', label: 'Hàng chờ duyệt', icon: 'inbox', badge: pending, primary: true },
   ];
-  return <AppShell items={items} roleLabel="Giảng viên" roleTone="accent" />;
+  return <AppShell items={items} roleLabel="Giảng viên" roleTone="accent" banner={<CourseSwitcher />} />;
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { StatTile } from '../../components/domain/StatTile';
 import { Button, ButtonLink } from '../../components/ui/Button';
 import { Card, CardHeader } from '../../components/ui/Card';
@@ -7,8 +7,10 @@ import { Icon } from '../../components/ui/Icon';
 import { Modal } from '../../components/ui/Modal';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { ProgressBar } from '../../components/ui/ProgressBar';
+import { ErrorState, LoadingState } from '../../components/ui/States';
 import { useToast } from '../../components/ui/Toast';
-import { classGroups, groupStats } from '../../data/instructor';
+import { ApiError, fetchInstructorData } from '../../services/api';
+import { saveInstructorAction } from '../../services/api';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useAppStore } from '../../store/AppStore';
 
@@ -22,10 +24,35 @@ export function InstructorOverviewPage() {
   const [groupId, setGroupId] = useState('all');
   const [guidanceTopic, setGuidanceTopic] = useState<string | null>(null);
   const [guidanceText, setGuidanceText] = useState('');
-  const group = classGroups.find((g) => g.id === groupId)!;
-  const stats = groupStats[groupId];
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<ApiError | null>(null);
+  const { classGroups, groupStats } = state;
+  const group = classGroups.find((g) => g.id === groupId) ?? classGroups[0] ?? { id: 'all', name: 'Cả lớp', n: 0 };
+  const stats = groupStats[group.id];
   const pending = state.reviewQueue.filter((r) => r.status === 'pending' || r.status === 'in_review').length;
   const enough = group.n >= MIN_GROUP && !!stats;
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    fetchInstructorData()
+      .then((data) => {
+        if (!active) return;
+        dispatch({ type: 'SET_INSTRUCTOR_DATA', ...data });
+        setGroupId(data.classGroups[0]?.id ?? 'all');
+        setLoadError(null);
+      })
+      .catch((error) => active && setLoadError(error instanceof ApiError ? error : new ApiError('UNKNOWN', 'Không thể tải dữ liệu lớp.')))
+      .finally(() => active && setLoading(false));
+    return () => { active = false; };
+  }, [dispatch, state.user?.courseId]);
+
+  if (loading) {
+    return <div className="page"><LoadingState title="Đang tải tổng quan lớp" steps={['Xác thực vai trò giảng viên', 'Tổng hợp dữ liệu ẩn danh', 'Tính chỉ số lớp']} current={1} /></div>;
+  }
+  if (loadError) {
+    return <div className="page"><ErrorState title="Không thể tải tổng quan lớp" description={loadError.message} requestId={loadError.requestId} /></div>;
+  }
 
   return (
     <div className="page">
@@ -144,8 +171,9 @@ export function InstructorOverviewPage() {
             <Button
               icon="check"
               disabled={!guidanceText.trim()}
-              onClick={() => {
+              onClick={async () => {
                 if (!guidanceTopic || !guidanceText.trim()) return;
+                await saveInstructorAction('guidance', guidanceTopic, { message: guidanceText.trim() });
                 dispatch({ type: 'ADD_CLASS_GUIDANCE', topic: guidanceTopic, message: guidanceText.trim() });
                 toast({ tone: 'success', title: 'Đã gửi khuyến nghị ôn tập', description: `Đã phát thông điệp cho chủ đề “${guidanceTopic}”.` });
                 setGuidanceTopic(null);
