@@ -46,7 +46,9 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./data/pacewise.db"
 
     # Vector Store
-    chroma_persist_dir: str = "./data/chroma"
+    vector_store_type: str = "qdrant"
+    qdrant_path: str = "./src/agents/data/qdrant"
+    chroma_persist_dir: str = "./src/agents/data/chroma"
 
     def model_post_init(self, __context: object) -> None:
         """Support Docker/Kubernetes/cloud secrets mounted as read-only files."""

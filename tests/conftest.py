@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
 
 import pytest
 import pytest_asyncio
@@ -26,16 +26,38 @@ def initialize_test_database():
         db.commit()
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def mock_llm(monkeypatch):
-    """Mock LLM to avoid calling OpenAI during tests.
+    """Mock the synchronous LLM interface used by all agent workflows."""
+    mock = MagicMock()
 
-    Usage in test:
-        def test_something(mock_llm):
-            # LLM calls will return mock response instead of hitting OpenAI
-            ...
-    """
-    mock = AsyncMock()
-    mock.ainvoke.return_value = SimpleNamespace(content="Mocked LLM response")
-    monkeypatch.setattr("src.agents.nodes.example_node.get_llm", lambda: mock)
+    def invoke(messages):
+        system_prompt = str(messages[0].content)
+        if "Coordinator Agent" in system_prompt:
+            return SimpleNamespace(
+                content='{"workflow": "qa", "reasoning": "Deterministic test route"}'
+            )
+        return SimpleNamespace(content="Mocked study-support response")
+
+    mock.invoke.side_effect = invoke
+
+    workflow_modules = (
+        "src.agents.workflows.coordinator.get_agent_llm",
+        "src.agents.workflows.plan.get_agent_llm",
+        "src.agents.workflows.qa.get_agent_llm",
+        "src.agents.workflows.understanding.get_agent_llm",
+        "src.agents.workflows.recover.get_agent_llm",
+        "src.agents.workflows.reflect.get_agent_llm",
+    )
+    for target in workflow_modules:
+        monkeypatch.setattr(target, lambda **_kwargs: mock)
+
+    monkeypatch.setattr(
+        "src.agents.workflows.qa.search_course_materials",
+        lambda **_kwargs: {
+            "passages": [],
+            "insufficient_sources": True,
+            "top_score": 0.0,
+        },
+    )
     return mock

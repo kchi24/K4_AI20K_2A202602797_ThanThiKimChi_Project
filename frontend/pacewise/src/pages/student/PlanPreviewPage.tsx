@@ -9,6 +9,7 @@ import { PageHeader } from '../../components/ui/PageHeader';
 import { useToast } from '../../components/ui/Toast';
 import { useDerived } from '../../hooks/useDerived';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
+import { confirmPlan } from '../../services/api';
 import { useAppStore } from '../../store/AppStore';
 import type { TimeBlock } from '../../types';
 import { durationMin, formatDuration } from '../../utils/time';
@@ -20,6 +21,7 @@ export function PlanPreviewPage() {
   const navigate = useNavigate();
   const toast = useToast();
   const [editing, setEditing] = useState<TimeBlock | null>(null);
+  const [saving, setSaving] = useState(false);
   const draft = state.planDraft;
 
   const coverage = useMemo(() => {
@@ -36,10 +38,18 @@ export function PlanPreviewPage() {
   const missing = coverage.filter((c) => c.missing > 0);
   const canSave = draft.feasibility.feasible && missing.length === 0 && draft.blocks.length > 0;
 
-  const save = () => {
-    dispatch({ type: 'SAVE_PLAN' });
-    toast({ tone: 'success', title: 'Kế hoạch đã được lưu', description: 'Bạn vẫn có thể tạo lại hoặc điều chỉnh bất cứ lúc nào.' });
-    navigate('/plan');
+  const save = async () => {
+    setSaving(true);
+    try {
+      await confirmPlan();
+      dispatch({ type: 'SAVE_PLAN' });
+      toast({ tone: 'success', title: 'Kế hoạch đã được lưu', description: 'Bạn vẫn có thể tạo lại hoặc điều chỉnh bất cứ lúc nào.' });
+      navigate('/plan');
+    } catch {
+      toast({ tone: 'danger', title: 'Chưa thể xác nhận kế hoạch', description: 'Bản xem trước vẫn được giữ. Hãy thử lại.' });
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -118,8 +128,8 @@ export function PlanPreviewPage() {
           Quay lại chỉnh sửa
         </Button>
         <p className="caption flex-1 sm:text-right">Chỉ khi bấm “Xác nhận và lưu”, kế hoạch mới được áp dụng.</p>
-        <Button icon="check" disabled={!canSave} onClick={save}>
-          Xác nhận và lưu
+        <Button icon="check" disabled={!canSave || saving} onClick={save}>
+          {saving ? 'Đang xác nhận...' : 'Xác nhận và lưu'}
         </Button>
       </div>
 

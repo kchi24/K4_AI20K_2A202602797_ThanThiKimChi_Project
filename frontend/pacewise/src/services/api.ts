@@ -12,7 +12,7 @@ import type {
   User,
 } from '../types';
 import { explainPlan, schedule } from '../utils/scheduler';
-import { answerQuestion, hintFor, type QAResult } from '../utils/qa';
+import type { QAResult } from '../utils/qa';
 
 const API_BASE = (import.meta.env.VITE_API_URL || '/api/v1').replace(/\/$/, '');
 
@@ -123,26 +123,97 @@ export async function saveInstructorAction(
   });
 }
 
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
 export interface RequestOptions { simulateError?: boolean }
 
-/** Plan generation remains local until the planner agent contract is merged. */
+interface AgentResponse {
+  response: string;
+  workflow: 'plan' | 'tracking' | 'qa' | 'understanding' | 'recover' | 'reflect';
+  mode?: string;
+  status: string;
+  pending_action?: Record<string, unknown> | null;
+  output?: { plan_validation?: { valid: boolean; errors: { code: string }[] } } | null;
+  source_refs: { citation: string }[];
+}
+
+async function runAgent(
+  message: string,
+  workflow: AgentResponse['workflow'],
+  context: Record<string, unknown> = {},
+): Promise<AgentResponse> {
+  return request<AgentResponse>('/chat', {
+    method: 'POST',
+    body: JSON.stringify({ message, workflow, context }),
+  });
+}
+
 export async function generatePlan(input: PlanInput, tasks: Task[], opts: RequestOptions = {}): Promise<PlanDraft> {
-  await wait(300);
   if (opts.simulateError) throw new ApiError('AI_UNAVAILABLE', 'Chưa thể kết nối dịch vụ AI.');
+  const selected = input.tasks
+    .map((item) => tasks.find((task) => task.id === item.taskId)?.title)
+    .filter(Boolean)
+    .join(', ');
+  const agentResult = await runAgent(
+    `Lập kế hoạch tuần cho mục tiêu “${input.goal}”. Các nhiệm vụ đã chọn: ${selected}.`,
+    'plan',
+    {
+      availability: input.availability
+        .filter((item) => item.enabled)
+        .map((item) => ({ day: String(item.weekday), start: item.start, end: item.end })),
+      unavailable_slots: input.unavailable.map((item) => ({
+        id: item.id,
+        label: item.label,
+        day: String(item.weekday),
+        start: item.start,
+        end: item.end,
+      })),
+      goals: [{ title: input.goal }],
+    },
+  );
+  if (agentResult.output?.plan_validation && !agentResult.output.plan_validation.valid) {
+    throw new ApiError(
+      'AI_UNAVAILABLE',
+      `Kế hoạch AI chưa khả thi: ${agentResult.output.plan_validation.errors.map((item) => item.code).join(', ')}.`,
+    );
+  }
   const result = schedule(input, tasks);
   const explained = explainPlan(input, result, tasks);
-  return { input, blocks: result.blocks, feasibility: result.feasibility, ...explained, createdAt: new Date().toISOString() };
+  return {
+    input,
+    blocks: result.blocks,
+    feasibility: result.feasibility,
+    reasons: [agentResult.response, ...explained.reasons],
+    assumptions: explained.assumptions,
+    createdAt: new Date().toISOString(),
+  };
 }
 
 export async function askQuestion(question: string, opts: RequestOptions = {}): Promise<QAResult> {
-  await wait(250);
   if (opts.simulateError) throw new ApiError('AI_UNAVAILABLE', 'Chưa thể kết nối dịch vụ AI.');
-  return answerQuestion(question);
+  const result = await runAgent(question, 'qa');
+  return {
+    kind: result.mode === 'integrity' ? 'integrity' : result.source_refs.length ? 'grounded' : 'abstained',
+    text: result.response,
+    citations: result.source_refs.map((item) => item.citation),
+    suggestions: [],
+  };
 }
 
-export async function askHint(): Promise<QAResult> { return hintFor(); }
+export async function askHint(): Promise<QAResult> {
+  const result = await runAgent(
+    'Hãy gợi ý từng bước và đặt câu hỏi Socratic để tôi tự làm, không đưa đáp án hoàn chỉnh.',
+    'qa',
+  );
+  return {
+    kind: 'hint',
+    text: result.response,
+    citations: result.source_refs.map((item) => item.citation),
+    suggestions: [],
+  };
+}
+
+export async function confirmPlan(): Promise<void> {
+  await runAgent('Tôi xác nhận kế hoạch này.', 'plan');
+}
 
 export async function syncCanvas(): Promise<CanvasSyncResult> {
   return request<CanvasSyncResult>('/lms/sync');

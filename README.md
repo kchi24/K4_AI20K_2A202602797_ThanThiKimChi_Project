@@ -167,8 +167,9 @@ LMS và lưu cursor để tiếp tục đúng vị trí sau khi restart.
 ## Kiểm thử
 
 ```powershell
-pytest
-ruff check .
+python -m ruff check src/ evals/ tests/
+python -m pytest tests/ -q
+python -m evals.run_agent_eval
 ```
 
 ## API hiện có
@@ -177,7 +178,7 @@ ruff check .
 |---|---|---|
 | `GET` | `/health` | Kiểm tra backend |
 | `GET` | `/api/v1/status` | Kiểm tra trạng thái agent |
-| `POST` | `/api/v1/chat` | Gửi tin nhắn tới LangGraph agent mẫu |
+| `POST` | `/api/v1/chat` | Chạy LangGraph agent bằng PaceWise session và dữ liệu LMS đã phân quyền |
 | `POST` | `/api/v1/auth/lms-launch` | Đổi one-time LMS launch token lấy PaceWise session |
 | `POST` | `/api/v1/auth/lms-login` | Đăng nhập LMS dành cho môi trường local |
 | `GET` | `/api/v1/auth/me` | Khôi phục session hiện tại |
@@ -188,8 +189,15 @@ ruff check .
 | `GET` | `/api/v1/instructor/overview` | Dashboard tổng hợp, chỉ dành cho giảng viên |
 | `POST` | `/api/v1/instructor/actions` | Lưu duyệt assessment/review/hướng dẫn và audit log |
 
-Các màn hình và persistence cho Plan–Do–Reflect đã có; phần agent AI chuyên sâu cho
-Check/Recover vẫn đang phát triển theo PRD và không được xem là hoàn thành chỉ vì UI đã có.
+API chat hiện điều phối sáu workflow Plan, Tracking, QA, Understanding, Recover
+và Reflect. Plan/Recover/Reflect có bước xác nhận; QA có guardrail và kiểm tra
+trích dẫn; Understanding chuyển ca thiếu bằng chứng/rubric cho giảng viên. Đây là
+AI harness đã qua kiểm thử xác định, chưa thay thế kiểm thử pilot với model và dữ
+liệu thật.
+
+Frontend gọi API AI bằng PaceWise session `HttpOnly`; backend tự lấy user, role,
+course, assignment và học liệu từ LMS simulator. Client không được tự truyền
+`user_id`, `role`, `course_id` hoặc `thread_id` cho agent.
 
 ## Tài liệu Gate 01
 
@@ -199,6 +207,7 @@ Check/Recover vẫn đang phát triển theo PRD và không được xem là ho�
 - [Wireframe & UI Flow](docs/03-wireframe-uiflow.md)
 - [Architecture Diagram](docs/architecture_diagram.md)
 - [Project Charter & 5-week Delivery Plan](docs/04-project-charter.md)
+- [AI Workflows & Evaluation](docs/05-ai-workflows-and-evaluation.md)
 
 ## Cấu trúc repository
 
