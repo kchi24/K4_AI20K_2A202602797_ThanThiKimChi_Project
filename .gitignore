@@ -64,6 +64,7 @@ out/
 canvas-lms/
 P-008-ci-fix/
 .tmp-cursus-media/
+lms-simulator/uploads/
 
 # Local reference decks
 *.pptx
