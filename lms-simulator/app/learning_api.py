@@ -373,6 +373,7 @@ def record_resource_version(
     checksum: str | None = None,
     size_bytes: int = 0,
     content_type: str = "application/octet-stream",
+    ensure_course_access: bool = True,
 ) -> ResourceVersion:
     last_version = db.scalar(
         select(func.max(ResourceVersion.version)).where(ResourceVersion.resource_id == resource.id)
@@ -388,7 +389,9 @@ def record_resource_version(
     )
     db.add(version)
     db.flush()
-    if not db.scalar(select(ResourceAccess).where(ResourceAccess.resource_id == resource.id)):
+    if ensure_course_access and not db.scalar(
+        select(ResourceAccess).where(ResourceAccess.resource_id == resource.id)
+    ):
         db.add(ResourceAccess(resource_id=resource.id, scope_type="course", scope_id=resource.course_id))
     return version
 
@@ -1091,7 +1094,15 @@ def create_resource_version(resource_id: int, payload: ResourceVersionPayload, r
     allowed_scopes = {"course", "section", "group", "user"}
     if payload.access_scope not in allowed_scopes:
         raise HTTPException(status_code=422, detail="Unsupported resource access scope")
-    version = record_resource_version(db, resource, source_url=payload.source_url, checksum=payload.checksum_sha256.lower(), size_bytes=payload.size_bytes, content_type=payload.content_type)
+    version = record_resource_version(
+        db,
+        resource,
+        source_url=payload.source_url,
+        checksum=payload.checksum_sha256.lower(),
+        size_bytes=payload.size_bytes,
+        content_type=payload.content_type,
+        ensure_course_access=False,
+    )
     version.folder_id = payload.folder_id
     db.execute(delete(ResourceAccess).where(ResourceAccess.resource_id == resource.id))
     db.add(
