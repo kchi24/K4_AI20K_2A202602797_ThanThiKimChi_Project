@@ -248,6 +248,36 @@ a:hover { text-decoration: underline; }
 .mastery-card span { display: block; color: #6b7780; }
 .multi-select { min-height: 120px; }
 
+/* Account */
+.account-shell { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 30px; }
+.account-nav ul { list-style: none; margin: 0; padding: 0; }
+.account-nav button {
+  width: 100%; padding: 9px 12px; border: 0; border-left: 2px solid transparent;
+  background: transparent; color: #2d3b45; text-align: left; font-size: 14px;
+}
+.account-nav button:hover { background: #f5f5f5; }
+.account-nav button.active { border-left-color: #2d3b45; font-weight: 700; }
+.account-main { min-width: 0; max-width: 980px; }
+.profile-summary { display: flex; align-items: center; gap: 22px; margin: 0 0 26px; }
+.profile-summary h2 { margin: 0 0 3px; font-size: 26px; font-weight: 400; }
+.profile-summary p { margin: 0 0 8px; }
+.profile-avatar-large {
+  width: 110px; height: 110px; border-radius: 50%; display: grid; place-items: center;
+  flex: 0 0 110px; color: #fff; font-size: 34px;
+}
+.account-panel { margin-bottom: 22px; border: 1px solid #c7cdd1; border-radius: 3px; background: #fff; }
+.account-panel > h2 { margin: 0; padding: 11px 15px; border-bottom: 1px solid #c7cdd1; background: #f5f5f5; font-size: 17px; }
+.account-panel > p { padding: 4px 16px 14px; line-height: 1.6; }
+.account-detail-row { display: grid; grid-template-columns: 150px 1fr; gap: 15px; padding: 11px 16px; border-bottom: 1px solid #e8eaec; }
+.account-detail-row:last-child { border-bottom: 0; }
+.account-detail-row span { color: #6b7780; }
+.account-actions { display: flex; justify-content: flex-end; margin-top: 18px; }
+.notification-table strong { display: block; }
+.notification-select { min-width: 210px; }
+.storage-meter { margin-bottom: 16px; padding: 14px 16px; border: 1px solid #c7cdd1; background: #f5f5f5; }
+.storage-meter div { margin-bottom: 7px; color: #6b7780; font-size: 13px; }
+.storage-meter progress { width: 100%; height: 12px; accent-color: #0374b5; }
+
 /* Tables */
 .canvas-table { width: 100%; border-collapse: collapse; border: 1px solid #c7cdd1; }
 .canvas-table th { padding: 10px 12px; text-align: left; background: #f5f5f5; border: 1px solid #c7cdd1; font-size: 13px; }
@@ -331,6 +361,14 @@ a:hover { text-decoration: underline; }
   .inbox-layout { grid-template-columns: 1fr; }
   .inbox-list { max-height: 220px; border-right: 0; border-bottom: 1px solid #c7cdd1; }
   .form-grid { grid-template-columns: 1fr; }
+  .account-shell { grid-template-columns: 1fr; }
+  .account-nav { overflow-x: auto; border-bottom: 1px solid #c7cdd1; }
+  .account-nav ul { display: flex; }
+  .account-nav button { width: auto; white-space: nowrap; border-left: 0; border-bottom: 2px solid transparent; }
+  .account-nav button.active { border-bottom-color: #2d3b45; }
+  .profile-summary { align-items: flex-start; }
+  .profile-avatar-large { width: 78px; height: 78px; flex-basis: 78px; font-size: 24px; }
+  .notification-table { display: block; overflow-x: auto; }
   .content-header { align-items: flex-start; flex-direction: column; }
   .content-header-actions { width: 100%; flex-wrap: wrap; }
 }

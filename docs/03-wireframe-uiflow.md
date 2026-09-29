@@ -30,6 +30,7 @@ MVP luôn chạy bằng Canvas fixture. Canvas REST chỉ đọc được bật 
 | S10 | Kiểm tra nhanh | Sinh viên | câu hỏi, nộp bài, đang chấm |
 | S11 | Bằng chứng hiểu bài | Sinh viên | đủ tin cậy, từ chối kết luận |
 | S12 | Reflect cuối tuần | Sinh viên | bản nháp, xác nhận |
+| S13 | Cài đặt lịch cá nhân | Sinh viên | chưa cấu hình, chưa kết nối, đã kết nối, lỗi OAuth, xuất `.ics` |
 | I0 | Dashboard giảng viên rỗng | Giảng viên | chưa đủ dữ liệu/n<5 |
 | I1 | Tổng quan lớp | Giảng viên | tổng hợp, filter |
 | I2 | Hàng chờ duyệt | Giảng viên | cần xem, đã xử lý |
@@ -140,6 +141,22 @@ flowchart LR
     I -->|Không| J[Ghi chú tổng hợp]
     I -->|Có| K[I3 Xác nhận đối tượng và nội dung]
     K --> L[Audit quyết định]
+```
+
+### 3.7 Lịch cá nhân
+
+```mermaid
+flowchart LR
+    A[S13 Cài đặt lịch] --> B{Chọn cách dùng}
+    B -->|Google| C[OAuth consent]
+    C -->|Cho phép| D[Hiện email Google đang kết nối]
+    C -->|Từ chối/lỗi| E[Giữ lịch PaceWise và gợi ý .ics]
+    D --> F[Đọc busy/free]
+    D --> G[Xem trước study block]
+    G --> H{Sinh viên xác nhận?}
+    H -->|Có| I[Tạo sự kiện Google và audit]
+    H -->|Không| A
+    B -->|Không dùng OAuth| J[Tải pacewise-study-plan.ics]
 ```
 
 ## 4. Wireframe chính
@@ -291,6 +308,23 @@ Nếu không đủ tin cậy: hiện “Chưa đủ bằng chứng để kết l
 | [ Lưu phản tư ] [ Xác nhận dùng cho tuần sau ]      |
 +------------------------------------------------------+
 ```
+
+### S13 — Kết nối hoặc xuất lịch
+
+```text
++------------------------------------------------------+
+| Lịch cá nhân                                         |
+| Kết nối trực tiếp                                    |
+| Google: student.personal@gmail.com [Ngắt kết nối]    |
+| [Đọc lịch bận tuần này] [Đưa kế hoạch lên Google]    |
+|                                                      |
+| Xuất file lịch                                       |
+| Không cần Google OAuth; dùng với Google/Outlook/Apple|
+| [Tải file pacewise-study-plan.ics]                   |
++------------------------------------------------------+
+```
+
+Khi tạo sự kiện Google, UI phải hiện modal xác nhận số block và tài khoản đích. Nếu OAuth lỗi hoặc bị từ chối, lịch nội bộ không thay đổi và nút `.ics` vẫn hoạt động.
 
 ### I0/I1/I2/I3 — Giảng viên
 

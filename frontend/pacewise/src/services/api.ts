@@ -6,6 +6,7 @@ import type {
   ClassGuidance,
   ClassGroup,
   GroupStats,
+  LMSInstructorSummary,
   Drift,
   Plan,
   PlanDraft,
@@ -16,7 +17,6 @@ import type {
   UnavailableSlot,
   User,
 } from '../types';
-import { explainPlan, schedule } from '../utils/scheduler';
 import type { QAResult } from '../utils/qa';
 
 const API_BASE = (import.meta.env.VITE_API_URL || '/api/v1').replace(/\/$/, '');
@@ -64,6 +64,28 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError(code, payload.detail || `Yêu cầu thất bại (${response.status}).`, response.headers.get('X-Request-ID') || undefined);
   }
   return (await response.json()) as T;
+}
+
+async function requestBlob(path: string, body: unknown): Promise<Blob> {
+  const headers = new Headers({ 'Content-Type': 'application/json' });
+  const csrf = cookie('pacewise_csrf');
+  if (csrf) headers.set('X-CSRF-Token', decodeURIComponent(csrf));
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new ApiError('UPSTREAM', 'Không thể kết nối PaceWise API.');
+  }
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { detail?: string };
+    throw new ApiError('UNKNOWN', payload.detail || `Yêu cầu thất bại (${response.status}).`);
+  }
+  return response.blob();
 }
 
 export async function login(email: string, password: string, courseId?: number): Promise<User> {
@@ -128,6 +150,62 @@ export async function saveInstructorAction(
   });
 }
 
+export interface GoogleCalendarStatus {
+  configured: boolean;
+  connected: boolean;
+  calendarId: string | null;
+  connectedAt: string | null;
+  lastFreeBusySyncAt: string | null;
+  accountEmail: string | null;
+}
+
+export interface GoogleBusyResult {
+  busy: { start: string; end: string }[];
+  unavailableSlots: UnavailableSlot[];
+}
+
+export interface CalendarExportBlock {
+  blockId: string;
+  title: string;
+  start: string;
+  end: string;
+}
+
+export async function getGoogleCalendarStatus(): Promise<GoogleCalendarStatus> {
+  return request<GoogleCalendarStatus>('/integrations/google-calendar/status');
+}
+
+export async function connectGoogleCalendar(): Promise<{ authorizationUrl: string }> {
+  return request<{ authorizationUrl: string }>('/integrations/google-calendar/connect', { method: 'POST' });
+}
+
+export async function syncGoogleCalendarBusy(timeMin: string, timeMax: string): Promise<GoogleBusyResult> {
+  return request<GoogleBusyResult>('/integrations/google-calendar/freebusy', {
+    method: 'POST',
+    body: JSON.stringify({ timeMin, timeMax, timeZone: 'Asia/Ho_Chi_Minh' }),
+  });
+}
+
+export async function exportPlanToGoogleCalendar(
+  blocks: CalendarExportBlock[],
+): Promise<{ created: Array<{ blockId: string; eventId: string; htmlLink?: string }>; skipped: string[] }> {
+  return request('/integrations/google-calendar/events', {
+    method: 'POST',
+    body: JSON.stringify({ confirmed: true, timeZone: 'Asia/Ho_Chi_Minh', blocks }),
+  });
+}
+
+export async function downloadPlanIcs(blocks: CalendarExportBlock[]): Promise<Blob> {
+  return requestBlob('/calendar/pacewise-study-plan.ics', {
+    calendarName: 'PaceWise Study Plan',
+    blocks,
+  });
+}
+
+export async function disconnectGoogleCalendar(): Promise<void> {
+  await request('/integrations/google-calendar', { method: 'DELETE' });
+}
+
 export interface RequestOptions { simulateError?: boolean }
 
 export interface AgentResponse {
@@ -136,7 +214,10 @@ export interface AgentResponse {
   mode?: string;
   status: string;
   pending_action?: Record<string, unknown> | null;
-  output?: { plan_validation?: { valid: boolean; errors: { code: string }[] } } | null;
+  output?: {
+    plan_validation?: { valid: boolean; errors: { code: string }[] };
+    plan_draft?: PlanDraft;
+  } | null;
   progress_metrics?: Record<string, unknown>;
   risk_signals?: Array<Record<string, unknown>>;
   assessment_result?: {
@@ -290,6 +371,7 @@ export async function generatePlan(input: PlanInput, tasks: Task[], opts: Reques
         end: item.end,
       })),
       goals: [{ title: input.goal }],
+      plan_input: input,
     },
   );
   if (agentResult.output?.plan_validation && !agentResult.output.plan_validation.valid) {
@@ -298,15 +380,13 @@ export async function generatePlan(input: PlanInput, tasks: Task[], opts: Reques
       `Kế hoạch AI chưa khả thi: ${agentResult.output.plan_validation.errors.map((item) => item.code).join(', ')}.`,
     );
   }
-  const result = schedule(input, tasks);
-  const explained = explainPlan(input, result, tasks);
+  const draft = agentResult.output?.plan_draft;
+  if (!draft) {
+    throw new ApiError('UPSTREAM', 'Backend không trả về lịch học chuẩn hóa.');
+  }
   return {
-    input,
-    blocks: result.blocks,
-    feasibility: result.feasibility,
-    reasons: [agentResult.response, ...explained.reasons],
-    assumptions: explained.assumptions,
-    createdAt: new Date().toISOString(),
+    ...draft,
+    reasons: [agentResult.response, ...draft.reasons],
   };
 }
 
@@ -354,6 +434,7 @@ export interface InstructorData {
   audit: AuditEntry[];
   guidance: ClassGuidance[];
   privacy: { minimumGroupSize: number; containsDirectIdentifiers: boolean };
+  lmsSummary: LMSInstructorSummary | null;
 }
 
 export async function fetchInstructorData(): Promise<InstructorData> {

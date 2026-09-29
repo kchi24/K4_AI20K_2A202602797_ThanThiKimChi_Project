@@ -27,7 +27,7 @@ function StaleBanner() {
               setBusy(true);
               try {
                 const r = await syncCanvas();
-                dispatch({ type: 'SYNC_CANVAS', courses: r.courses, tasks: r.tasks });
+                dispatch({ type: 'SYNC_CANVAS', courses: r.courses, tasks: r.tasks, guidance: r.guidance, courseData: r.courseData });
                 toast({ tone: 'success', title: 'Đã đồng bộ dữ liệu Canvas' });
               } finally {
                 setBusy(false);

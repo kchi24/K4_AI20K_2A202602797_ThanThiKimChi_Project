@@ -12,7 +12,6 @@ import { useDerived } from '../../hooks/useDerived';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useAppStore } from '../../store/AppStore';
 import type { AvailabilityDay, PlanInput, PreferredTime, UnavailableSlot, Weekday } from '../../types';
-import { schedule } from '../../utils/scheduler';
 import { formatDeadline, formatDuration, toMin, uid, weekdayName } from '../../utils/time';
 
 interface Row {
@@ -21,7 +20,7 @@ interface Row {
   hours: string;
 }
 
-const STEPS = ['Mục tiêu', 'Thời gian', 'Tính khả thi'];
+const STEPS = ['Mục tiêu', 'Thời gian', 'Xác nhận'];
 
 export function PlanWizardPage() {
   useDocumentTitle('Tạo kế hoạch');
@@ -76,8 +75,6 @@ export function PlanWizardPage() {
     else if (toMin(u.end) <= toMin(u.start)) step2Errors[`u${u.id}`] = 'Giờ kết thúc phải sau giờ bắt đầu.';
   });
   const errors = step === 0 ? step1Errors : step === 1 ? step2Errors : {};
-
-  const result = useMemo(() => (step === 2 ? schedule(input, state.tasks) : null), [step, input, state.tasks]);
 
   const goNext = () => {
     if (Object.keys(errors).length) {
@@ -261,68 +258,23 @@ export function PlanWizardPage() {
         </div>
       )}
 
-      {step === 2 && result && (
+      {step === 2 && (
         <div className="space-y-5">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            {[
-              ['Thời gian rảnh', result.feasibility.availableMin],
-              ['Thời gian cần', result.feasibility.requiredMin],
-              ['Còn lại', result.feasibility.remainingMin],
-            ].map(([l, v]) => (
-              <div key={l as string} className="rounded-2xl border border-line bg-white p-4 shadow-card">
-                <p className="text-sm text-muted">{l}</p>
-                <p className={`mt-1 text-2xl font-bold tabular-nums ${(v as number) < 0 ? 'text-danger-ink' : ''}`}>{formatDuration(v as number)}</p>
+          <Card tone="primary" role="status">
+            <div className="flex gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-primary-ink">
+                <Icon name="sparkle" size={22} />
+              </span>
+              <div>
+                <h2 className="text-xl font-semibold">Sẵn sàng kiểm tra kế hoạch</h2>
+                <p className="mt-1 text-ink/80">
+                  Bạn đã chọn {input.tasks.length} nhiệm vụ với tổng thời lượng {formatDuration(input.tasks.reduce((sum, task) => sum + task.remainingMin, 0))}.
+                  Backend PaceWise sẽ xếp study block và kiểm tra deadline bằng cùng một bộ quy tắc duy nhất.
+                </p>
+                <p className="caption mt-3">Chưa có kế hoạch nào được lưu cho đến khi bạn xem và xác nhận bản nháp.</p>
               </div>
-            ))}
-          </div>
-
-          {result.feasibility.feasible ? (
-            <Card tone="success" role="status">
-              <div className="flex gap-3">
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-success-ink">
-                  <Icon name="check" size={22} />
-                </span>
-                <div>
-                  <h2 className="text-xl font-semibold">Kế hoạch khả thi</h2>
-                  <p className="mt-1 text-ink/80">
-                    Tất cả nhiệm vụ có thể xếp trước deadline, còn {formatDuration(result.feasibility.remainingMin)} dự phòng. Bấm tạo để xem bản nháp chi tiết.
-                  </p>
-                </div>
-              </div>
-            </Card>
-          ) : (
-            <Card tone="danger" role="alert">
-              <div className="flex gap-3">
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-danger-ink">
-                  <Icon name="clock" size={22} />
-                </span>
-                <div className="min-w-0">
-                  <h2 className="text-xl font-semibold">Bạn đang thiếu khoảng {formatDuration(result.feasibility.deficitMin)}</h2>
-                  <p className="mt-1 text-ink/80">
-                    Không thể xếp đủ trước deadline:{' '}
-                    {result.feasibility.shortfalls.map((s) => `${state.tasks.find((t) => t.id === s.taskId)?.title} (thiếu ${formatDuration(s.missingMin)})`).join(', ')}.
-                  </p>
-                  <p className="mt-4 font-semibold">Bạn có thể giảm khối lượng:</p>
-                  <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-                    {rows
-                      .filter((r) => r.checked)
-                      .map((r) => state.tasks.find((t) => t.id === r.taskId)!)
-                      .sort((a, b) => ({ high: 0, medium: 1, low: 2 })[b.priority] - ({ high: 0, medium: 1, low: 2 })[a.priority])
-                      .slice(0, 2)
-                      .map((t) => (
-                        <Button key={t.id} variant="secondary" size="sm" icon="minus" onClick={() => setRows((l) => l.map((x) => (x.taskId === t.id ? { ...x, checked: false } : x)))}>
-                          Bỏ {t.title} khỏi tuần này
-                        </Button>
-                      ))}
-                    <Button variant="secondary" size="sm" icon="plus" onClick={() => setStep(1)}>
-                      Thêm thời gian rảnh
-                    </Button>
-                  </div>
-                  <p className="caption mt-3">Không thể lưu một kế hoạch chưa khả thi.</p>
-                </div>
-              </div>
-            </Card>
-          )}
+            </div>
+          </Card>
         </div>
       )}
 
@@ -339,8 +291,8 @@ export function PlanWizardPage() {
             Tiếp tục
           </Button>
         ) : (
-          <Button icon="sparkle" disabled={!result?.feasibility.feasible} onClick={generate}>
-            Tạo kế hoạch
+          <Button icon="sparkle" onClick={generate}>
+            Tạo và kiểm tra kế hoạch
           </Button>
         )}
       </div>

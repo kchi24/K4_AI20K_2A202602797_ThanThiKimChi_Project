@@ -3,8 +3,10 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
-COPY requirements-runtime.txt .
-RUN pip install --no-cache-dir --user -r requirements-runtime.txt
+COPY requirements.txt .
+# Keep one dependency source in Git while excluding dev/eval tools from the image.
+RUN sed -e 's/\r$//' -e '/^# Development, evaluation, and load testing$/,$d' requirements.txt > /tmp/requirements-runtime.txt \
+    && pip install --no-cache-dir --user -r /tmp/requirements-runtime.txt
 
 # ---- Stage 2: Production ----
 FROM python:3.11-slim
@@ -18,8 +20,8 @@ RUN useradd -m appuser
 COPY --from=builder --chown=appuser:appuser /root/.local /home/appuser/.local
 ENV PATH=/home/appuser/.local/bin:$PATH
 
-# Copy application code
-COPY . .
+# Copy only the backend runtime code. Other services use their own Dockerfile.
+COPY src ./src
 
 # Create data directory with correct ownership
 RUN mkdir -p /app/data && chown -R appuser:appuser /app

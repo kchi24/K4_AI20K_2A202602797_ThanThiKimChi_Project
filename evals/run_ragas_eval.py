@@ -29,7 +29,7 @@ def run(samples: list[dict[str, Any]]) -> dict[str, Any]:
         from ragas import evaluate
         from ragas.metrics import answer_relevancy, context_precision, context_recall, faithfulness
     except ImportError as exc:
-        raise RuntimeError("Install requirements-eval.txt before running RAGAS") from exc
+        raise RuntimeError("Install requirements.txt before running RAGAS") from exc
 
     dataset = Dataset.from_list(samples)
     result = evaluate(

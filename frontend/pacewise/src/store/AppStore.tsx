@@ -11,6 +11,8 @@ import type {
   ClassGroup,
   Course,
   GroupStats,
+  LMSCourseData,
+  LMSInstructorSummary,
   Plan,
   PlanDraft,
   PlanInput,
@@ -40,6 +42,7 @@ export interface AppState {
   workspaceReady: boolean;
   courses: Course[];
   tasks: Task[];
+  courseData: Record<string, LMSCourseData>;
   plan: Plan | null;
   planHistory: Plan[];
   availability: AvailabilityDay[];
@@ -59,6 +62,7 @@ export interface AppState {
   audit: AuditEntry[];
   classGroups: ClassGroup[];
   groupStats: Record<string, GroupStats>;
+  lmsInstructorSummary: LMSInstructorSummary | null;
   /** Tasks whose drift warning the student chose to keep as-is (plan unchanged). */
   dismissedDrifts: string[];
 }
@@ -69,6 +73,7 @@ export const initialState: AppState = {
   workspaceReady: false,
   courses: [],
   tasks: [],
+  courseData: {},
   plan: savedPlan,
   planHistory: [],
   availability: defaultAvailability,
@@ -108,6 +113,7 @@ export const initialState: AppState = {
   audit: [],
   classGroups: [],
   groupStats: {},
+  lmsInstructorSummary: null,
   dismissedDrifts: [],
 };
 
@@ -144,8 +150,8 @@ export type Action =
   | { type: 'SET_ASSESSMENT_STATUS'; id: string; status: AssessmentStatus; note?: string }
   | { type: 'UPDATE_ASSESSMENT'; item: Pick<AssessmentItem, 'id' | 'question' | 'rubric' | 'level' | 'source'>; status?: AssessmentStatus; note?: string; historyText: string }
   | { type: 'DISMISS_DRIFT'; taskId: string }
-  | { type: 'SYNC_CANVAS'; tasks: Task[]; courses?: Course[]; guidance?: ClassGuidance[] }
-  | { type: 'SET_INSTRUCTOR_DATA'; classGroups: ClassGroup[]; groupStats: Record<string, GroupStats>; reviewQueue: ReviewItem[]; assessments: AssessmentItem[]; audit: AuditEntry[]; guidance: ClassGuidance[] }
+  | { type: 'SYNC_CANVAS'; tasks: Task[]; courses?: Course[]; guidance?: ClassGuidance[]; courseData?: Record<string, LMSCourseData> }
+  | { type: 'SET_INSTRUCTOR_DATA'; classGroups: ClassGroup[]; groupStats: Record<string, GroupStats>; reviewQueue: ReviewItem[]; assessments: AssessmentItem[]; audit: AuditEntry[]; guidance: ClassGuidance[]; lmsSummary: LMSInstructorSummary | null }
   | { type: 'RESET_DEMO' };
 
 function audit(state: AppState, action: string): AuditEntry[] {
@@ -192,6 +198,7 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         tasks: incomingTasks,
         courses: action.courses ?? state.courses,
+        courseData: action.courseData ?? state.courseData,
         guidance: action.guidance ?? state.guidance,
         settings: { ...state.settings, staleData: false, lastSync: new Date().toISOString() },
       };
@@ -207,6 +214,7 @@ export function reducer(state: AppState, action: Action): AppState {
         assessments: action.assessments,
         audit: action.audit,
         guidance: action.guidance,
+        lmsInstructorSummary: action.lmsSummary,
       };
     case 'SET_WIZARD_INPUT':
       return { ...state, wizardInput: action.input };
@@ -438,7 +446,13 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
       .catch(() => active && dispatch({ type: 'HYDRATE_WORKSPACE', state: {} }));
     const refresh = () => {
       void syncCanvas()
-        .then((result) => active && dispatch({ type: 'SYNC_CANVAS', courses: result.courses, tasks: result.tasks, guidance: result.guidance }))
+        .then((result) => active && dispatch({
+          type: 'SYNC_CANVAS',
+          courses: result.courses,
+          tasks: result.tasks,
+          guidance: result.guidance,
+          courseData: result.courseData,
+        }))
         .catch(() => active && dispatch({ type: 'UPDATE_SETTINGS', patch: { staleData: true } }));
     };
     refresh();

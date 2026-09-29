@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from flashrank import Ranker
     from qdrant_client import QdrantClient
 
+from src.agents.safety import evaluate_input_policy
 from src.config import get_settings
 from src.observability import observe_rag
 
@@ -37,7 +38,9 @@ DEFAULT_DOCS_DIR = AGENTS_DATA_DIR / "sample_documents"
 DEFAULT_QDRANT_PATH = str(AGENTS_DATA_DIR / "qdrant")
 
 DEFAULT_COLLECTION_NAME = "course_materials"
-DEFAULT_SCORE_THRESHOLD = 0.72  # Ngưỡng tương đồng cosine để phân định học liệu phù hợp (>0.73 cho bài học, <0.71 cho câu hỏi lạc đề)
+DEFAULT_SCORE_THRESHOLD = (
+    0.72  # Ngưỡng tương đồng cosine để phân định học liệu phù hợp (>0.73 cho bài học, <0.71 cho câu hỏi lạc đề)
+)
 EMBEDDING_DIM = 384
 
 _embedding_model: TextEmbedding | None = None
@@ -155,14 +158,20 @@ def _get_qdrant_client(storage_path: str | None = None) -> QdrantClient:
     from qdrant_client import QdrantClient
 
     settings = get_settings()
+    remote_url = settings.qdrant_url.strip() if storage_path is None else ""
     path = storage_path or getattr(settings, "qdrant_path", None) or DEFAULT_QDRANT_PATH
 
     if path in ("./data/qdrant", "data/qdrant"):
         path = DEFAULT_QDRANT_PATH
-    cache_key = str(path)
+    cache_key = f"url:{remote_url}" if remote_url else str(path)
     with _qdrant_client_lock:
         if cache_key not in _qdrant_clients:
-            if path == ":memory:":
+            if remote_url:
+                _qdrant_clients[cache_key] = QdrantClient(
+                    url=remote_url,
+                    api_key=settings.qdrant_api_key or None,
+                )
+            elif path == ":memory:":
                 _qdrant_clients[cache_key] = QdrantClient(":memory:")
             else:
                 os.makedirs(path, exist_ok=True)
@@ -261,15 +270,36 @@ def ingest_course_resources(
     normalized = [item for item in resources if str(item.get("content") or "").strip()]
     if not normalized:
         return {"status": "empty", "total_chunks": 0}
+    required_scope_fields = (
+        "institution_id",
+        "course_id",
+        "resource_id",
+        "resource_version",
+        "access_scope",
+    )
+    for item in normalized:
+        missing = [field for field in required_scope_fields if not str(item.get(field) or "").strip()]
+        if missing:
+            raise ValueError(f"RAG resource is missing scope fields: {', '.join(missing)}")
     resource_digests = [
         hashlib.sha256(
-            f"{item.get('course_code')}|{item.get('document_title')}|{item.get('page')}|{item.get('paragraph')}|{item['content']}".encode()
+            "|".join(
+                str(item.get(field) or "")
+                for field in (
+                    "institution_id",
+                    "course_id",
+                    "resource_id",
+                    "resource_version",
+                    "access_scope",
+                    "page",
+                    "paragraph",
+                    "content",
+                )
+            ).encode()
         ).hexdigest()
         for item in normalized
     ]
-    batch_key = hashlib.sha256(
-        f"{collection_name}|{'|'.join(sorted(resource_digests))}".encode()
-    ).hexdigest()
+    batch_key = hashlib.sha256(f"{collection_name}|{'|'.join(sorted(resource_digests))}".encode()).hexdigest()
     with _ingestion_lock:
         if batch_key in _ingested_resource_sets:
             return {"status": "unchanged", "total_chunks": len(normalized)}
@@ -295,6 +325,73 @@ def ingest_course_resources(
         qdrant.upsert(collection_name=collection_name, points=points, wait=True)
         _ingested_resource_sets.add(batch_key)
         return {"status": "success", "total_chunks": len(points)}
+
+
+def delete_course_resources(
+    *,
+    institution_id: str,
+    course_id: str,
+    access_scope: str = "course",
+    collection_name: str = DEFAULT_COLLECTION_NAME,
+    storage_path: str | None = None,
+    client: QdrantClient | None = None,
+) -> None:
+    """Delete one tenant/course namespace before indexing a new snapshot."""
+    from qdrant_client.models import FieldCondition, Filter, FilterSelector, MatchValue
+
+    qdrant = client or _get_qdrant_client(storage_path)
+    if not qdrant.collection_exists(collection_name):
+        return
+    qdrant.delete(
+        collection_name=collection_name,
+        points_selector=FilterSelector(
+            filter=Filter(
+                must=[
+                    FieldCondition(key="institution_id", match=MatchValue(value=institution_id)),
+                    FieldCondition(key="course_id", match=MatchValue(value=str(course_id))),
+                    FieldCondition(key="access_scope", match=MatchValue(value=access_scope)),
+                ]
+            )
+        ),
+        wait=True,
+    )
+
+
+def delete_stale_course_resources(
+    *,
+    institution_id: str,
+    course_id: str,
+    current_snapshot_version: str,
+    access_scope: str = "course",
+    collection_name: str = DEFAULT_COLLECTION_NAME,
+    storage_path: str | None = None,
+    client: QdrantClient | None = None,
+) -> None:
+    """Remove old points only after a new course snapshot was indexed."""
+    from qdrant_client.models import FieldCondition, Filter, FilterSelector, MatchValue
+
+    qdrant = client or _get_qdrant_client(storage_path)
+    if not qdrant.collection_exists(collection_name):
+        return
+    qdrant.delete(
+        collection_name=collection_name,
+        points_selector=FilterSelector(
+            filter=Filter(
+                must=[
+                    FieldCondition(key="institution_id", match=MatchValue(value=institution_id)),
+                    FieldCondition(key="course_id", match=MatchValue(value=str(course_id))),
+                    FieldCondition(key="access_scope", match=MatchValue(value=access_scope)),
+                ],
+                must_not=[
+                    FieldCondition(
+                        key="snapshot_version",
+                        match=MatchValue(value=current_snapshot_version),
+                    )
+                ],
+            )
+        ),
+        wait=True,
+    )
 
 
 def ingest_sample_documents(
@@ -385,6 +482,9 @@ def search_course_materials(
     top_k: int | None = None,
     score_threshold: float = DEFAULT_SCORE_THRESHOLD,
     course_code: str | None = None,
+    institution_id: str | None = None,
+    course_id: str | None = None,
+    access_scope: str = "course",
     collection_name: str = DEFAULT_COLLECTION_NAME,
     storage_path: str | None = None,
     client: QdrantClient | None = None,
@@ -397,6 +497,8 @@ def search_course_materials(
 
     started = time.perf_counter()
     settings = get_settings()
+    if bool(institution_id) != bool(course_id):
+        raise ValueError("institution_id and course_id must be provided together")
     candidate_k = top_k or settings.rag_top_k
     qdrant = client or _get_qdrant_client(storage_path)
 
@@ -416,10 +518,18 @@ def search_course_materials(
 
     # Truy vấn điểm tương đồng gần nhất từ Qdrant
     query_filter = None
-    if course_code:
-        query_filter = Filter(
-            must=[FieldCondition(key="course_code", match=MatchValue(value=course_code))]
-        )
+    conditions = []
+    if institution_id:
+        conditions.append(FieldCondition(key="institution_id", match=MatchValue(value=institution_id)))
+    if course_id:
+        conditions.append(FieldCondition(key="course_id", match=MatchValue(value=str(course_id))))
+    if institution_id or course_id:
+        conditions.append(FieldCondition(key="access_scope", match=MatchValue(value=access_scope)))
+    elif course_code:
+        # Backward-compatible path for sample documents and local CLI usage.
+        conditions.append(FieldCondition(key="course_code", match=MatchValue(value=course_code)))
+    if conditions:
+        query_filter = Filter(must=conditions)
 
     query_res = qdrant.query_points(
         collection_name=collection_name,
@@ -438,14 +548,27 @@ def search_course_materials(
             top_score = score
 
         payload = point.payload or {}
-        citation = payload.get("citation") or f"[{payload.get('document_title', 'Tài liệu')}, Trang {payload.get('page', '?')}]"
+        content = str(payload.get("content") or "")
+        passage_policy = evaluate_input_policy(content)
+        if passage_policy.get("action") == "block":
+            logger.warning("rag_passage_blocked reason=prompt_injection point_id=%s", point.id)
+            continue
+        citation = (
+            payload.get("citation")
+            or f"[{payload.get('document_title', 'Tài liệu')}, Trang {payload.get('page', '?')}]"
+        )
 
         passages.append(
             {
                 "chunk_id": payload.get("chunk_id", str(point.id)),
-                "content": payload.get("content", ""),
+                "content": content,
                 "document_title": payload.get("document_title", ""),
                 "course_code": payload.get("course_code", ""),
+                "institution_id": payload.get("institution_id", ""),
+                "course_id": payload.get("course_id", ""),
+                "resource_id": payload.get("resource_id", ""),
+                "resource_version": payload.get("resource_version", ""),
+                "access_scope": payload.get("access_scope", ""),
                 "page": payload.get("page", 1),
                 "paragraph": payload.get("paragraph", 1),
                 "section_title": payload.get("section_title", ""),
@@ -464,9 +587,7 @@ def search_course_materials(
     # A calibrated semantic hit or a strong cross-encoder hit can ground an
     # answer. The lexical emergency fallback may reorder candidates, but it
     # never bypasses the abstention gate by itself.
-    is_insufficient = (len(passages) == 0) or (
-        top_score < score_threshold and not trusted_cross_encoder
-    )
+    is_insufficient = (len(passages) == 0) or (top_score < score_threshold and not trusted_cross_encoder)
     outcome = "insufficient" if is_insufficient else "grounded"
     latency_seconds = time.perf_counter() - started
     observe_rag("retrieve", outcome, latency_seconds)

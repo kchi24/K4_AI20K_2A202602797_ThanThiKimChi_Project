@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { StatTile } from '../../components/domain/StatTile';
+import { LMSLearningSnapshot } from '../../components/domain/LMSLearningSnapshot';
 import { TaskCard } from '../../components/domain/TaskCard';
 import { WarningCard } from '../../components/domain/WarningCard';
 import { Button } from '../../components/ui/Button';
@@ -29,6 +30,7 @@ export function ProgressPage() {
   const [form, setForm] = useState({ taskId: open[0]?.id ?? '', minutes: '', date: DEMO_TODAY, note: '' });
   const [errors, setErrors] = useState<{ minutes?: string; taskId?: string }>({});
   const [tracking, setTracking] = useState<AgentResponse | null>(null);
+  const activeCourseData = state.user?.courseId ? state.courseData[state.user.courseId] : undefined;
 
   useEffect(() => {
     let active = true;
@@ -63,6 +65,10 @@ export function ProgressPage() {
           </Banner>
         </div>
       )}
+
+      <div className="mb-5">
+        <LMSLearningSnapshot data={activeCourseData} />
+      </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile icon="checkCircle" label="Đã hoàn thành" value={`${stats.done} / ${stats.total}`} hint="nhiệm vụ" />

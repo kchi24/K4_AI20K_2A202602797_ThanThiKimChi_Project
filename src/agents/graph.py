@@ -1,6 +1,6 @@
 """
-Master LangGraph: Kết nối Coordinator và 6 workflow nhánh kèm LangGraph Checkpointer (MemorySaver).
-Hỗ trợ quản lý phiên làm việc đa lượt (Multi-turn conversations) qua thread_id.
+Master LangGraph: kết nối Coordinator và 6 workflow nhánh với durable PostgreSQL
+checkpointer ở runtime; MemorySaver chỉ dùng cho unit test/SQLite local.
 """
 
 import time

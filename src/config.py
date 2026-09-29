@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     app_env: Literal["development", "production", "test"] = "development"
     app_port: int = Field(default=8000, ge=1, le=65535)
     app_host: str = "0.0.0.0"
+    institution_id: str = "university-x"
+    app_timezone: str = "Asia/Ho_Chi_Minh"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     cors_origins: str = "http://localhost:5173"
 
@@ -34,7 +36,23 @@ class Settings(BaseSettings):
     login_rate_limit: int = Field(default=5, ge=1, le=100)
     login_rate_window_seconds: int = Field(default=600, ge=60, le=86400)
     lms_sync_interval_seconds: int = Field(default=30, ge=5, le=3600)
+    worker_batch_size: int = Field(default=100, ge=1, le=500)
     force_https: bool = False
+
+    # Google Calendar OAuth. Keep the client secret and token-encryption key on
+    # the server; neither value is ever returned to the browser.
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_client_secret_file: str = ""
+    google_token_encryption_key: str = ""
+    google_token_encryption_key_file: str = ""
+    google_redirect_uri: str = "http://localhost:8000/api/v1/integrations/google-calendar/callback"
+    google_oauth_success_url: str = "http://localhost:5173/#/settings"
+    google_calendar_scopes: str = (
+        "openid email "
+        "https://www.googleapis.com/auth/calendar.freebusy "
+        "https://www.googleapis.com/auth/calendar.events.owned"
+    )
 
     # LLM
     openai_api_key: str = ""
@@ -48,6 +66,8 @@ class Settings(BaseSettings):
 
     # Vector Store
     vector_store_type: str = "qdrant"
+    qdrant_url: str = ""
+    qdrant_api_key: str = ""
     qdrant_path: str = "./data/qdrant"
     chroma_persist_dir: str = "./src/agents/data/chroma"
     embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
@@ -65,6 +85,8 @@ class Settings(BaseSettings):
         for value_field, file_field in (
             ("pacewise_api_key", "pacewise_api_key_file"),
             ("pacewise_session_secret", "pacewise_session_secret_file"),
+            ("google_client_secret", "google_client_secret_file"),
+            ("google_token_encryption_key", "google_token_encryption_key_file"),
         ):
             secret_file = getattr(self, file_field).strip()
             if secret_file:

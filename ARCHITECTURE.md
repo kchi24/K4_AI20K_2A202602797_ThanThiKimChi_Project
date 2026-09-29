@@ -1,110 +1,112 @@
-# Architecture Document
+# PaceWise Architecture
 
-## System Overview
+## Tổng quan
 
-[Tóm tắt 2-3 câu về kiến trúc hệ thống]
-
-## Architecture Diagram
-
-```mermaid
-graph TB
-    subgraph Frontend
-        UI[React/Next.js UI]
-    end
-
-    subgraph Backend[FastAPI Backend]
-        API[API Routes]
-        Agent[LangGraph Agent]
-        LLM[LLM Service]
-        Tools[Agent Tools]
-    end
-
-    subgraph Data[Data Layer]
-        DB[(Database)]
-        Vector[Vector Store]
-    end
-
-    UI -->|HTTP/REST| API
-    API --> Agent
-    Agent --> LLM
-    Agent --> Tools
-    Agent --> Vector
-    Tools --> DB
-    API --> DB
-```
-
-## Components
-
-### 1. Frontend (React/Next.js)
-- **Purpose:** [mô tả]
-- **Key Features:** [danh sách]
-- **State Management:** [approach]
-
-### 2. Backend (FastAPI)
-- **Purpose:** [mô tả]
-- **API Design:** RESTful
-- **Authentication:** [JWT/None]
-
-### 3. AI Agent (LangGraph)
-- **Agent Type:** [ReAct / Plan-and-Execute / Custom]
-- **State:** [mô tả state schema]
-- **Nodes:** [danh sách nodes]
-- **Tools:** [danh sách tools]
-- **Flow:**
+PaceWise gồm web app cho sinh viên/giảng viên, FastAPI backend điều phối workflow
+AI, PostgreSQL lưu trạng thái học tập, Qdrant lưu vector và LMS Simulator mô phỏng
+contract Canvas. LMS là nguồn cho course, deadline, submission, rubric, module
+progress và learning evidence; frontend không tự tính lại các dữ liệu này.
 
 ```mermaid
-graph LR
-    START --> A[Node A]
-    A --> B{Decision}
-    B -->|Yes| C[Node C]
-    B -->|No| D[Node D]
-    C --> E[END]
-    D --> E
+flowchart LR
+    U[Student / Instructor] --> FE[Next.js PaceWise]
+    U --> LMSUI[LMS Simulator UI]
+    FE --> API[FastAPI PaceWise API]
+    LMSUI --> LMS[LMS Simulator API]
+    LMS --> LMSDB[(LMS PostgreSQL)]
+    API --> PWDB[(PaceWise PostgreSQL)]
+    API --> AG[LangGraph agents]
+    AG --> LLM[LLM provider]
+    AG --> Q[(Qdrant)]
+    API -->|X-PaceWise-Key| LMS
+    LMS -->|signed launch| API
+    LMS --> OUTBOX[(Integration event outbox)]
+    OUTBOX --> WORKER[Sync / ingestion worker]
+    WORKER --> API
+    WORKER --> Q
 ```
 
-### 4. Database
-- **Type:** [PostgreSQL / SQLite]
-- **Tables:** [danh sách]
-- **Migrations:** Alembic
+## Các service
 
-### 5. Vector Store
-- **Type:** [ChromaDB / FAISS / Pinecone]
-- **Embeddings:** [model]
-- **Purpose:** [RAG / similarity search]
+| Service | Trách nhiệm | Port |
+|---|---|---:|
+| `frontend` | UI PaceWise; chỉ render dữ liệu/backend decisions | 3000 |
+| `backend` | Auth, planning scheduler, AI workflow, RAG, calendar | 8000 |
+| `worker` | LMS event projection, ingestion/versioning và tác vụ nền | — |
+| `pacewise-postgres` | Plan, reflection, memory/checkpoint, audit | nội bộ |
+| `qdrant` | Vector index theo tenant/course/resource/version/scope | 6333 |
+| `lms-simulator` | Canvas-compatible UI/API và signed launch | 8010 |
+| `lms-postgres` | Course và learning records nguồn | nội bộ |
 
-## Data Flow
-
-1. User gửi request từ Frontend
-2. API route nhận và validate input
-3. Agent xử lý qua LangGraph pipeline
-4. LLM generate response
-5. Tools thực thi actions (nếu cần)
-6. Response trả về Frontend
-
-## Deployment Architecture
+## LMS domain phục vụ PaceWise
 
 ```mermaid
-graph LR
-    subgraph Docker
-        FE[Frontend Container]
-        BE[Backend Container]
-        DB_C[Database Container]
-    end
-    FE --> BE --> DB_C
+erDiagram
+    COURSE ||--o{ ASSIGNMENT_GROUP : contains
+    ASSIGNMENT_GROUP ||--o{ ASSIGNMENT : weights
+    ASSIGNMENT ||--o{ ASSIGNMENT_OVERRIDE : customizes
+    COURSE ||--o{ SECTION : contains
+    COURSE ||--o{ GROUP_CATEGORY : contains
+    GROUP_CATEGORY ||--o{ GROUP : contains
+    MODULE ||--o{ MODULE_REQUIREMENT : requires
+    MODULE_ITEM ||--o{ MODULE_PROGRESS : tracks
+    ASSIGNMENT ||--o{ SUBMISSION : receives
+    SUBMISSION ||--o{ SUBMISSION_ATTEMPT : versions
+    SUBMISSION_ATTEMPT ||--o{ SUBMISSION_ATTACHMENT : contains
+    ASSIGNMENT ||--o| RUBRIC : evaluates
+    RUBRIC ||--o{ RUBRIC_CRITERION : contains
+    RESOURCE ||--o{ RESOURCE_VERSION : versions
+    RESOURCE ||--o{ RESOURCE_ACCESS : authorizes
 ```
 
-## Security
+Deadline hiệu lực được backend giải theo thứ tự:
 
-- API keys stored in `.env` (never commit)
-- Input validation via Pydantic
-- Rate limiting on API endpoints
-- CORS configured for frontend domain
+```text
+student override > group override > section override > assignment default
+```
 
-## Design Decisions
+Assignment group, module rule, rubric và resource metadata là dữ liệu có cấu
+trúc. PaceWise không đọc HTML giao diện để suy diễn các khái niệm này.
 
-| Decision | Choice | Reason |
-|----------|--------|--------|
-| Framework | FastAPI | Async, auto-docs, type-safe |
-| Agent | LangGraph | Flexible state management |
-| Database | [choice] | [reason] |
-| Frontend | Next.js | [reason] |
+## Luồng đồng bộ và RAG
+
+```mermaid
+sequenceDiagram
+    participant LMS as LMS Simulator / Canvas
+    participant O as Event Outbox
+    participant W as Worker
+    participant P as PaceWise DB
+    participant Q as Qdrant
+    LMS->>O: deadline/submission/grade/resource changed
+    W->>O: GET events after cursor
+    W->>LMS: GET current REST representation
+    W->>P: update projection and risk state
+    alt resource version changed
+        W->>Q: delete stale version and index new chunks
+    end
+    W->>P: persist cursor after successful processing
+```
+
+REST là nguồn trạng thái hiện tại; event chỉ kích hoạt đồng bộ. Chat request chỉ
+retrieval, không ingest tài liệu trong request path. Vector metadata phải gồm
+`institution_id`, `course_id`, `resource_id`, `resource_version` và
+`access_scope`.
+
+## Bảo mật
+
+- LMS UI dùng opaque server session; cookie `HttpOnly`, `SameSite=Lax` và CSRF
+  cho thao tác ghi.
+- Middleware buộc mọi actor ID cũ phải khớp user trong session.
+- PaceWise gọi LMS bằng service key; launch token ký HMAC, có TTL và nonce một lần.
+- Mọi API course kiểm tra enrollment và role; tài liệu kiểm tra access scope.
+- Secret chỉ lấy từ environment/secret manager, không commit `.env`.
+- Production bật HTTPS, secure cookie, rate limit và centralized session revocation.
+
+## Quy tắc thiết kế
+
+1. Backend là nguồn duy nhất tạo milestone và schedule; frontend chỉ hiển thị.
+2. Agent memory có key `institution:user:course:learning-cycle`.
+3. LLM không trực tiếp ghi dữ liệu rủi ro; thao tác ghi cần deterministic
+   validation và human confirmation.
+4. Guardrail gồm rule nhanh, classifier hiệu chuẩn và output policy.
+5. Mỗi thay đổi LMS phát audit log và integration event để có thể debug/replay.

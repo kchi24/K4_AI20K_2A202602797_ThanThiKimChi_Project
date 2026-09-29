@@ -1,3 +1,4 @@
+import hashlib
 import json
 import shutil
 from datetime import UTC, datetime
@@ -11,6 +12,15 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.learning_api import (
+    assignment_extension_payload,
+    can_access_resource,
+    effective_assignment_window,
+    module_extension_payload,
+    record_resource_version,
+    record_submission_attempt,
+    resource_extension_payload,
+)
 from app.models import (
     Assignment,
     ConversationMessage,
@@ -31,6 +41,8 @@ from app.models import (
     QuizQuestion,
     Resource,
     Submission,
+    SubmissionAttachment,
+    SubmissionComment,
     SubmissionDetail,
     User,
 )
@@ -41,6 +53,10 @@ UPLOAD_DIR = Path(__file__).resolve().parent.parent / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 ALLOWED_UPLOADS = {".pdf", ".doc", ".docx", ".txt", ".png", ".jpg", ".jpeg", ".zip"}
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+
+
+def as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 class CourseRequest(BaseModel):
@@ -184,6 +200,7 @@ def assignment_json(db: Session, assignment: Assignment, student_id: int | None 
         "submission_types": assignment.submission_types.split(","),
         "published": assignment.published,
         "submission": submission_json(submission, detail) if submission else None,
+        **assignment_extension_payload(db, assignment, student_id),
     }
 
 
@@ -223,11 +240,21 @@ def ensure_submission(db: Session, assignment: Assignment, user_id: int) -> tupl
     return submission, detail
 
 
-def mark_submitted(assignment: Assignment, submission: Submission) -> None:
+def mark_submitted(db: Session, assignment: Assignment, submission: Submission) -> None:
     now = datetime.now(UTC)
+    due_at, unlock_at, lock_at, _ = effective_assignment_window(
+        db, assignment, submission.user_id
+    )
+    due_at = as_utc(due_at)
+    unlock_at = as_utc(unlock_at) if unlock_at else None
+    lock_at = as_utc(lock_at) if lock_at else None
+    if unlock_at and now < unlock_at:
+        raise HTTPException(status_code=409, detail="Assignment is not available yet")
+    if lock_at and now > lock_at:
+        raise HTTPException(status_code=409, detail="Assignment is locked")
     submission.submitted_at = now
     submission.workflow_state = "submitted"
-    submission.late = now > assignment.due_at
+    submission.late = now > due_at
 
 
 @router.post("/courses")
@@ -452,7 +479,13 @@ def submit_assignment_content(assignment_id: int, payload: SubmissionRequest, db
         raise HTTPException(status_code=422, detail="Enter text or a website URL")
     submission, detail = ensure_submission(db, assignment, payload.user_id)
     detail.text_entry, detail.website_url = payload.text_entry.strip(), payload.website_url.strip()
-    mark_submitted(assignment, submission)
+    mark_submitted(db, assignment, submission)
+    record_submission_attempt(
+        db,
+        submission,
+        text_entry=detail.text_entry,
+        website_url=detail.website_url,
+    )
     record_change(
         db,
         actor_user_id=payload.user_id,
@@ -488,7 +521,8 @@ def download_file(file_name: str, user_id: int = Query(...), db: Session = Depen
     resource = db.scalar(select(Resource).where(Resource.source_url == file_url))
     original_name = resource.title if resource else file_name
     if resource:
-        require_enrollment(db, user_id, resource.course_id)
+        if not can_access_resource(db, resource, user_id):
+            raise HTTPException(status_code=403, detail="You cannot access this resource")
     else:
         row = db.execute(
             select(SubmissionDetail, Submission, Assignment)
@@ -538,7 +572,13 @@ def submit_assignment_file(
         raise HTTPException(status_code=404, detail="Assignment not found")
     submission, detail = ensure_submission(db, assignment, user_id)
     detail.file_name, detail.file_url = save_upload(upload, f"submission-{assignment_id}-{user_id}")
-    mark_submitted(assignment, submission)
+    mark_submitted(db, assignment, submission)
+    record_submission_attempt(
+        db,
+        submission,
+        file_name=detail.file_name,
+        file_url=detail.file_url,
+    )
     record_change(
         db,
         actor_user_id=user_id,
@@ -550,6 +590,58 @@ def submit_assignment_file(
     )
     db.commit()
     return submission_json(submission, detail)
+
+
+@router.post("/assignments/{assignment_id}/submissions/files")
+def submit_assignment_files(
+    assignment_id: int,
+    user_id: int = Form(...),
+    uploads: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    assignment = db.get(Assignment, assignment_id)
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    if not uploads or len(uploads) > 10:
+        raise HTTPException(status_code=422, detail="Upload between 1 and 10 files")
+    unsupported = [
+        upload.filename or "file"
+        for upload in uploads
+        if Path(upload.filename or "file").suffix.lower() not in ALLOWED_UPLOADS
+    ]
+    if unsupported:
+        raise HTTPException(status_code=422, detail=f"Unsupported file type: {unsupported[0]}")
+    submission, detail = ensure_submission(db, assignment, user_id)
+    saved_files = [
+        save_upload(upload, f"submission-{assignment_id}-{user_id}") for upload in uploads
+    ]
+    detail.file_name, detail.file_url = saved_files[0]
+    mark_submitted(db, assignment, submission)
+    attempt = record_submission_attempt(db, submission)
+    db.add_all(
+        [
+            SubmissionAttachment(attempt_id=attempt.id, file_name=name, file_url=url)
+            for name, url in saved_files
+        ]
+    )
+    record_change(
+        db,
+        actor_user_id=user_id,
+        action="submission.submitted",
+        entity_type="submission",
+        entity_id=submission.id,
+        course_id=assignment.course_id,
+        metadata={
+            "assignment_id": assignment.id,
+            "late": submission.late,
+            "type": "files",
+            "file_count": len(saved_files),
+        },
+    )
+    db.commit()
+    result = submission_json(submission, detail)
+    result["files"] = [{"file_name": name, "file_url": url} for name, url in saved_files]
+    return result
 
 
 @router.get("/assignments/{assignment_id}/submissions")
@@ -594,6 +686,14 @@ def grade_submission(assignment_id: int, student_id: int, payload: GradeRequest,
     submission.score = payload.score
     detail.instructor_comment = payload.comment.strip()
     detail.rubric_json = json.dumps(payload.rubric)
+    if detail.instructor_comment:
+        db.add(
+            SubmissionComment(
+                submission_id=submission.id,
+                author_id=payload.user_id,
+                body=detail.instructor_comment,
+            )
+        )
     db.add(
         GradeHistory(
             submission_id=submission.id,
@@ -638,14 +738,17 @@ def grade_submission(assignment_id: int, student_id: int, payload: GradeRequest,
     return submission_json(submission, detail)
 
 
-def resource_json(resource: Resource) -> dict:
-    return {
+def resource_json(resource: Resource, db: Session | None = None) -> dict:
+    result = {
         "id": resource.id,
         "course_id": resource.course_id,
         "title": resource.title,
         "kind": resource.kind,
         "source_url": resource.source_url,
     }
+    if db is not None:
+        result.update(resource_extension_payload(db, resource))
+    return result
 
 
 @router.post("/courses/{course_id}/resources")
@@ -655,9 +758,10 @@ def create_resource(course_id: int, payload: ResourceRequest, db: Session = Depe
         course_id=course_id, title=payload.title.strip(), kind=payload.kind, source_url=payload.source_url.strip()
     )
     db.add(resource)
+    db.flush()
+    record_resource_version(db, resource)
     db.commit()
-    db.refresh(resource)
-    return resource_json(resource)
+    return resource_json(resource, db)
 
 
 @router.post("/courses/{course_id}/resources/upload")
@@ -668,9 +772,17 @@ def upload_resource(
     original, url = save_upload(upload, f"course-{course_id}")
     resource = Resource(course_id=course_id, title=original, kind="file", source_url=url)
     db.add(resource)
+    db.flush()
+    target = UPLOAD_DIR / url.rsplit("/", 1)[-1]
+    record_resource_version(
+        db,
+        resource,
+        checksum=hashlib.sha256(target.read_bytes()).hexdigest(),
+        size_bytes=target.stat().st_size,
+        content_type=upload.content_type or "application/octet-stream",
+    )
     db.commit()
-    db.refresh(resource)
-    return resource_json(resource)
+    return resource_json(resource, db)
 
 
 @router.put("/courses/{course_id}/resources/{resource_id}")
@@ -680,8 +792,9 @@ def update_resource(course_id: int, resource_id: int, payload: ResourceRequest, 
     if not resource or resource.course_id != course_id:
         raise HTTPException(status_code=404, detail="File not found")
     resource.title, resource.kind, resource.source_url = payload.title.strip(), payload.kind, payload.source_url.strip()
+    record_resource_version(db, resource)
     db.commit()
-    return resource_json(resource)
+    return resource_json(resource, db)
 
 
 @router.delete("/courses/{course_id}/resources/{resource_id}")
@@ -700,7 +813,7 @@ def delete_resource(course_id: int, resource_id: int, user_id: int = Query(...),
     return {"status": "deleted"}
 
 
-def module_json(db: Session, module: CourseModule) -> dict:
+def module_json(db: Session, module: CourseModule, user_id: int | None = None) -> dict:
     items = db.scalars(
         select(ModuleItem).where(ModuleItem.module_id == module.id).order_by(ModuleItem.position, ModuleItem.id)
     ).all()
@@ -722,6 +835,7 @@ def module_json(db: Session, module: CourseModule) -> dict:
             }
             for item in items
         ],
+        **module_extension_payload(db, module, user_id),
     }
 
 
@@ -731,7 +845,7 @@ def list_modules(course_id: int, user_id: int = Query(...), db: Session = Depend
     modules = db.scalars(
         select(CourseModule).where(CourseModule.course_id == course_id).order_by(CourseModule.position, CourseModule.id)
     ).all()
-    return [module_json(db, module) for module in modules]
+    return [module_json(db, module, user_id) for module in modules]
 
 
 @router.post("/courses/{course_id}/modules")
