@@ -45,6 +45,8 @@ def _lms_response(path: str, _params=None):
         return [{"id": 1, "title": "Giáo trình AI", "body": "Overfitting là học quá sát dữ liệu."}]
     if path.endswith("/submissions"):
         return [{"assignment_id": 21, "workflow_state": "unsubmitted"}]
+    if path.endswith("/modules") or path.endswith("/planner"):
+        return []
     raise AssertionError(f"Unexpected LMS path: {path}")
 
 
@@ -74,6 +76,8 @@ async def test_lms_context_normalizes_assignment_ids_across_courses(monkeypatch)
         if path.endswith("/8/assignments"):
             return [{"id": 31, "title": "DB task", "points_possible": 5}]
         if path.endswith("/submissions"):
+            return []
+        if path.endswith("/modules") or path.endswith("/planner"):
             return []
         raise AssertionError(path)
 
@@ -163,6 +167,8 @@ async def test_chat_uses_authenticated_identity_and_lms_context(
     assert state["assignments"][0]["title"] == "Bài giữa kỳ"
     assert state["assignments"][0]["id"] == "7:21"
     assert state["learning_resources"] == []
+    assert state["modules"] == []
+    assert state["planner_items"] == []
     assert not any(call.args[0].endswith("/content") for call in service_get.await_args_list)
     thread_id = config["configurable"]["thread_id"]
     assert thread_id.startswith("university-x:12:7:")
