@@ -30,6 +30,7 @@ export function InstructorOverviewPage() {
   const group = classGroups.find((g) => g.id === groupId) ?? classGroups[0] ?? { id: 'all', name: 'Cả lớp', n: 0 };
   const stats = groupStats[group.id];
   const pending = state.reviewQueue.filter((r) => r.status === 'pending' || r.status === 'in_review').length;
+  const lmsSummary = state.lmsInstructorSummary;
   const enough = group.n >= MIN_GROUP && !!stats;
 
   useEffect(() => {
@@ -98,6 +99,24 @@ export function InstructorOverviewPage() {
             <StatTile icon="users" label="Quy mô nhóm" value={group.n} hint="sinh viên" />
             <StatTile icon="inbox" label="Ca cần xem" value={pending} hint="trong Hàng chờ duyệt" />
           </div>
+
+          {lmsSummary && (
+            <Card className="mt-5" aria-labelledby="lms-course-structure">
+              <CardHeader
+                id="lms-course-structure"
+                title="Cấu trúc và hoạt động LMS"
+                subtitle="Tổng hợp cấp lớp; không hiển thị định danh sinh viên"
+              />
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+                <StatTile icon="chart" label="Sự kiện học" value={lmsSummary.analytics.events} hint={`${lmsSummary.analytics.active_users} người hoạt động`} />
+                <StatTile icon="clock" label="Thời lượng" value={Math.round(lmsSummary.analytics.duration_seconds / 3600)} hint="giờ ghi nhận" />
+                <StatTile icon="users" label="Lớp học phần" value={lmsSummary.sections.length} hint="section" />
+                <StatTile icon="users" label="Nhóm học" value={lmsSummary.groups.reduce((sum, item) => sum + item.teamCount, 0)} hint="team" />
+                <StatTile icon="book" label="Module" value={lmsSummary.modules.length} hint="module" />
+                <StatTile icon="clipboard" label="Có rubric" value={lmsSummary.rubricAssignments} hint="bài tập" />
+              </div>
+            </Card>
+          )}
 
           <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-2 lg:gap-6">
             <Card aria-labelledby="trend">

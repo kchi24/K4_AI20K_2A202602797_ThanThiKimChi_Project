@@ -30,6 +30,8 @@ class LearningGraphState(TypedDict, total=False):
     # --- 2. Dữ liệu đầu vào (Context) ---
     goals: list[dict[str, Any]]
     assignments: list[dict[str, Any]]
+    modules: list[dict[str, Any]]
+    planner_items: list[dict[str, Any]]
     priority_weights: dict[str, Any]
     availability: list[dict[str, Any]]
     unavailable_slots: list[dict[str, Any]]

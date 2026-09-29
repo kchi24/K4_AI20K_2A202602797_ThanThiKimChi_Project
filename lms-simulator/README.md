@@ -62,11 +62,16 @@ Các endpoint chính:
 |---|---|
 | `GET /api/pacewise/v1/courses` | Courses; có thể lọc theo `user_id` |
 | `GET /courses/{id}/enrollments` | Thành viên, vai trò và tiến độ |
-| `GET /courses/{id}/assignments` | Assignment và deadline |
-| `GET /courses/{id}/submissions` | Bài nộp, trạng thái, điểm, rubric |
-| `GET /courses/{id}/modules` | Module và module items |
+| `GET /courses/{id}/assignments?user_id=` | Assignment group, deadline hiệu lực, unlock/lock, rubric |
+| `GET /courses/{id}/submissions` | Lịch sử attempt, nhiều file, comment, reassigned/excused |
+| `GET /courses/{id}/modules?user_id=` | Prerequisite, completion rule và tiến độ item |
 | `GET /courses/{id}/content` | Syllabus, pages, quizzes, outcomes... |
-| `GET /courses/{id}/files` | Tài liệu để ingest vào RAG |
+| `GET /courses/{id}/files` | Version/checksum/folder/access scope cho RAG |
+| `GET /courses/{id}/sections` | Lớp học phần và thành viên |
+| `GET /courses/{id}/groups` | Group set, group và thành viên |
+| `GET /courses/{id}/analytics` | Participation, active time và page/module view |
+| `GET /users/{id}/planner` | To-do cá nhân và assignment-linked planner item |
+| `GET /courses/{id}/appointment-groups` | Slot tư vấn và reservation |
 | `GET /courses/{id}/grades` | Điểm hiện tại và lịch sử chấm |
 | `GET /courses/{id}/quizzes` | Câu hỏi và lượt làm bài |
 | `GET /courses/{id}/outcomes` | Outcome và alignment |
@@ -84,6 +89,17 @@ curl.exe -H "X-PaceWise-Key: $key" "http://localhost:8010/api/pacewise/v1/events
 
 `events` là durable outbox. PaceWise lưu ID cuối đã xử lý rồi gọi lại với
 `after_id`, nhờ đó có thể đồng bộ bù nếu tiến trình nhận sự kiện bị gián đoạn.
+
+## Canvas extensions phục vụ PaceWise
+
+- Deadline được phân giải theo thứ tự ưu tiên: `student > group > section > default`.
+- Assignment group hỗ trợ trọng số, drop điểm thấp/cao và nhiều grading type.
+- Module có prerequisite, completion requirement và progress riêng từng sinh viên.
+- Mỗi lần nộp tạo một immutable attempt; một attempt có thể chứa tối đa 10 file.
+- Rubric gồm criterion/rating và assessment theo từng criterion, không chỉ JSON tự do.
+- Tài liệu RAG có version, SHA-256 checksum, folder và access scope theo course,
+  section, group hoặc user.
+- Analytics và Planner là dữ liệu riêng, không suy diễn từ giao diện phía client.
 
 ## Launch từ Canvas sang PaceWise
 

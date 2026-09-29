@@ -17,6 +17,7 @@ export interface User {
 export interface CanvasSyncResult {
   courses: Course[];
   tasks: Task[];
+  courseData: Record<string, LMSCourseData>;
   guidance?: ClassGuidance[];
   syncedAt: string;
   source: string;
@@ -37,6 +38,7 @@ export type TaskStatus = 'todo' | 'in_progress' | 'done';
 
 export interface Task {
   id: string;
+  lmsAssignmentId?: string;
   title: string;
   courseId: string;
   /** Local date `YYYY-MM-DD`, deadline is 23:59 GMT+7 of that day. */
@@ -48,6 +50,130 @@ export interface Task {
   objective: string;
   /** True when the estimate came from PaceWise rather than the student. */
   estimateIsAssumption?: boolean;
+  dueAt?: string | null;
+  unlockAt?: string | null;
+  lockAt?: string | null;
+  overrideTarget?: 'student' | 'group' | 'section' | null;
+  pointsPossible?: number;
+  assignmentGroup?: LMSAssignmentGroup | null;
+  gradingType?: string;
+  peerReviews?: boolean;
+  groupCategoryId?: string | null;
+  rubric?: LMSRubric | null;
+  submission?: LMSSubmissionSummary;
+}
+
+export interface LMSAssignmentGroup {
+  id: string;
+  name: string;
+  weight: number;
+}
+
+export interface LMSRubricRating {
+  id: number;
+  description: string;
+  points: number;
+}
+
+export interface LMSRubricCriterion {
+  id: number;
+  description: string;
+  long_description?: string;
+  points: number;
+  position: number;
+  ratings: LMSRubricRating[];
+}
+
+export interface LMSRubric {
+  id: number;
+  title: string;
+  points_possible: number;
+  criteria: LMSRubricCriterion[];
+}
+
+export interface LMSSubmissionSummary {
+  state: string;
+  attempts: number;
+  late: boolean;
+  score: number | null;
+  feedback: string;
+  rubricAssessment: Record<string, unknown>;
+}
+
+export interface LMSModuleRequirement {
+  id: number;
+  module_item_id: number;
+  requirement_type: string;
+  min_score: number | null;
+  status: string;
+}
+
+export interface LMSModule {
+  id: number;
+  name: string;
+  position: number;
+  published: boolean;
+  sequential_progress: boolean;
+  prerequisite_module_ids: number[];
+  requirements: LMSModuleRequirement[];
+  items: Array<{ id: number; title: string; type: string; published: boolean }>;
+}
+
+export interface LMSResource {
+  id: number;
+  title: string;
+  kind: string;
+  source_url: string;
+  folder: { id: number; name: string } | null;
+  latest_version: {
+    version: number;
+    checksum_sha256: string;
+    content_type: string;
+    created_at: string;
+  } | null;
+  access_scope: Array<{ type: string; id: number }>;
+}
+
+export interface LMSPlannerItem {
+  id: number;
+  course_id: number;
+  assignment_id: number | null;
+  title: string;
+  due_at: string | null;
+  completed: boolean;
+}
+
+export interface LMSAppointmentGroup {
+  id: number;
+  title: string;
+  starts_at: string;
+  ends_at: string;
+  slot_minutes: number;
+  participants_per_slot: number;
+  reservations: Array<{ id: number; user_id: number; starts_at: string; ends_at: string }>;
+}
+
+export interface LMSAnalytics {
+  events: number;
+  active_users: number;
+  duration_seconds: number;
+  by_type: Record<string, number>;
+}
+
+export interface LMSCourseData {
+  courseId: string;
+  modules: LMSModule[];
+  resources: LMSResource[];
+  plannerItems: LMSPlannerItem[];
+  appointmentGroups: LMSAppointmentGroup[];
+  sections?: Array<{ id: number; name: string; member_ids: number[] }>;
+  groups?: Array<{
+    id: number;
+    name: string;
+    self_signup: boolean;
+    groups: Array<{ id: number; name: string; member_ids: number[] }>;
+  }>;
+  analytics?: LMSAnalytics;
 }
 
 /** `HH:MM` 24h clock. */
@@ -214,6 +340,15 @@ export interface GroupStats {
   weeklyCompletion: { week: string; rate: number; count: number; total: number }[];
   topics: { topic: string; needsSupport: number; n: number }[];
   atRisk: number;
+}
+
+export interface LMSInstructorSummary {
+  analytics: LMSAnalytics;
+  sections: Array<{ id: string; name: string; memberCount: number }>;
+  groups: Array<{ id: string; name: string; teamCount: number }>;
+  modules: Array<{ id: string; name: string; requirementCount: number }>;
+  weightedAssignments: number;
+  rubricAssignments: number;
 }
 
 export type ReviewStatus = 'pending' | 'in_review' | 'approved' | 'needs_review';

@@ -1,4 +1,5 @@
 import re
+from asyncio import gather
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -65,15 +66,31 @@ async def _load_lms_agent_context(
         raise HTTPException(status_code=403, detail="LMS enrollment no longer grants this course")
 
     normalized_assignments = []
+    active_modules: list[dict[str, Any]] = []
+    planner_items: list[dict[str, Any]] = []
+    if session.role == "student":
+        planner_items = await client.service_get(
+            f"/api/pacewise/v1/users/{session.user_id}/planner"
+        )
     for enrolled_course in allowed_courses:
         course_id = int(enrolled_course["id"])
-        assignments = await client.service_get(f"/api/pacewise/v1/courses/{course_id}/assignments")
-        submissions = []
-        if session.role == "student":
-            submissions = await client.service_get(
+        scoped_params = {"user_id": session.user_id} if session.role == "student" else None
+        assignments, submissions, modules = await gather(
+            client.service_get(
+                f"/api/pacewise/v1/courses/{course_id}/assignments",
+                scoped_params,
+            ),
+            client.service_get(
                 f"/api/pacewise/v1/courses/{course_id}/submissions",
-                {"user_id": session.user_id},
-            )
+                scoped_params,
+            ),
+            client.service_get(
+                f"/api/pacewise/v1/courses/{course_id}/modules",
+                scoped_params,
+            ),
+        )
+        if course_id == session.course_id:
+            active_modules = modules
         submissions_by_assignment = {int(item["assignment_id"]): item for item in submissions}
         for item in assignments:
             points = float(item.get("points_possible") or 5)
@@ -86,7 +103,15 @@ async def _load_lms_agent_context(
                     "title": item["title"],
                     "description": _plain_text(item.get("description")),
                     "deadline": item.get("due_at"),
+                    "unlock_at": item.get("unlock_at"),
+                    "lock_at": item.get("lock_at"),
+                    "override_target": item.get("override_target"),
                     "estimated_hours": round(max(0.5, min(4.0, points * 0.2)), 2),
+                    "points_possible": points,
+                    "assignment_group": item.get("assignment_group"),
+                    "grading_type": item.get("grading_type"),
+                    "peer_reviews": bool(item.get("peer_reviews")),
+                    "rubric": item.get("rubric"),
                     "submission": submissions_by_assignment.get(int(item["id"])),
                 }
             )
@@ -99,6 +124,8 @@ async def _load_lms_agent_context(
         "course_code": course_code,
         "role": session.role,
         "assignments": normalized_assignments,
+        "modules": active_modules,
+        "planner_items": planner_items,
         # The request path performs retrieval only. Raw LMS content is ingested
         # asynchronously by the dedicated worker and never embedded here.
         "learning_resources": [],

@@ -64,6 +64,31 @@ export function TaskDetailPage() {
                 </dd>
               </div>
             </div>
+            {task.assignmentGroup && (
+              <div className="flex gap-3">
+                <Icon name="chart" size={20} className="mt-0.5 text-muted" />
+                <div>
+                  <dt className="caption">Nhóm điểm</dt>
+                  <dd className="font-medium">
+                    {task.assignmentGroup.name} · trọng số {task.assignmentGroup.weight}%
+                  </dd>
+                </div>
+              </div>
+            )}
+            {(task.unlockAt || task.lockAt) && (
+              <div className="flex gap-3">
+                <Icon name="lock" size={20} className="mt-0.5 text-muted" />
+                <div>
+                  <dt className="caption">Khoảng thời gian làm bài</dt>
+                  <dd className="font-medium">
+                    {task.unlockAt ? new Date(task.unlockAt).toLocaleString('vi-VN') : 'Mở ngay'}
+                    {' – '}
+                    {task.lockAt ? new Date(task.lockAt).toLocaleString('vi-VN') : 'Không khóa'}
+                  </dd>
+                  {task.overrideTarget && <p className="caption">Deadline riêng theo {task.overrideTarget}</p>}
+                </div>
+              </div>
+            )}
             <div className="flex gap-3">
               <Icon name="flag" size={20} className="mt-0.5 text-muted" />
               <div>
@@ -82,6 +107,49 @@ export function TaskDetailPage() {
               </div>
             </div>
           </dl>
+        </Card>
+        <Card aria-labelledby="submission">
+          <CardHeader id="submission" title="Bài nộp trên LMS" />
+          <dl className="grid grid-cols-2 gap-3">
+            <div className="rounded-xl bg-canvas p-3">
+              <dt className="caption">Trạng thái</dt>
+              <dd className="font-semibold">{task.submission?.state ?? 'unsubmitted'}</dd>
+            </div>
+            <div className="rounded-xl bg-canvas p-3">
+              <dt className="caption">Số lần nộp</dt>
+              <dd className="font-semibold tabular-nums">{task.submission?.attempts ?? 0}</dd>
+            </div>
+            <div className="rounded-xl bg-canvas p-3">
+              <dt className="caption">Điểm</dt>
+              <dd className="font-semibold tabular-nums">
+                {task.submission?.score ?? 'Chưa chấm'}{task.submission?.score != null ? ` / ${task.pointsPossible ?? 0}` : ''}
+              </dd>
+            </div>
+            <div className="rounded-xl bg-canvas p-3">
+              <dt className="caption">Nộp trễ</dt>
+              <dd className="font-semibold">{task.submission?.late ? 'Có' : 'Không'}</dd>
+            </div>
+          </dl>
+          {task.submission?.feedback && <p className="mt-3 text-sm text-muted">Phản hồi: {task.submission.feedback}</p>}
+        </Card>
+        <Card aria-labelledby="rubric">
+          <CardHeader
+            id="rubric"
+            title="Rubric đánh giá"
+            subtitle={task.rubric ? `${task.rubric.points_possible} điểm` : undefined}
+          />
+          {task.rubric ? (
+            <ul className="space-y-2">
+              {task.rubric.criteria.map((criterion) => (
+                <li key={criterion.id} className="flex justify-between gap-3 rounded-xl bg-canvas px-3 py-2.5">
+                  <span>{criterion.description}</span>
+                  <strong className="shrink-0 tabular-nums">{criterion.points} điểm</strong>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-muted">Bài tập này chưa gắn rubric.</p>
+          )}
         </Card>
         <Card aria-labelledby="obj">
           <CardHeader id="obj" title="Mục tiêu" />

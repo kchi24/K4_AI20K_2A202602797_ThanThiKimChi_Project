@@ -7,19 +7,19 @@ WORKDIR /app
 
 COPY requirements.txt ./
 # The simulator only needs the shared API section of the single requirements file.
-RUN sed '/^# Backend-only runtime$/,$d' requirements.txt > /tmp/requirements-lms.txt \
+RUN sed -e 's/\r$//' -e '/^# Backend-only runtime$/,$d' requirements.txt > /tmp/requirements-lms.txt \
     && pip install --no-cache-dir -r /tmp/requirements-lms.txt
-
-COPY lms-simulator/app ./app
-COPY lms-simulator/static ./static
-COPY lms-simulator/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gosu \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home appuser \
-    && chown -R appuser:appuser /app \
-    && sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+    && useradd --create-home appuser
+
+COPY --chown=appuser:appuser lms-simulator/app ./app
+COPY --chown=appuser:appuser lms-simulator/static ./static
+COPY lms-simulator/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
     && chmod 0755 /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8010

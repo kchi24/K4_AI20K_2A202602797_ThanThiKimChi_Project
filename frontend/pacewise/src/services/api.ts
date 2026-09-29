@@ -6,6 +6,7 @@ import type {
   ClassGuidance,
   ClassGroup,
   GroupStats,
+  LMSInstructorSummary,
   Drift,
   Plan,
   PlanDraft,
@@ -433,6 +434,7 @@ export interface InstructorData {
   audit: AuditEntry[];
   guidance: ClassGuidance[];
   privacy: { minimumGroupSize: number; containsDirectIdentifiers: boolean };
+  lmsSummary: LMSInstructorSummary | null;
 }
 
 export async function fetchInstructorData(): Promise<InstructorData> {

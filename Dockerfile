@@ -5,7 +5,7 @@ WORKDIR /app
 
 COPY requirements.txt .
 # Keep one dependency source in Git while excluding dev/eval tools from the image.
-RUN sed '/^# Development, evaluation, and load testing$/,$d' requirements.txt > /tmp/requirements-runtime.txt \
+RUN sed -e 's/\r$//' -e '/^# Development, evaluation, and load testing$/,$d' requirements.txt > /tmp/requirements-runtime.txt \
     && pip install --no-cache-dir --user -r /tmp/requirements-runtime.txt
 
 # ---- Stage 2: Production ----
