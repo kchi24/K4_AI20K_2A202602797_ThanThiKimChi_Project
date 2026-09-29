@@ -33,7 +33,7 @@ flowchart TD
     Q --> O
 ```
 
-Coordinator chạy lớp guardrail xác định trước khi gọi model. Khi intent rõ, bộ định tuyến xác định được ưu tiên để giảm latency và tránh phụ thuộc cách diễn đạt của LLM. Mỗi node ghi audit event chỉ gồm tên node, workflow, kết quả, latency và thời gian; không ghi prompt thô.
+Coordinator chạy rule nhanh trước, gọi semantic classifier cho ca mơ hồ và áp output policy trước khi trả kết quả. Khi intent rõ, bộ định tuyến xác định được ưu tiên để giảm latency và tránh phụ thuộc cách diễn đạt của LLM. Mỗi node ghi audit event chỉ gồm tên node, workflow, kết quả, latency và thời gian; không ghi prompt thô.
 
 ## 2. Hợp đồng của từng workflow
 
@@ -46,7 +46,7 @@ Coordinator chạy lớp guardrail xác định trước khi gọi model. Khi in
 | Recover | plan hiện tại, milestone, assignment | ít nhất hai phương án, đủ schema, bảo vệ deadline | snapshot + phương án; chưa sửa lịch trước xác nhận |
 | Reflect | progress metrics, lịch sử tuần | draft có điều hiệu quả, nguyên nhân, một điều chỉnh, evidence | điều chỉnh tuần sau; chỉ áp dụng sau xác nhận |
 
-API dùng PaceWise session trong cookie `HttpOnly` và bắt buộc CSRF cho request ghi dữ liệu. Backend tự lấy `user_id`, vai trò, môn đang chọn và `thread_id` từ session phía server; client không được tự chọn danh tính hoặc phạm vi course. Trước khi chạy graph, backend kiểm tra enrollment rồi nạp assignment, submission và tài liệu đúng môn từ LMS. Lỗi nội bộ không được trả nguyên văn cho client.
+API dùng PaceWise session trong cookie `HttpOnly` và bắt buộc CSRF cho request ghi dữ liệu. Backend tự lấy `user_id`, vai trò và môn đang chọn từ session; `thread_id` được dựng theo `institution:user:course:learning-cycle`. Client không được tự chọn danh tính hoặc phạm vi course. Backend kiểm tra enrollment rồi nạp assignment/submission; học liệu thô được worker ingest bất đồng bộ và request QA chỉ retrieval từ namespace Qdrant đã phân quyền. Lỗi nội bộ không được trả nguyên văn cho client.
 
 ## 3. Test tự động
 
@@ -59,9 +59,9 @@ python -m pytest tests/ -q
 
 Test bao phủ routing, guardrail, prompt injection, yêu cầu làm hộ, RAG theo course, citation, plan constraint, overlap/timezone, HITL, rubric, assessment escalation, recovery, reflection, xác thực PaceWise, phân quyền course và API. CI yêu cầu line coverage của `src.agents` tối thiểu 80%.
 
-Lần chạy local ngày 28/09/2026 đạt **116 test backend/agent pass** và **4 test LMS simulator pass**. CI dùng `pytest-cov` làm cổng chính thức và sẽ fail nếu line coverage của `src.agents` dưới 80%.
+Lần chạy local ngày 29/09/2026 đạt **147 test backend/agent pass**, **81,15% coverage `src.agents`** và **4 test LMS simulator pass**. CI dùng `pytest-cov` làm cổng chính thức và sẽ fail nếu line coverage của `src.agents` dưới 80%.
 
-CI dùng `requirements-ci.txt` để không tải Qdrant/FastEmbed/Chroma trong unit test. Adapter vector được kiểm thử bằng fake module; kiểm thử tích hợp Qdrant thật phải chạy ở job/service riêng.
+Toàn bộ dependency Python của backend, LMS simulator, test, eval và load test được quản lý tập trung trong `requirements.txt`. Hai Dockerfile chỉ cài section runtime tương ứng để tránh đưa pytest/RAGAS/Locust hoặc AI stack vào image không cần chúng. Adapter vector vẫn được kiểm thử bằng fake module; kiểm thử tích hợp Qdrant thật phải chạy ở job/service riêng.
 
 ## 4. Eval định lượng
 
@@ -70,9 +70,15 @@ Chạy:
 ```powershell
 python -m evals.run_agent_eval
 python -m evals.run_agent_eval --output evals/reports/latest.json
+python -m evals.run_safety_eval
 ```
 
 Ba dataset chính đều có 120 mẫu; routing có thêm 120 mẫu hỗ trợ. Kết quả baseline đã lưu tại `evals/reports/deterministic-2026-09-28.json`.
+
+Guardrail có thêm `safety_adversarial_v1.jsonl` gồm 100 mẫu tĩnh độc lập với regex trong code,
+bao phủ tiếng lóng, Anh–Việt, yêu cầu gián tiếp, prompt injection trong tài liệu và intent hỗn hợp.
+Safety eval có gọi semantic classifier nên chỉ báo cáo kết quả khi chạy bằng model credential thật;
+CI mặc định chỉ xác minh schema, số mẫu và các unit test của ba lớp policy.
 
 | Metric | Ngưỡng P0 | Baseline xác định |
 |---|---:|---:|
@@ -96,14 +102,14 @@ credential của model judge; không chạy trong CI xác định và không đ�
 có dataset pilot được SME gán nhãn.
 
 ```powershell
-pip install -r requirements-eval.txt
+pip install -r requirements.txt
 python evals/run_ragas_eval.py evals/datasets/rag-pilot.jsonl
 ```
 
 ### Load test và quan sát hệ thống
 
 ```powershell
-pip install -r requirements-load.txt
+pip install -r requirements.txt
 locust -f load_tests/locustfile.py --host http://localhost:5173 --headless -u 1000 -r 50 -t 5m --csv evals/reports/load-1000
 docker compose --profile observability up -d
 ```

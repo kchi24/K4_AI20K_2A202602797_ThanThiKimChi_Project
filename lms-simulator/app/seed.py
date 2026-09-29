@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.extension_seed import seed_learning_extensions
 from app.models import (
     Assignment,
     CalendarEvent,
@@ -32,6 +33,7 @@ def seed_demo_data(db: Session) -> None:
     if db.scalar(select(func.count(User.id))):
         seed_canvas_features(db)
         seed_pacewise_data(db)
+        seed_learning_extensions(db)
         return
 
     demo_password = hash_password("demo123")
@@ -186,6 +188,7 @@ def seed_demo_data(db: Session) -> None:
     db.commit()
     seed_canvas_features(db)
     seed_pacewise_data(db)
+    seed_learning_extensions(db)
 
 
 def seed_canvas_features(db: Session) -> None:

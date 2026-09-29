@@ -11,9 +11,20 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.account_api import router as account_router
 from app.db import get_db, initialize_database
 from app.extended_api import router as extended_router
 from app.integration_api import router as integration_router
+from app.learning_api import (
+    assignment_extension_payload,
+    can_access_resource,
+    effective_assignment_window,
+    record_submission_attempt,
+    resource_extension_payload,
+)
+from app.learning_api import (
+    router as learning_router,
+)
 from app.models import (
     Assignment,
     AuthSession,
@@ -155,7 +166,8 @@ def assignment_state(assignment: Assignment, submission: Submission | None) -> s
     if submission and submission.workflow_state == "submitted":
         return "late" if submission.late else "submitted"
     now = datetime.now(UTC)
-    if assignment.due_at < now:
+    due_at = assignment.due_at.replace(tzinfo=UTC) if assignment.due_at.tzinfo is None else assignment.due_at
+    if due_at < now:
         return "missing"
     return "upcoming"
 
@@ -180,6 +192,24 @@ def serialize_assignment(
         "submitted_at": submission.submitted_at.isoformat() if submission and submission.submitted_at else None,
         "score": submission.score if submission else None,
     }
+
+
+def serialize_effective_assignment(
+    db: Session,
+    assignment: Assignment,
+    course: Course,
+    submission: Submission | None,
+    user_id: int,
+) -> dict:
+    result = serialize_assignment(assignment, course, submission)
+    extension = assignment_extension_payload(db, assignment, user_id)
+    result.update(extension)
+    if not submission or submission.workflow_state != "submitted":
+        effective_due = datetime.fromisoformat(extension["due_at"])
+        if effective_due.tzinfo is None:
+            effective_due = effective_due.replace(tzinfo=UTC)
+        result["state"] = "missing" if effective_due < datetime.now(UTC) else "upcoming"
+    return result
 
 
 @app.get("/api/health")
@@ -282,7 +312,10 @@ def dashboard(user_id: int, db: Session = Depends(get_db)) -> dict:
         .where(Enrollment.user_id == user.id)
         .order_by(Assignment.due_at)
     ).all()
-    assignments = [serialize_assignment(*row) for row in assignment_rows]
+    assignments = [
+        serialize_effective_assignment(db, assignment, course, submission, user.id)
+        for assignment, course, submission in assignment_rows
+    ]
     if user.role == "student":
         pending = [item for item in assignments if item["state"] not in {"submitted", "late"}]
         recent_feedback = [item for item in assignments if item["score"] is not None]
@@ -317,7 +350,11 @@ def course_detail(course_id: int, user_id: int = Query(...), db: Session = Depen
         submission.assignment_id: submission
         for submission in db.scalars(select(Submission).where(Submission.user_id == user.id)).all()
     }
-    resources = db.scalars(select(Resource).where(Resource.course_id == course.id)).all()
+    resources = [
+        resource
+        for resource in db.scalars(select(Resource).where(Resource.course_id == course.id)).all()
+        if can_access_resource(db, resource, user.id)
+    ]
     course_enrollments = db.scalars(
         select(Enrollment).where(Enrollment.course_id == course.id).order_by(Enrollment.role, Enrollment.id)
     ).all()
@@ -350,7 +387,14 @@ def course_detail(course_id: int, user_id: int = Query(...), db: Session = Depen
             "student_count": student_count or 0,
         },
         "assignments": [
-            serialize_assignment(assignment, course, submission_map.get(assignment.id)) for assignment in assignments
+            serialize_effective_assignment(
+                db,
+                assignment,
+                course,
+                submission_map.get(assignment.id),
+                user.id,
+            )
+            for assignment in assignments
         ],
         "resources": [
             {
@@ -358,6 +402,7 @@ def course_detail(course_id: int, user_id: int = Query(...), db: Session = Depen
                 "title": resource.title,
                 "kind": resource.kind,
                 "source_url": resource.source_url,
+                **resource_extension_payload(db, resource),
             }
             for resource in resources
         ],
@@ -413,13 +458,22 @@ def submit_assignment(
         )
     )
     now = datetime.now(UTC)
+    due_at, unlock_at, lock_at, _ = effective_assignment_window(db, assignment, user.id)
+    due_at = due_at.replace(tzinfo=UTC) if due_at.tzinfo is None else due_at
+    unlock_at = unlock_at.replace(tzinfo=UTC) if unlock_at and unlock_at.tzinfo is None else unlock_at
+    lock_at = lock_at.replace(tzinfo=UTC) if lock_at and lock_at.tzinfo is None else lock_at
+    if unlock_at and now < unlock_at:
+        raise HTTPException(status_code=409, detail="Assignment is not available yet")
+    if lock_at and now > lock_at:
+        raise HTTPException(status_code=409, detail="Assignment is locked")
     if not submission:
         submission = Submission(assignment_id=assignment.id, user_id=user.id)
         db.add(submission)
     submission.submitted_at = now
     submission.workflow_state = "submitted"
-    submission.late = now > assignment.due_at
+    submission.late = now > due_at
     db.flush()
+    record_submission_attempt(db, submission)
     record_change(
         db,
         actor_user_id=user.id,
@@ -879,6 +933,8 @@ def canvas_assignments(
     ]
 
 
+app.include_router(account_router)
+app.include_router(learning_router)
 app.include_router(extended_router)
 app.include_router(integration_router)
 

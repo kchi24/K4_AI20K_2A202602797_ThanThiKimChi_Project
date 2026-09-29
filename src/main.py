@@ -1,4 +1,3 @@
-import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -6,6 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 
 from src.agents.graph import runtime_agent
+from src.api.calendar_export import router as calendar_export_router
+from src.api.google_calendar import router as google_calendar_router
 from src.api.lms_integration import router as lms_router
 from src.api.routes import router
 from src.api.workspace import router as workspace_router
@@ -13,23 +14,18 @@ from src.config import get_settings
 from src.db import initialize_database
 from src.middleware import ProductionSecurityMiddleware
 from src.observability import render_prometheus
-from src.services.sync_worker import poll_lms_events
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
     initialize_database()
-    stop_sync = asyncio.Event()
-    sync_task = asyncio.create_task(poll_lms_events(settings, stop_sync))
     print(f"Starting {settings.app_name} in {settings.app_env} mode")
     try:
         async with runtime_agent(settings) as durable_agent:
             app.state.agent = durable_agent
             yield
     finally:
-        stop_sync.set()
-        await sync_task
         print("Shutting down...")
 
 
@@ -53,6 +49,8 @@ app.add_middleware(
 app.include_router(router, prefix="/api/v1")
 app.include_router(lms_router, prefix="/api/v1")
 app.include_router(workspace_router, prefix="/api/v1")
+app.include_router(google_calendar_router, prefix="/api/v1")
+app.include_router(calendar_export_router, prefix="/api/v1")
 
 
 @app.get("/health")

@@ -1,4 +1,5 @@
 import json
+from asyncio import gather
 from collections import defaultdict
 from datetime import UTC, datetime
 
@@ -191,6 +192,104 @@ def _task_priority(due_at: str | None) -> str:
         return "medium"
 
 
+def _submission_status(submission: dict | None) -> dict:
+    if not submission:
+        return {
+            "state": "unsubmitted",
+            "attempts": 0,
+            "late": False,
+            "score": None,
+            "feedback": "",
+            "rubricAssessment": {},
+        }
+    return {
+        "state": submission.get("workflow_state") or "unsubmitted",
+        "attempts": len(submission.get("history") or []),
+        "late": bool(submission.get("late")),
+        "score": submission.get("score"),
+        "feedback": submission.get("feedback") or "",
+        "rubricAssessment": submission.get("rubric") or {},
+    }
+
+
+def _task_payload(course_id: int, assignment: dict, submission: dict | None) -> dict:
+    due_at = assignment.get("due_at")
+    points = float(assignment.get("points_possible") or 5)
+    group = assignment.get("assignment_group") or {}
+    return {
+        "id": f"{course_id}:{assignment['id']}",
+        "lmsAssignmentId": str(assignment["id"]),
+        "title": assignment["title"],
+        "courseId": str(course_id),
+        "deadline": due_at[:10] if due_at else datetime.now(UTC).date().isoformat(),
+        "dueAt": due_at,
+        "unlockAt": assignment.get("unlock_at"),
+        "lockAt": assignment.get("lock_at"),
+        "overrideTarget": assignment.get("override_target"),
+        "estimateMin": max(30, min(240, int(points * 12))),
+        "loggedMin": 0,
+        "status": _task_status(submission),
+        "priority": _task_priority(due_at),
+        "objective": assignment.get("description") or "Hoàn thành yêu cầu của bài tập trên Canvas.",
+        "estimateIsAssumption": True,
+        "pointsPossible": points,
+        "assignmentGroup": {
+            "id": str(group.get("id")),
+            "name": group.get("name") or "",
+            "weight": float(group.get("weight") or 0),
+        }
+        if group
+        else None,
+        "gradingType": assignment.get("grading_type") or "points",
+        "peerReviews": bool(assignment.get("peer_reviews")),
+        "groupCategoryId": str(assignment["group_category_id"])
+        if assignment.get("group_category_id")
+        else None,
+        "rubric": assignment.get("rubric"),
+        "submission": _submission_status(submission),
+    }
+
+
+async def _course_snapshot(
+    client: LMSClient,
+    course: dict,
+    session: SessionContext,
+    planner_items: list[dict],
+) -> tuple[list[dict], dict]:
+    course_id = int(course["id"])
+    user_params = {"user_id": session.user_id}
+    scoped_params = user_params if session.role == "student" else None
+    assignments, submissions, modules, files, appointments = await gather(
+        client.service_get(f"/api/pacewise/v1/courses/{course_id}/assignments", scoped_params),
+        client.service_get(f"/api/pacewise/v1/courses/{course_id}/submissions", scoped_params),
+        client.service_get(f"/api/pacewise/v1/courses/{course_id}/modules", scoped_params),
+        client.service_get(f"/api/pacewise/v1/courses/{course_id}/files", user_params),
+        client.service_get(f"/api/pacewise/v1/courses/{course_id}/appointment-groups"),
+    )
+    submissions_by_assignment = {int(item["assignment_id"]): item for item in submissions}
+    tasks = [
+        _task_payload(course_id, item, submissions_by_assignment.get(int(item["id"])))
+        for item in assignments
+    ]
+    snapshot = {
+        "courseId": str(course_id),
+        "modules": modules,
+        "resources": files,
+        "plannerItems": [
+            item for item in planner_items if int(item.get("course_id") or 0) == course_id
+        ],
+        "appointmentGroups": appointments,
+    }
+    if session.role == "instructor":
+        sections, groups, analytics = await gather(
+            client.service_get(f"/api/pacewise/v1/courses/{course_id}/sections"),
+            client.service_get(f"/api/pacewise/v1/courses/{course_id}/groups"),
+            client.service_get(f"/api/pacewise/v1/courses/{course_id}/analytics"),
+        )
+        snapshot.update({"sections": sections, "groups": groups, "analytics": analytics})
+    return tasks, snapshot
+
+
 def _guidance_payload(actions: list[InstructorAction]) -> list[dict]:
     result = []
     for item in reversed(actions):
@@ -223,34 +322,16 @@ async def _sync_payload(session: SessionContext, settings: Settings, db: Session
         }
         for course in allowed_courses
     ]
-    tasks = []
-    for course in allowed_courses:
-        course_id = int(course["id"])
-        assignments = await client.service_get(f"/api/pacewise/v1/courses/{course_id}/assignments")
-        submission_params = {"user_id": session.user_id} if session.role == "student" else None
-        submissions = await client.service_get(
-            f"/api/pacewise/v1/courses/{course_id}/submissions",
-            submission_params,
-        )
-        by_assignment = {int(item["assignment_id"]): item for item in submissions}
-        for item in assignments:
-            submission = by_assignment.get(int(item["id"]))
-            due_at = item.get("due_at")
-            points = float(item.get("points_possible") or 5)
-            tasks.append(
-                {
-                    "id": f"{course_id}:{item['id']}",
-                    "title": item["title"],
-                    "courseId": str(course_id),
-                    "deadline": due_at[:10] if due_at else datetime.now(UTC).date().isoformat(),
-                    "estimateMin": max(30, min(240, int(points * 12))),
-                    "loggedMin": 0,
-                    "status": _task_status(submission),
-                    "priority": _task_priority(due_at),
-                    "objective": item.get("description") or "Hoàn thành yêu cầu của bài tập trên Canvas.",
-                    "estimateIsAssumption": True,
-                }
-            )
+    planner_items = (
+        await client.service_get(f"/api/pacewise/v1/users/{session.user_id}/planner")
+        if session.role == "student"
+        else []
+    )
+    synchronized = await gather(
+        *[_course_snapshot(client, course, session, planner_items) for course in allowed_courses]
+    )
+    tasks = [task for course_tasks, _snapshot in synchronized for task in course_tasks]
+    course_data = {snapshot["courseId"]: snapshot for _tasks, snapshot in synchronized}
     guidance_actions = db.scalars(
         select(InstructorAction)
         .where(
@@ -263,6 +344,7 @@ async def _sync_payload(session: SessionContext, settings: Settings, db: Session
         "courses": ui_courses,
         "tasks": tasks,
         "guidance": _guidance_payload(list(guidance_actions)),
+        "courseData": course_data,
         "syncedAt": datetime.now(UTC).isoformat(),
         "source": "canvas-lms-simulator",
         "activeCourseId": str(session.course_id),
@@ -286,11 +368,35 @@ async def course_resource(
     settings: Settings = Depends(get_settings),
 ):
     require_course(course_id, session)
-    allowed = {"assignments", "submissions", "modules", "content", "files", "grades", "quizzes", "outcomes"}
+    allowed = {
+        "assignments",
+        "submissions",
+        "modules",
+        "content",
+        "files",
+        "grades",
+        "quizzes",
+        "outcomes",
+        "sections",
+        "groups",
+        "analytics",
+        "resource-folders",
+        "appointment-groups",
+    }
     if resource not in allowed:
         raise HTTPException(status_code=404, detail="Unsupported LMS resource")
     params = None
-    if resource in {"submissions", "grades", "quizzes", "outcomes"} and session.role == "student":
+    if resource in {"sections", "groups", "analytics"} and session.role != "instructor":
+        raise HTTPException(status_code=403, detail="Instructor role required")
+    if resource in {
+        "assignments",
+        "submissions",
+        "modules",
+        "files",
+        "grades",
+        "quizzes",
+        "outcomes",
+    } and session.role == "student":
         params = {"user_id": session.user_id}
     return await _client(settings).service_get(f"/api/pacewise/v1/courses/{course_id}/{resource}", params)
 
@@ -314,14 +420,31 @@ async def instructor_overview(
 ) -> dict:
     client = _client(settings)
     course_id = session.course_id
-    enrollments = await client.service_get(f"/api/pacewise/v1/courses/{course_id}/enrollments")
+    (
+        enrollments,
+        assignments,
+        submissions,
+        evidence,
+        quizzes,
+        audits,
+        analytics,
+        sections,
+        groups,
+        modules,
+    ) = await gather(
+        client.service_get(f"/api/pacewise/v1/courses/{course_id}/enrollments"),
+        client.service_get(f"/api/pacewise/v1/courses/{course_id}/assignments"),
+        client.service_get(f"/api/pacewise/v1/courses/{course_id}/submissions"),
+        client.service_get("/api/pacewise/v1/learning-evidence", {"course_id": course_id, "limit": 500}),
+        client.service_get(f"/api/pacewise/v1/courses/{course_id}/quizzes"),
+        client.service_get("/api/pacewise/v1/audit-logs", {"course_id": course_id, "limit": 100}),
+        client.service_get(f"/api/pacewise/v1/courses/{course_id}/analytics"),
+        client.service_get(f"/api/pacewise/v1/courses/{course_id}/sections"),
+        client.service_get(f"/api/pacewise/v1/courses/{course_id}/groups"),
+        client.service_get(f"/api/pacewise/v1/courses/{course_id}/modules"),
+    )
     students = [item for item in enrollments if item.get("role") == "student"]
     student_ids = {int(item["user_id"]) for item in students}
-    assignments = await client.service_get(f"/api/pacewise/v1/courses/{course_id}/assignments")
-    submissions = await client.service_get(f"/api/pacewise/v1/courses/{course_id}/submissions")
-    evidence = await client.service_get("/api/pacewise/v1/learning-evidence", {"course_id": course_id, "limit": 500})
-    quizzes = await client.service_get(f"/api/pacewise/v1/courses/{course_id}/quizzes")
-    audits = await client.service_get("/api/pacewise/v1/audit-logs", {"course_id": course_id, "limit": 100})
     saved_actions = db.scalars(
         select(InstructorAction)
         .where(InstructorAction.course_id == course_id)
@@ -370,6 +493,7 @@ async def instructor_overview(
                 "containsDirectIdentifiers": False,
                 "suppressed": True,
             },
+            "lmsSummary": None,
         }
     rate = len(on_time_ids) / total_students if total_students else 0
     stats = {
@@ -449,5 +573,30 @@ async def instructor_overview(
         "assessments": assessments,
         "audit": audit,
         "guidance": guidance,
+        "lmsSummary": {
+            "analytics": analytics,
+            "sections": [
+                {"id": str(item["id"]), "name": item["name"], "memberCount": len(item.get("member_ids") or [])}
+                for item in sections
+            ],
+            "groups": [
+                {
+                    "id": str(category["id"]),
+                    "name": category["name"],
+                    "teamCount": len(category.get("groups") or []),
+                }
+                for category in groups
+            ],
+            "modules": [
+                {
+                    "id": str(item["id"]),
+                    "name": item["name"],
+                    "requirementCount": len(item.get("requirements") or []),
+                }
+                for item in modules
+            ],
+            "weightedAssignments": sum(1 for item in assignments if item.get("assignment_group")),
+            "rubricAssignments": sum(1 for item in assignments if item.get("rubric")),
+        },
         "privacy": {"minimumGroupSize": 5, "containsDirectIdentifiers": False},
     }

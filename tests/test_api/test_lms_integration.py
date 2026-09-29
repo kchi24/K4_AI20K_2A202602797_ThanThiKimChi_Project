@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import HTTPException
 
+from src.api.lms_integration import _task_payload
 from src.api.workspace import check_login_rate_limit, record_failed_login
 from src.config import Settings, get_settings
 from src.db import SessionLocal
@@ -144,6 +145,41 @@ def test_login_rate_limit_is_shared_in_database():
         with pytest.raises(HTTPException) as blocked:
             check_login_rate_limit(request, "student@example.edu", db, settings)
     assert blocked.value.status_code == 429
+
+
+def test_task_payload_preserves_effective_lms_policy_and_evidence():
+    assignment = {
+        "id": 5,
+        "title": "Capstone",
+        "description": "Explain the trade-offs",
+        "due_at": "2026-10-10T23:59:00+07:00",
+        "unlock_at": "2026-10-01T08:00:00+07:00",
+        "lock_at": "2026-10-11T00:00:00+07:00",
+        "override_target": "student",
+        "points_possible": 20,
+        "assignment_group": {"id": 2, "name": "Projects", "weight": 60},
+        "grading_type": "points",
+        "peer_reviews": True,
+        "group_category_id": 9,
+        "rubric": {"id": 4, "title": "Reasoning", "criteria": []},
+    }
+    submission = {
+        "workflow_state": "submitted",
+        "late": False,
+        "score": 17,
+        "feedback": "Good evidence",
+        "rubric": {"reasoning": 8},
+        "history": [{"attempt_number": 1}, {"attempt_number": 2}],
+    }
+
+    task = _task_payload(7, assignment, submission)
+
+    assert task["id"] == "7:5"
+    assert task["deadline"] == "2026-10-10"
+    assert task["overrideTarget"] == "student"
+    assert task["assignmentGroup"] == {"id": "2", "name": "Projects", "weight": 60.0}
+    assert task["submission"]["attempts"] == 2
+    assert task["rubric"]["title"] == "Reasoning"
 
 
 def test_settings_can_read_mounted_secret_files(tmp_path):

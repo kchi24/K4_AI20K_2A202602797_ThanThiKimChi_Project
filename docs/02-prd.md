@@ -50,6 +50,7 @@ P0 có hai bề mặt:
 - Canvas fixture có schema tương thích adapter REST.
 - Đăng nhập mô phỏng, phân quyền hai vai trò.
 - Kế hoạch tuần có milestone, thời lượng, thứ tự, deadline và giải thích ưu tiên.
+- Lịch PaceWise độc lập, Google Calendar OAuth tùy chọn và xuất `.ics` không cần tài khoản ngoài.
 - Cập nhật thời gian thực tế và trạng thái công việc.
 - Phát hiện nguy cơ theo quy tắc xác định trước; AI chỉ giải thích.
 - Tạo 2–3 phương án phục hồi và yêu cầu sinh viên xác nhận.
@@ -92,6 +93,8 @@ P0 có hai bề mặt:
 | US-10 | P0 | Tôi muốn nhìn lại tuần học | Reflect so sánh dự kiến–thực tế và lưu một điều chỉnh cụ thể |
 | US-11 | P0 | Là giảng viên, tôi muốn thấy xu hướng lớp | Chỉ hiện nhóm n≥5, không lộ chat/phản tư thô |
 | US-12 | P0 | Tôi muốn duyệt câu hỏi và ca không chắc chắn | Có hàng chờ, thông tin giải thích và audit quyết định |
+| US-13 | P0 | Tôi muốn dùng lịch bận thực tế khi lập kế hoạch | Có thể đọc busy/free từ Google; không đọc tiêu đề/nội dung sự kiện; email Google có thể khác email trường |
+| US-14 | P0 | Tôi không muốn cấp quyền Google nhưng vẫn muốn dùng lịch ngoài | Tải được `.ics` từ kế hoạch đã lưu và import vào ứng dụng lịch hỗ trợ chuẩn này |
 
 ## 5. Luồng nghiệp vụ chi tiết
 
@@ -198,6 +201,7 @@ Luồng:
 | Hành động | Rủi ro | Người xác nhận | Thông tin phải thấy |
 |---|---|---|---|
 | Lưu kế hoạch tuần | Ghi sai lịch cá nhân | Sinh viên | Toàn bộ slot, xung đột, deadline, giả định |
+| Tạo sự kiện Google | Ghi dữ liệu ra dịch vụ ngoài | Sinh viên | Tài khoản đang kết nối, số study block, thời gian và nút hủy |
 | Phục hồi kế hoạch | Dời việc quan trọng | Sinh viên | Diff trước–sau, đánh đổi, rủi ro còn lại |
 | Duyệt câu hỏi/rubric | Đánh giá sai mục tiêu | Giảng viên/SME | Mục tiêu, câu, đáp án, rubric, nguồn |
 | Kết luận ca không chắc chắn | Gắn nhãn sai | Giảng viên | Bằng chứng, độ tin cậy, lý do từ chối kết luận |
@@ -216,6 +220,7 @@ Luồng:
 | Kế hoạch vô nghiệm | Nêu số giờ thiếu và deadline xung đột | Không sinh lịch giả |
 | Độ tin cậy thấp | Không kết luận | Chuyển hàng chờ giảng viên |
 | Yêu cầu làm hộ | Giải thích ranh giới và đưa gợi ý học | Log loại guardrail, không lưu nội dung nhạy cảm thừa |
+| Google OAuth bị từ chối/hết hạn | Giữ nguyên lịch PaceWise; cho kết nối lại hoặc tải `.ics` | Không mất kế hoạch; không dùng token lỗi; không tự retry ghi sự kiện |
 
 Giới hạn phải hiển thị rõ: dữ liệu Canvas có thể cũ; ước lượng không bảo đảm kết quả; bằng chứng học tập không phải điểm; cảnh báo không thay thế trao đổi với giảng viên.
 
@@ -227,6 +232,7 @@ Giới hạn phải hiển thị rõ: dữ liệu Canvas có thể cũ; ước l
 - Canvas REST read-only khi có credential.
 - Tài liệu môn do đội/giảng viên được phép dùng.
 - Dữ liệu người dùng nhập: quỹ thời gian, tiến độ, câu trả lời kiểm tra, lựa chọn phục hồi.
+- Google Calendar: chỉ busy/free, email tài khoản để hiển thị kết nối và ID sự kiện do PaceWise tạo; `.ics` được sinh theo yêu cầu và không lưu trên server.
 - Dữ liệu đánh giá công khai, mô phỏng hoặc đã thay định danh.
 
 ### Chính sách
@@ -300,8 +306,9 @@ Baseline, cohort, kỳ quan sát và công thức phải được lưu cùng bá
 | Agent | LangGraph |
 | Model gateway | OpenRouter; model nhỏ mặc định, model lớn cho Reflect khó |
 | RAG | Qdrant, embedding đa ngôn ngữ, bge-reranker; Cohere Rerank tùy cấu hình |
-| Guardrail | Quy tắc xác định trước + Llama Guard |
+| Guardrail | Quy tắc nhanh + semantic classifier hiệu chuẩn + policy kiểm tra output |
 | Data | PostgreSQL |
+| Calendar | Google OAuth 2.0/Calendar REST tùy chọn; RFC 5545 `.ics` fallback |
 | Cache/rate limit | Redis |
 | Eval | Pytest + RAGAS + deterministic metrics + LLM-as-Judge hiệu chuẩn |
 | Observability | OpenTelemetry, Prometheus, Grafana hoặc dịch vụ tương đương |

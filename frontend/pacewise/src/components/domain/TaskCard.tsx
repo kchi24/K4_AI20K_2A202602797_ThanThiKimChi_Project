@@ -53,10 +53,12 @@ export function TaskCard({ task, course, compact, atRisk }: { task: Task; course
         <p className="caption mt-0.5">
           Hạn {formatDeadline(task.deadline)}
           {!done && ` · còn khoảng ${formatDuration(remainingOf(task))}`}
+          {task.assignmentGroup && ` · ${task.assignmentGroup.name} (${task.assignmentGroup.weight}%)`}
         </p>
         {!compact && !done && <ProgressBar className="mt-2.5" size="sm" value={task.loggedMin} max={task.estimateMin} label={`Tiến độ ${task.title}`} />}
       </div>
       <div className="flex shrink-0 flex-col items-end gap-1">
+        {task.overrideTarget && <Badge tone="accent">Hạn riêng</Badge>}
         {atRisk ? <Badge tone="warning" icon="alert">Nguy cơ</Badge> : <Badge tone={deadlineTone(task)}>{deadlineLabel(task)}</Badge>}
       </div>
     </Link>

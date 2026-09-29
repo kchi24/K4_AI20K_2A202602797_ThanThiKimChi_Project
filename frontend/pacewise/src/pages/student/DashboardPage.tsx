@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { NextActionCard } from '../../components/domain/NextActionCard';
+import { LMSLearningSnapshot } from '../../components/domain/LMSLearningSnapshot';
 import { TaskCard } from '../../components/domain/TaskCard';
 import { WarningCard } from '../../components/domain/WarningCard';
 import { Button, ButtonLink } from '../../components/ui/Button';
@@ -21,12 +22,13 @@ export function DashboardPage() {
   const { next, drifts, stats, taskById, courseById, courseOf } = useDerived();
   const firstName = state.user?.name.split(' ').slice(-1)[0] ?? 'bạn';
   const [syncing, setSyncing] = useState(false);
+  const activeCourseData = state.user?.courseId ? state.courseData[state.user.courseId] : undefined;
 
   const handleSyncCanvas = async () => {
     setSyncing(true);
     try {
       const synced = await syncCanvas();
-      dispatch({ type: 'SYNC_CANVAS', courses: synced.courses, tasks: synced.tasks });
+      dispatch({ type: 'SYNC_CANVAS', courses: synced.courses, tasks: synced.tasks, guidance: synced.guidance, courseData: synced.courseData });
       toast({ tone: 'success', title: 'Đã đồng bộ dữ liệu môn học từ Canvas', description: 'Các bài tập và deadline đã được cập nhật vào hệ thống.' });
     } finally {
       setSyncing(false);
@@ -149,6 +151,8 @@ export function DashboardPage() {
               <p className="flex items-center gap-2 text-success-ink">Kế hoạch đang đúng hướng. Không có gì cần xử lý.</p>
             )}
           </Card>
+
+          <LMSLearningSnapshot data={activeCourseData} />
 
           {state.plan && (
             <Card aria-labelledby="plan-title">

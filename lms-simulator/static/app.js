@@ -12,6 +12,8 @@ const state = {
   conversations: [],
   selectedConversationId: null,
   inboxBox: "inbox",
+  account: null,
+  accountView: "profile",
 };
 
 const loginScreen = document.querySelector("#login-screen");
@@ -50,9 +52,13 @@ function initials(name) {
   return name.split(" ").filter(Boolean).slice(-2).map((part) => part[0]).join("").toUpperCase();
 }
 
+function localeCode() {
+  return window.CanvasI18n?.getLocale() === "vi" ? "vi-VN" : "en-US";
+}
+
 function formatDate(value, withTime = true) {
   if (!value) return "—";
-  return new Intl.DateTimeFormat("en-US", {
+  return new Intl.DateTimeFormat(localeCode(), {
     month: "short",
     day: "numeric",
     ...(withTime ? { hour: "numeric", minute: "2-digit" } : {}),
@@ -60,7 +66,7 @@ function formatDate(value, withTime = true) {
 }
 
 function formatLongDate(value) {
-  return new Intl.DateTimeFormat("en-US", {
+  return new Intl.DateTimeFormat(localeCode(), {
     weekday: "short", month: "long", day: "numeric", year: "numeric",
   }).format(new Date(value));
 }
@@ -109,6 +115,15 @@ function recordHistory(label, action) {
   ].slice(0, 12);
 }
 
+async function syncAccountLocale() {
+  try {
+    state.account = await request("/api/account");
+    window.CanvasI18n?.setLocale(state.account.profile.language);
+  } catch (_) {
+    // A temporary Account API failure must not prevent the user from signing in.
+  }
+}
+
 async function login(email, password) {
   const error = document.querySelector("#login-error");
   error.textContent = "";
@@ -126,6 +141,7 @@ async function login(email, password) {
     document.querySelector("#nav-avatar").textContent = initials(data.user.name);
     loginScreen.classList.add("hidden");
     appShell.classList.remove("hidden");
+    await syncAccountLocale();
     await loadDashboard();
   } catch (err) {
     error.textContent = err.message;
@@ -226,10 +242,179 @@ function openAccountTray() {
   navigationTray.innerHTML = `
     <div class="tray-header"><h2>Account</h2><button class="close-button" aria-label="Close">×</button></div>
     <div class="tray-profile"><div class="tray-avatar" style="background:${user.avatar_color}">${initials(user.name)}</div><h3>${escapeHtml(user.name)}</h3><p>${escapeHtml(user.email)}</p></div>
-    <ul class="tray-list"><li><button>Notifications</button></li><li><button>Profile</button></li><li><button>Files</button></li><li><button>Settings</button></li><li><button data-logout>Logout</button></li></ul>`;
+    <ul class="tray-list"><li><button data-account-view="notifications">Notifications</button></li><li><button data-account-view="profile">Profile</button></li><li><button data-account-view="files">Files</button></li><li><button data-account-view="settings">Settings</button></li><li><button data-logout>Logout</button></li></ul>`;
   navigationTray.classList.remove("hidden");
   navigationTray.querySelector(".close-button").addEventListener("click", closeTray);
+  navigationTray.querySelectorAll("[data-account-view]").forEach((button) => {
+    button.addEventListener("click", () => loadAccount(button.dataset.accountView));
+  });
   navigationTray.querySelector("[data-logout]").addEventListener("click", logout);
+}
+
+const accountSections = [
+  ["notifications", "Notifications"],
+  ["profile", "Profile"],
+  ["files", "Files"],
+  ["settings", "Settings"],
+];
+
+const notificationLabels = {
+  course_activities: ["Course Activities", "Assignments, grades and course content changes"],
+  discussions: ["Discussions", "New topics, replies and mentions"],
+  conversations: ["Conversations", "Inbox messages and replies"],
+  scheduling: ["Scheduling", "Due dates and calendar changes"],
+};
+
+function accountNavigation() {
+  return `<nav class="account-nav" aria-label="Account Navigation"><ul>${accountSections.map(([key, label]) => `<li><button class="${state.accountView === key ? "active" : ""}" data-account-section="${key}">${label}</button></li>`).join("")}</ul></nav>`;
+}
+
+function bindAccountNavigation() {
+  document.querySelectorAll("[data-account-section]").forEach((button) => {
+    button.addEventListener("click", () => loadAccount(button.dataset.accountSection, false));
+  });
+}
+
+function humanFileSize(bytes) {
+  if (!bytes) return "0 bytes";
+  const units = ["bytes", "KB", "MB", "GB"];
+  const unit = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / (1024 ** unit);
+  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+async function loadAccount(view = "profile", refresh = true) {
+  closeTray();
+  setActiveNav("account");
+  state.accountView = view;
+  showLoading();
+  try {
+    if (refresh || !state.account) state.account = await request("/api/account");
+    recordHistory(`Account: ${accountSections.find(([key]) => key === view)?.[1] || "Profile"}`, () => loadAccount(view));
+    renderAccount();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+function renderAccount() {
+  mainContent.innerHTML = `<div class="account-shell">${accountNavigation()}<section class="account-main" id="account-main"></section></div>`;
+  bindAccountNavigation();
+  const root = document.querySelector("#account-main");
+  if (state.accountView === "notifications") renderAccountNotifications(root);
+  else if (state.accountView === "files") renderAccountFiles(root);
+  else if (state.accountView === "settings") renderAccountSettings(root);
+  else renderAccountProfile(root);
+}
+
+function renderAccountProfile(root) {
+  const { user, profile } = state.account;
+  root.innerHTML = `${courseHeader("Profile", '<button class="Button Button--primary" data-edit-profile>Edit Profile</button>')}
+    <div class="profile-summary">
+      <div class="profile-avatar-large" style="background:${user.avatar_color}">${initials(profile.display_name)}</div>
+      <div><h2>${escapeHtml(profile.display_name)}</h2><p class="muted">${escapeHtml(user.email)}</p><span class="pill">${user.role === "instructor" ? "Instructor" : "Student"}</span></div>
+    </div>
+    <section class="account-panel"><h2>Biography</h2><p>${profile.bio ? escapeHtml(profile.bio).replaceAll("\n", "<br>") : '<span class="muted">No biography has been added.</span>'}</p></section>
+    <section class="account-panel"><h2>Ways to Contact</h2><div class="account-detail-row"><span>Email</span><strong>${escapeHtml(user.email)}</strong></div>${profile.pronouns ? `<div class="account-detail-row"><span>Pronouns</span><strong>${escapeHtml(profile.pronouns)}</strong></div>` : ""}</section>`;
+  document.querySelector("[data-edit-profile]").addEventListener("click", openProfileEditor);
+}
+
+function openProfileEditor() {
+  const { user, profile } = state.account;
+  openDialog("Edit Profile", `<form id="account-profile-form">
+    <label class="ic-Label" for="account-full-name">Full Name</label><input class="ic-Input" id="account-full-name" value="${escapeHtml(user.name)}" minlength="2" required>
+    <label class="ic-Label" for="account-display-name">Display Name</label><input class="ic-Input" id="account-display-name" value="${escapeHtml(profile.display_name)}" minlength="2" required>
+    <label class="ic-Label" for="account-pronouns">Pronouns</label><input class="ic-Input" id="account-pronouns" value="${escapeHtml(profile.pronouns)}" maxlength="64">
+    <label class="ic-Label" for="account-bio">Biography</label><textarea class="ic-Input text-area" id="account-bio" maxlength="2000" rows="6">${escapeHtml(profile.bio)}</textarea>
+    <div class="dialog-actions"><button class="Button" type="button" data-cancel-profile>Cancel</button><button class="Button Button--primary">Save Profile</button></div>
+  </form>`);
+  document.querySelector("[data-cancel-profile]").addEventListener("click", closeDialog);
+  document.querySelector("#account-profile-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    state.account = await request("/api/account/profile", {
+      method: "PUT",
+      body: JSON.stringify({
+        full_name: document.querySelector("#account-full-name").value,
+        display_name: document.querySelector("#account-display-name").value,
+        pronouns: document.querySelector("#account-pronouns").value,
+        bio: document.querySelector("#account-bio").value,
+        timezone: profile.timezone,
+        language: profile.language,
+      }),
+    });
+    state.user = state.account.user;
+    document.querySelector("#nav-avatar").textContent = initials(state.user.name);
+    closeDialog();
+    renderAccount();
+    showFlash("Profile updated");
+  });
+}
+
+function notificationSelect(category, value) {
+  const options = [["immediately", "Notify me right away"], ["daily", "Daily summary"], ["weekly", "Weekly summary"], ["off", "Notifications off"]];
+  return `<select class="ic-Input notification-select" data-notification="${category}">${options.map(([key, label]) => `<option value="${key}" ${value === key ? "selected" : ""}>${label}</option>`).join("")}</select>`;
+}
+
+function renderAccountNotifications(root) {
+  root.innerHTML = `${courseHeader("Notification Settings")}<p class="muted">Choose how often Canvas sends notifications for each activity group.</p>
+    <form id="notification-form"><table class="canvas-table notification-table"><thead><tr><th>Activity</th><th>Email frequency</th></tr></thead><tbody>${Object.entries(notificationLabels).map(([key, [title, description]]) => `<tr><td><strong>${title}</strong><span class="content-row-meta">${description}</span></td><td>${notificationSelect(key, state.account.notifications[key])}</td></tr>`).join("")}</tbody></table><div class="account-actions"><button class="Button Button--primary">Save Settings</button></div></form>`;
+  document.querySelector("#notification-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const preferences = Object.fromEntries([...document.querySelectorAll("[data-notification]")].map((select) => [select.dataset.notification, select.value]));
+    const result = await request("/api/account/notifications", { method: "PUT", body: JSON.stringify({ preferences }) });
+    state.account.notifications = result.notifications;
+    showFlash("Notification settings saved");
+  });
+}
+
+function renderAccountFiles(root) {
+  const { files, storage } = state.account;
+  const rows = files.map((file) => `<div class="content-row"><span class="content-row-icon">▱</span><div><a class="content-row-title" href="${file.download_url}" target="_blank">${escapeHtml(file.name)}</a><span class="content-row-meta">${humanFileSize(file.size_bytes)} · ${formatDate(file.created_at)}</span></div><button class="Button Button--small" data-delete-personal-file="${file.id}">Delete</button></div>`).join("");
+  root.innerHTML = `${courseHeader("My Files", '<button class="Button Button--primary" data-upload-personal-file>Upload</button>')}<div class="storage-meter"><div><strong>${humanFileSize(storage.used_bytes)}</strong> of ${humanFileSize(storage.quota_bytes)} used</div><progress max="${storage.quota_bytes}" value="${storage.used_bytes}"></progress></div><div class="item-group">${rows || '<div class="empty-state"><p>No personal files.</p></div>'}</div><input class="hidden" id="personal-file-input" type="file" accept=".csv,.doc,.docx,.jpeg,.jpg,.pdf,.png,.ppt,.pptx,.txt,.xlsx,.zip">`;
+  const input = document.querySelector("#personal-file-input");
+  document.querySelector("[data-upload-personal-file]").addEventListener("click", () => input.click());
+  input.addEventListener("change", async () => {
+    if (!input.files[0]) return;
+    const form = new FormData();
+    form.append("upload", input.files[0]);
+    await request("/api/account/files", { method: "POST", body: form });
+    showFlash("File uploaded");
+    await loadAccount("files");
+  });
+  document.querySelectorAll("[data-delete-personal-file]").forEach((button) => button.addEventListener("click", async () => {
+    if (!window.confirm("Delete this file?")) return;
+    await request(`/api/account/files/${button.dataset.deletePersonalFile}`, { method: "DELETE" });
+    showFlash("File deleted");
+    await loadAccount("files");
+  }));
+}
+
+function renderAccountSettings(root) {
+  const { user, profile } = state.account;
+  root.innerHTML = `${courseHeader("Settings")}
+    <section class="account-panel"><h2>Account Settings</h2><form id="account-settings-form" class="settings-form"><label class="ic-Label" for="settings-email">Email</label><input class="ic-Input" id="settings-email" value="${escapeHtml(user.email)}" disabled><span class="content-row-meta">Your login email is managed by the institution.</span><div class="form-grid"><div><label class="ic-Label" for="settings-timezone">Time Zone</label><select class="ic-Input" id="settings-timezone"><option value="Asia/Ho_Chi_Minh" ${profile.timezone === "Asia/Ho_Chi_Minh" ? "selected" : ""}>Hanoi (GMT+7)</option><option value="UTC" ${profile.timezone === "UTC" ? "selected" : ""}>UTC</option></select></div><div><label class="ic-Label" for="settings-language">Language</label><select class="ic-Input" id="settings-language"><option value="en" ${profile.language === "en" ? "selected" : ""}>English</option><option value="vi" ${profile.language === "vi" ? "selected" : ""}>Tiếng Việt</option></select></div></div><div class="account-actions"><button class="Button Button--primary">Update Settings</button></div></form></section>
+    <section class="account-panel"><h2>Change Password</h2><form id="password-form" class="settings-form"><label class="ic-Label" for="current-password">Current Password</label><input class="ic-Input" id="current-password" type="password" autocomplete="current-password" required><label class="ic-Label" for="new-password">New Password</label><input class="ic-Input" id="new-password" type="password" minlength="8" autocomplete="new-password" required><label class="ic-Label" for="confirm-password">Confirm New Password</label><input class="ic-Input" id="confirm-password" type="password" minlength="8" autocomplete="new-password" required><p class="form-error" id="password-error"></p><div class="account-actions"><button class="Button">Change Password</button></div></form></section>`;
+  document.querySelector("#account-settings-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    state.account = await request("/api/account/profile", { method: "PUT", body: JSON.stringify({ full_name: user.name, display_name: profile.display_name, pronouns: profile.pronouns, bio: profile.bio, timezone: document.querySelector("#settings-timezone").value, language: document.querySelector("#settings-language").value }) });
+    window.CanvasI18n?.setLocale(state.account.profile.language);
+    showFlash("Account settings updated");
+    renderAccount();
+  });
+  document.querySelector("#password-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const currentPassword = document.querySelector("#current-password").value;
+    const newPassword = document.querySelector("#new-password").value;
+    const confirmation = document.querySelector("#confirm-password").value;
+    const error = document.querySelector("#password-error");
+    if (newPassword !== confirmation) { error.textContent = "New passwords do not match."; return; }
+    try {
+      await request("/api/account/password", { method: "PUT", body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) });
+      event.target.reset();
+      error.textContent = "";
+      showFlash("Password changed. Other sessions were signed out.");
+    } catch (err) { error.textContent = err.message; }
+  });
 }
 
 function openCoursesTray() {
@@ -285,6 +470,7 @@ const courseTabs = [
   ["discussions", "Discussions"], ["grades", "Grades"], ["people", "People"],
   ["pages", "Pages"], ["files", "Files"], ["syllabus", "Syllabus"],
   ["outcomes", "Outcomes"], ["quizzes", "Quizzes"], ["modules", "Modules"],
+  ["planner", "Planner"], ["analytics", "Analytics"],
   ["pacewise", "PaceWise"],
 ];
 
@@ -336,8 +522,8 @@ function assignmentRows(assignments, allowSubmit = false) {
   return assignments.map((item) => `
     <div class="content-row">
       <span class="content-row-icon">▤</span>
-      <div><span class="content-row-title">${escapeHtml(item.title)}</span><span class="content-row-meta">Due ${formatDate(item.due_at)} · ${item.points_possible} pts</span></div>
-      <div class="row-actions">${state.user.role === "instructor" ? `<button class="Button Button--small" data-assignment-edit="${item.id}">Edit</button><button class="Button Button--small" data-assignment-delete="${item.id}">Delete</button>` : allowSubmit ? `<button class="Button" data-submit="${item.id}">${["submitted", "late"].includes(item.state) ? "Resubmit Assignment" : "Submit Assignment"}</button>` : `<span class="published-icon">✓</span>`}</div>
+      <div><span class="content-row-title">${escapeHtml(item.title)}</span><span class="content-row-meta">${escapeHtml(item.assignment_group?.name || "Assignments")} · Due ${formatDate(item.due_at)} · ${item.points_possible} pts${item.lock_at ? ` · Locks ${formatDate(item.lock_at)}` : ""}${item.override_target ? ` · ${escapeHtml(item.override_target)} override` : ""}</span></div>
+      <div class="row-actions">${state.user.role === "instructor" ? `<button class="Button Button--small" data-assignment-override="${item.id}">Override</button><button class="Button Button--small" data-assignment-edit="${item.id}">Edit</button><button class="Button Button--small" data-assignment-delete="${item.id}">Delete</button>` : allowSubmit ? `<button class="Button" data-submit="${item.id}">${["submitted", "late"].includes(item.state) ? "Resubmit Assignment" : "Submit Assignment"}</button>` : `<span class="published-icon">✓</span>`}</div>
     </div>`).join("");
 }
 
@@ -350,19 +536,17 @@ function renderCourseTab() {
   if (tab === "home") {
     root.innerHTML = `${courseHeader(course.name)}<div class="course-home-grid"><div class="course-home"><h2>${escapeHtml(course.name)}</h2><p>Welcome to ${escapeHtml(course.name)}.</p><div class="item-group"><div class="item-group-header"><h3>Coming Up</h3></div>${assignmentRows(assignments.slice(0, 3))}</div></div><aside class="course-options">${state.user.role === "instructor" ? '<button class="Button">Course Status: Published</button><button class="Button">Import Existing Content</button><button class="Button">Choose Home Page</button><button class="Button">View Course Stream</button>' : '<button class="Button">View Course Calendar</button><button class="Button">View Course Notifications</button>'}<h3>To Do</h3>${assignments.slice(0, 3).map((item) => `<a href="#" data-tab-assignment>${escapeHtml(item.title)}</a><small class="content-row-meta">${formatDate(item.due_at)}</small>`).join("")}</aside></div>`;
   } else if (tab === "assignments") {
-    root.innerHTML = `${courseHeader("Assignments", state.user.role === "instructor" ? '<button class="Button Button--primary" data-new-assignment>+ Assignment</button>' : "")}<div class="item-group"><div class="item-group-header"><h2>Assignments</h2><span>⋮</span></div>${assignmentRows(assignments, state.user.role === "student")}</div>`;
-    bindSubmitButtons();
-    bindAssignmentActions();
+    renderAssignmentsTab(root);
   } else if (tab === "modules") {
     renderModulesTab(root);
   } else if (tab === "grades") {
     root.innerHTML = renderGrades(course, assignments, gradebook);
     bindGradebookActions();
   } else if (tab === "people") {
-    root.innerHTML = `${courseHeader("People", state.user.role === "instructor" ? '<button class="Button Button--primary" data-add-person>+ People</button>' : "")}<table class="canvas-table"><thead><tr><th>Name</th><th>Login ID</th><th>Role</th><th>Last Activity</th><th></th></tr></thead><tbody>${people.map((person) => `<tr><td><div class="person"><span class="person-avatar">${initials(person.name)}</span><a href="#">${escapeHtml(person.name)}</a></div></td><td>${escapeHtml(person.email)}</td><td>${person.role === "student" ? "Student" : "Teacher"}</td><td>—</td><td>${state.user.role === "instructor" && person.id !== state.user.id ? `<button class="Button Button--small" data-remove-person="${person.id}">Remove</button>` : ""}</td></tr>`).join("")}</tbody></table>`;
+    root.innerHTML = `${courseHeader("People", state.user.role === "instructor" ? '<button class="Button" data-manage-sections>Sections</button><button class="Button" data-manage-groups>Groups</button><button class="Button Button--primary" data-add-person>+ People</button>' : "")}<table class="canvas-table"><thead><tr><th>Name</th><th>Login ID</th><th>Role</th><th>Last Activity</th><th></th></tr></thead><tbody>${people.map((person) => `<tr><td><div class="person"><span class="person-avatar">${initials(person.name)}</span><a href="#">${escapeHtml(person.name)}</a></div></td><td>${escapeHtml(person.email)}</td><td>${person.role === "student" ? "Student" : "Teacher"}</td><td>—</td><td>${state.user.role === "instructor" && person.id !== state.user.id ? `<button class="Button Button--small" data-remove-person="${person.id}">Remove</button>` : ""}</td></tr>`).join("")}</tbody></table>`;
     bindPeopleActions();
   } else if (tab === "files") {
-    root.innerHTML = `${courseHeader("Files", state.user.role === "instructor" ? '<button class="Button Button--primary" data-upload-file>Upload</button><button class="Button" data-add-link>+ Link</button>' : "")}<div class="item-group">${resources.map((item) => `<div class="content-row"><span class="content-row-icon">▱</span><div><a class="content-row-title" href="${escapeHtml(item.source_url)}${item.source_url.startsWith("/api/files/") ? `?user_id=${state.user.id}` : ""}" target="_blank">${escapeHtml(item.title)}</a><span class="content-row-meta">${escapeHtml(item.kind)}</span></div>${state.user.role === "instructor" ? `<button class="Button Button--small" data-delete-resource="${item.id}">Delete</button>` : '<span class="published-icon">✓</span>'}</div>`).join("") || '<div class="empty-state"><p>No files.</p></div>'}</div>`;
+    root.innerHTML = `${courseHeader("Files", state.user.role === "instructor" ? '<button class="Button Button--primary" data-upload-file>Upload</button><button class="Button" data-add-link>+ Link</button>' : "")}<div class="item-group">${resources.map((item) => `<div class="content-row"><span class="content-row-icon">▱</span><div><a class="content-row-title" href="${escapeHtml(item.source_url)}${item.source_url.startsWith("/api/files/") ? `?user_id=${state.user.id}` : ""}" target="_blank">${escapeHtml(item.title)}</a><span class="content-row-meta">${escapeHtml(item.kind)}${item.latest_version ? ` · v${item.latest_version.version} · ${item.latest_version.checksum_sha256.slice(0, 10)}…` : ""}</span></div>${state.user.role === "instructor" ? `<button class="Button Button--small" data-resource-versions="${item.id}">Versions</button><button class="Button Button--small" data-delete-resource="${item.id}">Delete</button>` : '<span class="published-icon">✓</span>'}</div>`).join("") || '<div class="empty-state"><p>No files.</p></div>'}</div>`;
     bindFileActions();
   } else if (tab === "syllabus") {
     root.innerHTML = renderCourseContentPage("syllabus") + `<div class="item-group"><div class="item-group-header"><h3>Course Summary</h3></div>${assignmentRows(assignments)}</div>`;
@@ -371,6 +555,10 @@ function renderCourseTab() {
     renderCourseSettings(root);
   } else if (tab === "pacewise") {
     renderPacewiseTab(root);
+  } else if (tab === "planner") {
+    renderPlannerTab(root);
+  } else if (tab === "analytics") {
+    renderAnalyticsTab(root);
   } else {
     root.innerHTML = renderCourseContentPage(tab);
     bindCourseContentActions(tab);
@@ -393,6 +581,39 @@ function renderPacewiseTab(root) {
       showFlash(error.message);
     }
   });
+}
+
+async function renderPlannerTab(root) {
+  root.innerHTML = '<div class="loading-state"><span class="spinner"></span><p>Loading planner...</p></div>';
+  try {
+    const [allItems, appointments] = await Promise.all([
+      request("/api/planner"),
+      request(`/api/courses/${state.currentCourse.course.id}/appointment-groups`),
+    ]);
+    const items = allItems.filter((item) => item.course_id === state.currentCourse.course.id);
+    const appointmentAction = state.user.role === "instructor" ? '<button class="Button" data-new-appointment>+ Appointment group</button>' : "";
+    root.innerHTML = `${courseHeader("Planner", `${appointmentAction}<button class="Button Button--primary" data-new-planner-item>+ To-do</button>`)}<div class="item-group">${items.map((item) => `<div class="content-row"><span class="content-row-icon">${item.completed ? "✓" : "○"}</span><div><span class="content-row-title">${escapeHtml(item.title)}</span><span class="content-row-meta">${item.due_at ? formatDate(item.due_at) : "No due date"}</span></div><div class="row-actions"><button class="Button Button--small" data-toggle-planner="${item.id}">${item.completed ? "Reopen" : "Complete"}</button><button class="Button Button--small" data-delete-planner="${item.id}">Delete</button></div></div>`).join("") || '<div class="empty-state"><p>No planner items for this course.</p></div>'}</div><div class="item-group"><div class="item-group-header"><h2>Appointments</h2></div>${appointments.map((item) => `<div class="content-row"><span class="content-row-icon">◷</span><div><span class="content-row-title">${escapeHtml(item.title)}</span><span class="content-row-meta">${formatDate(item.starts_at)} · ${item.slot_minutes} minute slots · ${item.participants_per_slot} per slot</span></div>${state.user.role === "student" ? `<button class="Button Button--small" data-reserve-appointment="${item.id}" data-starts-at="${item.starts_at}">Reserve first slot</button>` : ""}</div>`).join("") || '<div class="empty-state"><p>No appointment groups.</p></div>'}</div>`;
+    document.querySelector("[data-new-planner-item]").addEventListener("click", () => {
+      openDialog("Add to-do", '<form id="planner-editor"><label class="ic-Label" for="planner-title">Title</label><input class="ic-Input" id="planner-title" required><label class="ic-Label" for="planner-due">Due</label><input class="ic-Input" id="planner-due" type="datetime-local"><div class="dialog-actions"><button class="Button Button--primary">Add</button></div></form>');
+      document.querySelector("#planner-editor").addEventListener("submit", async (event) => { event.preventDefault(); const due = document.querySelector("#planner-due").value; await request("/api/planner", { method: "POST", body: JSON.stringify({ course_id: state.currentCourse.course.id, title: document.querySelector("#planner-title").value, due_at: due ? new Date(due).toISOString() : null }) }); closeDialog(); await renderPlannerTab(root); });
+    });
+    document.querySelectorAll("[data-toggle-planner]").forEach((button) => button.addEventListener("click", async () => { const item = items.find((entry) => entry.id === Number(button.dataset.togglePlanner)); await request(`/api/planner/${item.id}`, { method: "PUT", body: JSON.stringify({ course_id: item.course_id, assignment_id: item.assignment_id, title: item.title, due_at: item.due_at, completed: !item.completed }) }); await renderPlannerTab(root); }));
+    document.querySelectorAll("[data-delete-planner]").forEach((button) => button.addEventListener("click", async () => { await request(`/api/planner/${button.dataset.deletePlanner}`, { method: "DELETE" }); await renderPlannerTab(root); }));
+    document.querySelectorAll("[data-reserve-appointment]").forEach((button) => button.addEventListener("click", async () => { await request(`/api/appointment-groups/${button.dataset.reserveAppointment}/reservations`, { method: "POST", body: JSON.stringify({ starts_at: button.dataset.startsAt }) }); showFlash("Appointment reserved"); }));
+    document.querySelector("[data-new-appointment]")?.addEventListener("click", () => {
+      openDialog("Create appointment group", '<form id="appointment-editor"><label class="ic-Label" for="appointment-title">Title</label><input class="ic-Input" id="appointment-title" required><div class="form-grid"><label>Starts<input class="ic-Input" id="appointment-starts" type="datetime-local" required></label><label>Ends<input class="ic-Input" id="appointment-ends" type="datetime-local" required></label><label>Slot minutes<input class="ic-Input" id="appointment-slot" type="number" min="5" value="30"></label><label>People per slot<input class="ic-Input" id="appointment-capacity" type="number" min="1" value="1"></label></div><div class="dialog-actions"><button class="Button Button--primary">Create</button></div></form>');
+      document.querySelector("#appointment-editor").addEventListener("submit", async (event) => { event.preventDefault(); await request(`/api/courses/${state.currentCourse.course.id}/appointment-groups`, { method: "POST", body: JSON.stringify({ title: document.querySelector("#appointment-title").value, starts_at: new Date(document.querySelector("#appointment-starts").value).toISOString(), ends_at: new Date(document.querySelector("#appointment-ends").value).toISOString(), slot_minutes: Number(document.querySelector("#appointment-slot").value), participants_per_slot: Number(document.querySelector("#appointment-capacity").value) }) }); closeDialog(); await renderPlannerTab(root); });
+    });
+  } catch (error) { root.innerHTML = `<div class="error-state"><p>${escapeHtml(error.message)}</p></div>`; }
+}
+
+async function renderAnalyticsTab(root) {
+  root.innerHTML = '<div class="loading-state"><span class="spinner"></span><p>Loading analytics...</p></div>';
+  try {
+    const analytics = await request(`/api/courses/${state.currentCourse.course.id}/analytics`);
+    const rows = Object.entries(analytics.by_type || {}).map(([type, count]) => `<tr><td>${escapeHtml(type)}</td><td>${count}</td></tr>`).join("");
+    root.innerHTML = `${courseHeader("Course Analytics")}<div class="stat-grid"><article class="stat-card"><strong>${analytics.events}</strong><span>Events</span></article><article class="stat-card"><strong>${analytics.active_users}</strong><span>Active learners</span></article><article class="stat-card"><strong>${Math.round(analytics.duration_seconds / 60)}</strong><span>Active minutes</span></article><article class="stat-card"><strong>${analytics.submissions || 0}</strong><span>Submissions</span></article></div><table class="canvas-table"><thead><tr><th>Activity</th><th>Count</th></tr></thead><tbody>${rows || '<tr><td colspan="2">No activity recorded.</td></tr>'}</tbody></table>`;
+  } catch (error) { root.innerHTML = `<div class="error-state"><p>${escapeHtml(error.message)}</p></div>`; }
 }
 
 function renderGrades(course, assignments, gradebook) {
@@ -534,7 +755,80 @@ async function openOutcome(item) {
   document.querySelector("#outcome-align")?.addEventListener("submit", async (event) => { event.preventDefault(); await request(`/api/outcomes/${item.id}/alignments`, { method: "POST", body: JSON.stringify({ user_id: state.user.id, assignment_id: Number(document.querySelector("#outcome-assignment").value) }) }); showFlash("Outcome aligned"); await openOutcome(item); });
 }
 
+async function renderAssignmentsTab(root) {
+  root.innerHTML = '<div class="loading-state"><span class="spinner"></span><p>Loading assignments...</p></div>';
+  try {
+    [state.assignmentGroups, state.courseGroupCategories] = await Promise.all([
+      request(`/api/courses/${state.currentCourse.course.id}/assignment-groups`),
+      request(`/api/courses/${state.currentCourse.course.id}/groups`),
+    ]);
+    const actions = state.user.role === "instructor"
+      ? '<button class="Button" data-new-rubric>+ Rubric</button><button class="Button" data-new-assignment-group>+ Group</button><button class="Button Button--primary" data-new-assignment>+ Assignment</button>'
+      : "";
+    const groups = state.assignmentGroups.map((group) => `<span class="pill">${escapeHtml(group.name)} · ${group.group_weight}%${group.drop_lowest ? ` · drop ${group.drop_lowest} lowest` : ""}</span>`).join(" ");
+    root.innerHTML = `${courseHeader("Assignments", actions)}${groups ? `<div class="notice">${groups}</div>` : ""}<div class="item-group"><div class="item-group-header"><h2>Assignments</h2><span>⋮</span></div>${assignmentRows(state.currentCourse.assignments, state.user.role === "student")}</div>`;
+    bindSubmitButtons();
+    bindAssignmentActions();
+  } catch (error) {
+    root.innerHTML = `<div class="error-state"><p>${escapeHtml(error.message)}</p></div>`;
+  }
+}
+
+function openAssignmentGroupEditor() {
+  openDialog("Add Assignment Group", '<form id="assignment-group-editor"><label class="ic-Label" for="assignment-group-name">Name</label><input class="ic-Input" id="assignment-group-name" required><div class="form-grid"><label>Weight %<input class="ic-Input" id="assignment-group-weight" type="number" min="0" max="100" value="0"></label><label>Drop lowest<input class="ic-Input" id="assignment-group-drop" type="number" min="0" value="0"></label></div><div class="dialog-actions"><button class="Button Button--primary">Create Group</button></div></form>');
+  document.querySelector("#assignment-group-editor").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await request(`/api/courses/${state.currentCourse.course.id}/assignment-groups`, {
+      method: "POST",
+      body: JSON.stringify({
+        name: document.querySelector("#assignment-group-name").value,
+        group_weight: Number(document.querySelector("#assignment-group-weight").value),
+        drop_lowest: Number(document.querySelector("#assignment-group-drop").value),
+      }),
+    });
+    closeDialog();
+    await renderAssignmentsTab(document.querySelector("#course-main"));
+  });
+}
+
+function openRubricEditor() {
+  const assignmentOptions = state.currentCourse.assignments.map((item) => `<option value="${item.id}">${escapeHtml(item.title)}</option>`).join("");
+  openDialog("Create and attach rubric", `<form id="rubric-editor"><label class="ic-Label" for="rubric-title">Rubric name</label><input class="ic-Input" id="rubric-title" value="Learning evidence rubric" required><label class="ic-Label" for="rubric-assignment">Assignment</label><select class="ic-Input" id="rubric-assignment">${assignmentOptions}</select><fieldset class="canvas-fieldset"><legend>Criteria</legend><div class="form-grid"><label>Criterion 1<input class="ic-Input" id="rubric-c1" value="Conceptual understanding" required></label><label>Points<input class="ic-Input" id="rubric-p1" type="number" min="1" value="5" required></label><label>Criterion 2<input class="ic-Input" id="rubric-c2" value="Reasoning and process" required></label><label>Points<input class="ic-Input" id="rubric-p2" type="number" min="1" value="5" required></label></div></fieldset><div class="dialog-actions"><button class="Button Button--primary">Create and attach</button></div></form>`);
+  document.querySelector("#rubric-editor").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const criterion = (nameId, pointsId) => { const points = Number(document.querySelector(pointsId).value); return { description: document.querySelector(nameId).value, points, ratings: [{ description: "Meets", points }, { description: "Developing", points: Math.round(points * 0.6 * 10) / 10 }, { description: "Missing", points: 0 }] }; };
+    const rubric = await request(`/api/courses/${state.currentCourse.course.id}/rubrics`, { method: "POST", body: JSON.stringify({ title: document.querySelector("#rubric-title").value, criteria: [criterion("#rubric-c1", "#rubric-p1"), criterion("#rubric-c2", "#rubric-p2")] }) });
+    await request(`/api/assignments/${document.querySelector("#rubric-assignment").value}/rubric/${rubric.id}`, { method: "PUT", body: "{}" });
+    closeDialog();
+    showFlash("Rubric attached");
+    await loadCourse(state.currentCourse.course.id, "assignments");
+  });
+}
+
+async function openAssignmentOverrideEditor(assignment) {
+  const [sections, groupCategories] = await Promise.all([
+    request(`/api/courses/${state.currentCourse.course.id}/sections`),
+    request(`/api/courses/${state.currentCourse.course.id}/groups`),
+  ]);
+  const options = [
+    ...state.currentCourse.people.filter((person) => person.role === "student").map((person) => `<option value="student:${person.id}">Student · ${escapeHtml(person.name)}</option>`),
+    ...sections.map((section) => `<option value="section:${section.id}">Section · ${escapeHtml(section.name)}</option>`),
+    ...groupCategories.flatMap((category) => category.groups.map((group) => `<option value="group:${group.id}">Group · ${escapeHtml(group.name)}</option>`)),
+  ].join("");
+  openDialog(`Deadline override: ${assignment.title}`, `<form id="assignment-override-editor"><label class="ic-Label" for="override-target">Applies to</label><select class="ic-Input" id="override-target">${options}</select><label class="ic-Label" for="override-title">Title</label><input class="ic-Input" id="override-title" value="Extended deadline" required><div class="form-grid"><label>Due<input class="ic-Input" id="override-due" type="datetime-local" value="${inputDateTime(assignment.due_at)}"></label><label>Available from<input class="ic-Input" id="override-unlock" type="datetime-local" value="${inputDateTime(assignment.unlock_at || assignment.due_at)}"></label><label>Locks<input class="ic-Input" id="override-lock" type="datetime-local" value="${inputDateTime(assignment.lock_at || assignment.due_at)}"></label></div><div class="dialog-actions"><button class="Button Button--primary">Save Override</button></div></form>`);
+  document.querySelector("#assignment-override-editor").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const [targetType, targetId] = document.querySelector("#override-target").value.split(":");
+    const toIso = (id) => document.querySelector(id).value ? new Date(document.querySelector(id).value).toISOString() : null;
+    await request(`/api/assignments/${assignment.id}/overrides`, { method: "POST", body: JSON.stringify({ title: document.querySelector("#override-title").value, target_type: targetType, target_id: Number(targetId), due_at: toIso("#override-due"), unlock_at: toIso("#override-unlock"), lock_at: toIso("#override-lock") }) });
+    closeDialog();
+    showFlash("Deadline override saved");
+  });
+}
+
 function assignmentPayload(item = null) {
+  const groups = (state.assignmentGroups || []).map((group) => `<option value="${group.id}" ${item?.assignment_group?.id === group.id ? "selected" : ""}>${escapeHtml(group.name)} (${group.group_weight}%)</option>`).join("");
+  const groupCategories = (state.courseGroupCategories || []).map((category) => `<option value="${category.id}" ${item?.group_category_id === category.id ? "selected" : ""}>${escapeHtml(category.name)}</option>`).join("");
   return `
     <form id="assignment-editor">
       <label class="ic-Label" for="assignment-title">Assignment Name</label>
@@ -544,12 +838,18 @@ function assignmentPayload(item = null) {
       <div class="form-grid">
         <div><label class="ic-Label" for="assignment-points">Points</label><input class="ic-Input" id="assignment-points" type="number" min="0" step="0.5" value="${item?.points_possible ?? 10}" required></div>
         <div><label class="ic-Label" for="assignment-due">Due</label><input class="ic-Input" id="assignment-due" type="datetime-local" value="${inputDateTime(item?.due_at || new Date())}" required></div>
+        <div><label class="ic-Label" for="assignment-unlock">Available from</label><input class="ic-Input" id="assignment-unlock" type="datetime-local" value="${inputDateTime(item?.unlock_at || new Date())}"></div>
+        <div><label class="ic-Label" for="assignment-lock">Locks</label><input class="ic-Input" id="assignment-lock" type="datetime-local" value="${inputDateTime(item?.lock_at || item?.due_at || new Date())}"></div>
+        <div><label class="ic-Label" for="assignment-group">Assignment group</label><select class="ic-Input" id="assignment-group"><option value="">None</option>${groups}</select></div>
+        <div><label class="ic-Label" for="assignment-grading-type">Grading type</label><select class="ic-Input" id="assignment-grading-type"><option value="points">Points</option><option value="percent">Percentage</option><option value="pass_fail">Complete/Incomplete</option></select></div>
+        <div><label class="ic-Label" for="assignment-group-category">Group assignment</label><select class="ic-Input" id="assignment-group-category"><option value="">Individual</option>${groupCategories}</select></div>
       </div>
       <fieldset class="canvas-fieldset"><legend>Submission Types</legend>
         <label><input type="checkbox" name="submission-type" value="online_text_entry" ${(item?.submission_types || ["online_text_entry"]).includes("online_text_entry") ? "checked" : ""}> Text Entry</label>
         <label><input type="checkbox" name="submission-type" value="online_url" ${(item?.submission_types || []).includes("online_url") ? "checked" : ""}> Website URL</label>
         <label><input type="checkbox" name="submission-type" value="online_upload" ${(item?.submission_types || []).includes("online_upload") ? "checked" : ""}> File Upload</label>
       </fieldset>
+      <label class="remember"><input id="assignment-peer-review" type="checkbox" ${item?.peer_reviews ? "checked" : ""}> Require peer reviews</label>
       <label class="remember"><input id="assignment-published" type="checkbox" ${item?.published === false ? "" : "checked"}> Published</label>
       <div class="dialog-actions"><button class="Button" type="button" data-cancel-assignment>Cancel</button><button class="Button Button--primary" type="submit">Save</button></div>
     </form>`;
@@ -572,7 +872,19 @@ function openAssignmentEditor(item = null) {
       published: document.querySelector("#assignment-published").checked,
     };
     const base = `/api/courses/${state.currentCourse.course.id}/assignments`;
-    await request(item ? `${base}/${item.id}` : base, { method: item ? "PUT" : "POST", body: JSON.stringify(payload) });
+    const saved = await request(item ? `${base}/${item.id}` : base, { method: item ? "PUT" : "POST", body: JSON.stringify(payload) });
+    const optionalDate = (selector) => document.querySelector(selector).value ? new Date(document.querySelector(selector).value).toISOString() : null;
+    await request(`/api/assignments/${saved.id}/policy`, {
+      method: "PUT",
+      body: JSON.stringify({
+        assignment_group_id: Number(document.querySelector("#assignment-group").value) || null,
+        unlock_at: optionalDate("#assignment-unlock"),
+        lock_at: optionalDate("#assignment-lock"),
+        grading_type: document.querySelector("#assignment-grading-type").value,
+        peer_reviews: document.querySelector("#assignment-peer-review").checked,
+        group_category_id: Number(document.querySelector("#assignment-group-category").value) || null,
+      }),
+    });
     closeDialog();
     showFlash("Assignment saved");
     await loadCourse(state.currentCourse.course.id, "assignments");
@@ -581,6 +893,11 @@ function openAssignmentEditor(item = null) {
 
 function bindAssignmentActions() {
   document.querySelector("[data-new-assignment]")?.addEventListener("click", () => openAssignmentEditor());
+  document.querySelector("[data-new-rubric]")?.addEventListener("click", openRubricEditor);
+  document.querySelector("[data-new-assignment-group]")?.addEventListener("click", openAssignmentGroupEditor);
+  document.querySelectorAll("[data-assignment-override]").forEach((button) => button.addEventListener("click", () => {
+    openAssignmentOverrideEditor(state.currentCourse.assignments.find((item) => item.id === Number(button.dataset.assignmentOverride)));
+  }));
   document.querySelectorAll("[data-assignment-edit]").forEach((button) => button.addEventListener("click", () => {
     openAssignmentEditor(state.currentCourse.assignments.find((item) => item.id === Number(button.dataset.assignmentEdit)));
   }));
@@ -599,20 +916,20 @@ function openSubmissionEditor(assignment) {
       <p class="muted">Choose one or more submission types allowed by this assignment.</p>
       ${assignment.submission_types.includes("online_text_entry") ? '<label class="ic-Label" for="submission-text">Text Entry</label><textarea class="ic-Input text-area" id="submission-text" rows="7"></textarea>' : ""}
       ${assignment.submission_types.includes("online_url") ? '<label class="ic-Label" for="submission-url">Website URL</label><input class="ic-Input" id="submission-url" type="url" placeholder="https://">' : ""}
-      ${assignment.submission_types.includes("online_upload") ? '<label class="ic-Label" for="submission-file">File</label><input class="ic-Input" id="submission-file" type="file" accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg,.zip">' : ""}
+      ${assignment.submission_types.includes("online_upload") ? '<label class="ic-Label" for="submission-file">Files (up to 10)</label><input class="ic-Input" id="submission-file" type="file" multiple accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg,.zip">' : ""}
       <div class="dialog-actions"><button class="Button" type="button" data-cancel-submission>Cancel</button><button class="Button Button--primary" type="submit">Submit Assignment</button></div>
     </form>`);
   document.querySelector("[data-cancel-submission]").addEventListener("click", closeDialog);
   document.querySelector("#submission-editor").addEventListener("submit", async (event) => {
     event.preventDefault();
-    const file = document.querySelector("#submission-file")?.files[0];
+    const files = [...(document.querySelector("#submission-file")?.files || [])];
     const textEntry = document.querySelector("#submission-text")?.value || "";
     const websiteUrl = document.querySelector("#submission-url")?.value || "";
-    if (file) {
+    if (files.length) {
       const form = new FormData();
       form.append("user_id", state.user.id);
-      form.append("upload", file);
-      await request(`/api/assignments/${assignment.id}/submissions/file`, { method: "POST", body: form });
+      files.forEach((file) => form.append("uploads", file));
+      await request(`/api/assignments/${assignment.id}/submissions/files`, { method: "POST", body: form });
     } else {
       await request(`/api/assignments/${assignment.id}/submissions`, { method: "POST", body: JSON.stringify({ user_id: state.user.id, text_entry: textEntry, website_url: websiteUrl }) });
     }
@@ -627,13 +944,18 @@ async function renderModulesTab(root) {
   try {
     const modules = await request(`/api/courses/${state.currentCourse.course.id}/modules?user_id=${state.user.id}`);
     const actions = state.user.role === "instructor" ? '<button class="Button Button--primary" data-new-module>+ Module</button>' : "";
-    root.innerHTML = `${courseHeader("Modules", actions)}${modules.map((module) => `<section class="item-group"><div class="item-group-header"><h2>${escapeHtml(module.name)}</h2><div class="row-actions"><span class="published-icon">${module.published ? "✓" : "○"}</span>${state.user.role === "instructor" ? `<button class="Button Button--small" data-add-module-item="${module.id}">+ Item</button><button class="Button Button--small" data-delete-module="${module.id}">Delete</button>` : ""}</div></div>${module.items.map((item) => `<div class="content-row"><span class="content-row-icon">▧</span><div><span class="content-row-title">${escapeHtml(item.title)}</span><span class="content-row-meta">${escapeHtml(item.item_type)}</span></div>${state.user.role === "instructor" ? `<button class="Button Button--small" data-delete-module-item="${item.id}" data-module-id="${module.id}">Delete</button>` : '<span class="published-icon">✓</span>'}</div>`).join("") || '<div class="empty-state"><p>No items in this module.</p></div>'}</section>`).join("") || '<div class="empty-state"><p>No modules have been added.</p></div>'}`;
+    root.innerHTML = `${courseHeader("Modules", actions)}${modules.map((module) => `<section class="item-group"><div class="item-group-header"><div><h2>${escapeHtml(module.name)}</h2><span class="content-row-meta">${module.prerequisite_module_ids.length ? `Prerequisites: ${module.prerequisite_module_ids.join(", ")}` : "No prerequisite"}</span></div><div class="row-actions"><span class="published-icon">${module.published ? "✓" : "○"}</span>${state.user.role === "instructor" ? `<button class="Button Button--small" data-module-rules="${module.id}">Rules</button><button class="Button Button--small" data-add-module-item="${module.id}">+ Item</button><button class="Button Button--small" data-delete-module="${module.id}">Delete</button>` : ""}</div></div>${module.items.map((item) => { const requirement = module.requirements.find((entry) => entry.module_item_id === item.id); return `<div class="content-row"><span class="content-row-icon">▧</span><div><span class="content-row-title">${escapeHtml(item.title)}</span><span class="content-row-meta">${escapeHtml(item.item_type)}${requirement ? ` · ${escapeHtml(requirement.requirement_type)} · ${escapeHtml(requirement.status)}` : ""}</span></div>${state.user.role === "instructor" ? `<button class="Button Button--small" data-delete-module-item="${item.id}" data-module-id="${module.id}">Delete</button>` : requirement?.status === "completed" ? '<span class="published-icon">✓ Complete</span>' : `<button class="Button Button--small" data-complete-module-item="${item.id}">Mark done</button>`}</div>`; }).join("") || '<div class="empty-state"><p>No items in this module.</p></div>'}</section>`).join("") || '<div class="empty-state"><p>No modules have been added.</p></div>'}`;
     bindModuleActions(modules);
   } catch (error) { root.innerHTML = `<div class="error-state"><p>${escapeHtml(error.message)}</p></div>`; }
 }
 
 function bindModuleActions(modules) {
   document.querySelector("[data-new-module]")?.addEventListener("click", () => openModuleEditor());
+  document.querySelectorAll("[data-module-rules]").forEach((button) => button.addEventListener("click", () => openModuleRulesEditor(modules.find((item) => item.id === Number(button.dataset.moduleRules)), modules)));
+  document.querySelectorAll("[data-complete-module-item]").forEach((button) => button.addEventListener("click", async () => {
+    await request(`/api/module-items/${button.dataset.completeModuleItem}/progress`, { method: "PUT", body: JSON.stringify({ status: "completed" }) });
+    await renderModulesTab(document.querySelector("#course-main"));
+  }));
   document.querySelectorAll("[data-add-module-item]").forEach((button) => button.addEventListener("click", () => openModuleItemEditor(Number(button.dataset.addModuleItem))));
   document.querySelectorAll("[data-delete-module]").forEach((button) => button.addEventListener("click", async () => {
     const module = modules.find((item) => item.id === Number(button.dataset.deleteModule));
@@ -645,6 +967,20 @@ function bindModuleActions(modules) {
     await request(`/api/courses/${state.currentCourse.course.id}/modules/${button.dataset.moduleId}/items/${button.dataset.deleteModuleItem}?user_id=${state.user.id}`, { method: "DELETE" });
     renderModulesTab(document.querySelector("#course-main"));
   }));
+}
+
+function openModuleRulesEditor(module, modules) {
+  const prerequisites = modules.filter((item) => item.id !== module.id).map((item) => `<option value="${item.id}" ${module.prerequisite_module_ids.includes(item.id) ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("");
+  const requirements = module.items.map((item) => { const current = module.requirements.find((entry) => entry.module_item_id === item.id); return `<div class="form-grid"><span>${escapeHtml(item.title)}</span><select class="ic-Input" data-module-requirement="${item.id}"><option value="must_view">View</option><option value="must_submit" ${current?.requirement_type === "must_submit" ? "selected" : ""}>Submit</option><option value="must_mark_done" ${current?.requirement_type === "must_mark_done" ? "selected" : ""}>Mark done</option><option value="must_score" ${current?.requirement_type === "must_score" ? "selected" : ""}>Minimum score</option></select><input class="ic-Input" data-module-min-score="${item.id}" type="number" min="0" placeholder="Minimum score" value="${current?.min_score ?? ""}"></div>`; }).join("");
+  openDialog(`Module rules: ${module.name}`, `<form id="module-rules-editor"><label class="remember"><input id="module-sequential" type="checkbox" ${module.sequential_progress ? "checked" : ""}> Require sequential progress</label><label class="ic-Label" for="module-prerequisites">Prerequisite modules</label><select class="ic-Input" id="module-prerequisites" multiple>${prerequisites}</select><fieldset class="canvas-fieldset"><legend>Completion requirements</legend>${requirements || "No module items"}</fieldset><div class="dialog-actions"><button class="Button Button--primary">Save Rules</button></div></form>`);
+  document.querySelector("#module-rules-editor").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const prerequisiteIds = [...document.querySelector("#module-prerequisites").selectedOptions].map((option) => Number(option.value));
+    const rules = [...document.querySelectorAll("[data-module-requirement]")].map((select) => ({ module_item_id: Number(select.dataset.moduleRequirement), requirement_type: select.value, min_score: Number(document.querySelector(`[data-module-min-score="${select.dataset.moduleRequirement}"]`).value) || null }));
+    await request(`/api/modules/${module.id}/rules`, { method: "PUT", body: JSON.stringify({ prerequisite_module_ids: prerequisiteIds, requirements: rules, sequential_progress: document.querySelector("#module-sequential").checked }) });
+    closeDialog();
+    await renderModulesTab(document.querySelector("#course-main"));
+  });
 }
 
 function openModuleEditor() {
@@ -660,6 +996,10 @@ function openModuleItemEditor(moduleId) {
 }
 
 function bindFileActions() {
+  document.querySelectorAll("[data-resource-versions]").forEach((button) => button.addEventListener("click", async () => {
+    const versions = await request(`/api/resources/${button.dataset.resourceVersions}/versions`);
+    openDialog("File versions", `<table class="canvas-table"><thead><tr><th>Version</th><th>Checksum</th><th>Size</th><th>Created</th></tr></thead><tbody>${versions.map((version) => `<tr><td>v${version.version}</td><td><code>${escapeHtml(version.checksum_sha256.slice(0, 16))}…</code></td><td>${version.size_bytes} bytes</td><td>${formatDate(version.created_at)}</td></tr>`).join("")}</tbody></table>`);
+  }));
   document.querySelector("[data-upload-file]")?.addEventListener("click", () => {
     openDialog("Upload File", '<form id="file-upload-form"><label class="ic-Label" for="course-file">Choose a file (maximum 20 MB)</label><input class="ic-Input" id="course-file" type="file" required accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg,.zip"><div class="dialog-actions"><button class="Button" type="button" data-cancel-file>Cancel</button><button class="Button Button--primary">Upload</button></div></form>');
     document.querySelector("[data-cancel-file]").addEventListener("click", closeDialog);
@@ -674,6 +1014,8 @@ function bindFileActions() {
 }
 
 async function bindPeopleActions() {
+  document.querySelector("[data-manage-sections]")?.addEventListener("click", openSectionsManager);
+  document.querySelector("[data-manage-groups]")?.addEventListener("click", openGroupsManager);
   document.querySelector("[data-add-person]")?.addEventListener("click", async () => {
     const users = (await request("/api/users")).filter((user) => !state.currentCourse.people.some((person) => person.id === user.id));
     openDialog("Add People", `<form id="add-person-form"><label class="ic-Label" for="person-user">User</label><select class="ic-Input" id="person-user" required>${users.map((user) => `<option value="${user.id}">${escapeHtml(user.name)} (${escapeHtml(user.email)})</option>`).join("")}</select><label class="ic-Label" for="person-role">Role</label><select class="ic-Input" id="person-role"><option value="student">Student</option><option value="instructor">Teacher</option></select><div class="dialog-actions"><button class="Button" type="button" data-cancel-person>Cancel</button><button class="Button Button--primary">Add</button></div></form>`);
@@ -681,6 +1023,18 @@ async function bindPeopleActions() {
     document.querySelector("#add-person-form").addEventListener("submit", async (event) => { event.preventDefault(); await request(`/api/courses/${state.currentCourse.course.id}/enrollments`, { method: "POST", body: JSON.stringify({ user_id: state.user.id, member_id: Number(document.querySelector("#person-user").value), role: document.querySelector("#person-role").value }) }); closeDialog(); await loadCourse(state.currentCourse.course.id, "people"); });
   });
   document.querySelectorAll("[data-remove-person]").forEach((button) => button.addEventListener("click", async () => { if (!window.confirm("Remove this enrollment?")) return; await request(`/api/courses/${state.currentCourse.course.id}/enrollments/${button.dataset.removePerson}?user_id=${state.user.id}`, { method: "DELETE" }); await loadCourse(state.currentCourse.course.id, "people"); }));
+}
+
+async function openSectionsManager() {
+  const sections = await request(`/api/courses/${state.currentCourse.course.id}/sections`);
+  openDialog("Course Sections", `<div class="item-group">${sections.map((section) => `<div class="content-row"><div><strong>${escapeHtml(section.name)}</strong><span class="content-row-meta">${section.member_ids.length} members</span></div></div>`).join("")}</div><form id="section-editor"><label class="ic-Label" for="section-name">New section</label><input class="ic-Input" id="section-name" required><div class="dialog-actions"><button class="Button Button--primary">Create</button></div></form>`);
+  document.querySelector("#section-editor").addEventListener("submit", async (event) => { event.preventDefault(); await request(`/api/courses/${state.currentCourse.course.id}/sections`, { method: "POST", body: JSON.stringify({ name: document.querySelector("#section-name").value }) }); await openSectionsManager(); });
+}
+
+async function openGroupsManager() {
+  const categories = await request(`/api/courses/${state.currentCourse.course.id}/groups`);
+  openDialog("Course Groups", `<div class="item-group">${categories.map((category) => `<div class="content-row"><div><strong>${escapeHtml(category.name)}</strong><span class="content-row-meta">${category.groups.map((group) => `${escapeHtml(group.name)} (${group.member_ids.length})`).join(" · ") || "No groups"}</span></div></div>`).join("")}</div><form id="group-category-editor"><label class="ic-Label" for="group-category-name">New group set</label><input class="ic-Input" id="group-category-name" required><label class="remember"><input id="group-self-signup" type="checkbox"> Allow self sign-up</label><div class="dialog-actions"><button class="Button Button--primary">Create</button></div></form>`);
+  document.querySelector("#group-category-editor").addEventListener("submit", async (event) => { event.preventDefault(); await request(`/api/courses/${state.currentCourse.course.id}/group-categories`, { method: "POST", body: JSON.stringify({ name: document.querySelector("#group-category-name").value, self_signup: document.querySelector("#group-self-signup").checked }) }); await openGroupsManager(); });
 }
 
 function renderCourseSettings(root) {
@@ -708,8 +1062,20 @@ async function openGradeEditor(assignmentId, studentId) {
   const student = state.currentCourse.people.find((item) => item.id === studentId);
   const submissions = await request(`/api/assignments/${assignmentId}/submissions?user_id=${state.user.id}`);
   const submission = submissions.find((item) => item.user_id === studentId);
-  openDialog(`Grade: ${student?.name || "Student"}`, `<div class="submission-preview"><h3>${escapeHtml(assignment.title)}</h3>${submission?.text_entry ? `<p>${escapeHtml(submission.text_entry)}</p>` : ""}${submission?.website_url ? `<p><a href="${escapeHtml(submission.website_url)}" target="_blank">Open submitted URL</a></p>` : ""}${submission?.file_url ? `<p><a href="${escapeHtml(submission.file_url)}?user_id=${state.user.id}" target="_blank">Download ${escapeHtml(submission.file_name)}</a></p>` : ""}${!submission ? '<p class="muted">This student has not submitted.</p>' : ""}</div><form id="grade-editor"><label class="ic-Label" for="grade-score">Grade out of ${assignment.points_possible}</label><input class="ic-Input" id="grade-score" type="number" min="0" max="${assignment.points_possible}" step="0.1" value="${submission?.score ?? ""}" required><label class="ic-Label" for="grade-comment">Assignment Comments</label><textarea class="ic-Input text-area" id="grade-comment">${escapeHtml(submission?.instructor_comment || "")}</textarea><fieldset class="canvas-fieldset"><legend>Rubric</legend><div class="form-grid"><label>Understanding<input class="ic-Input" data-rubric="understanding" type="number" min="0" max="4" step="1" value="${submission?.rubric?.understanding ?? 0}"></label><label>Accuracy<input class="ic-Input" data-rubric="accuracy" type="number" min="0" max="4" step="1" value="${submission?.rubric?.accuracy ?? 0}"></label><label>Process<input class="ic-Input" data-rubric="process" type="number" min="0" max="4" step="1" value="${submission?.rubric?.process ?? 0}"></label></div></fieldset><div class="dialog-actions"><button class="Button Button--primary">Update Grade</button></div></form>`);
-  document.querySelector("#grade-editor").addEventListener("submit", async (event) => { event.preventDefault(); const rubric = {}; document.querySelectorAll("[data-rubric]").forEach((input) => { rubric[input.dataset.rubric] = Number(input.value); }); await request(`/api/assignments/${assignmentId}/submissions/${studentId}/grade`, { method: "PUT", body: JSON.stringify({ user_id: state.user.id, score: Number(document.querySelector("#grade-score").value), comment: document.querySelector("#grade-comment").value, rubric }) }); closeDialog(); showFlash("Grade updated"); await loadCourse(state.currentCourse.course.id, "grades"); });
+  const rubricFields = assignment.rubric?.criteria.map((criterion) => `<label>${escapeHtml(criterion.description)}<input class="ic-Input" data-rubric-criterion="${criterion.id}" type="number" min="0" max="${criterion.points}" step="0.1" value="0"><small>out of ${criterion.points}</small></label>`).join("") || '<p class="muted">No rubric attached.</p>';
+  openDialog(`Grade: ${student?.name || "Student"}`, `<div class="submission-preview"><h3>${escapeHtml(assignment.title)}</h3>${submission?.text_entry ? `<p>${escapeHtml(submission.text_entry)}</p>` : ""}${submission?.website_url ? `<p><a href="${escapeHtml(submission.website_url)}" target="_blank">Open submitted URL</a></p>` : ""}${submission?.file_url ? `<p><a href="${escapeHtml(submission.file_url)}?user_id=${state.user.id}" target="_blank">Download ${escapeHtml(submission.file_name)}</a></p>` : ""}${!submission ? '<p class="muted">This student has not submitted.</p>' : ""}${submission ? '<button class="Button Button--small" type="button" data-submission-history>Attempts & comments</button>' : ""}</div><form id="grade-editor"><label class="ic-Label" for="grade-score">Grade out of ${assignment.points_possible}</label><input class="ic-Input" id="grade-score" type="number" min="0" max="${assignment.points_possible}" step="0.1" value="${submission?.score ?? ""}" required><label class="ic-Label" for="grade-comment">Assignment Comments</label><textarea class="ic-Input text-area" id="grade-comment">${escapeHtml(submission?.instructor_comment || "")}</textarea><fieldset class="canvas-fieldset"><legend>${escapeHtml(assignment.rubric?.title || "Rubric")}</legend><div class="form-grid">${rubricFields}</div></fieldset><div class="dialog-actions"><button class="Button Button--primary">Update Grade</button></div></form>`);
+  document.querySelector("[data-submission-history]")?.addEventListener("click", async () => { const history = await request(`/api/submissions/${submission.id}/history`); openDialog("Submission history", `<h3>Attempts</h3>${history.attempts.map((attempt) => `<div class="notice">Attempt ${attempt.attempt} · ${formatDate(attempt.submitted_at)} · ${attempt.attachments.length} file(s)</div>`).join("")}<h3>Comments</h3>${history.comments.map((comment) => `<p><strong>${escapeHtml(comment.author)}</strong>: ${escapeHtml(comment.body)}</p>`).join("") || '<p class="muted">No comments.</p>'}`); });
+  document.querySelector("#grade-editor").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const legacyRubric = {};
+    const graded = await request(`/api/assignments/${assignmentId}/submissions/${studentId}/grade`, { method: "PUT", body: JSON.stringify({ user_id: state.user.id, score: Number(document.querySelector("#grade-score").value), comment: document.querySelector("#grade-comment").value, rubric: legacyRubric }) });
+    const ratings = {};
+    document.querySelectorAll("[data-rubric-criterion]").forEach((input) => { ratings[input.dataset.rubricCriterion] = Number(input.value); });
+    if (assignment.rubric && Object.keys(ratings).length) await request(`/api/submissions/${graded.id}/rubric-assessment`, { method: "PUT", body: JSON.stringify({ ratings }) });
+    closeDialog();
+    showFlash("Grade updated");
+    await loadCourse(state.currentCourse.course.id, "grades");
+  });
 }
 
 function exportGrades() {
@@ -754,7 +1120,10 @@ function paintCalendar() {
     return `<div class="calendar-cell ${day.getMonth() !== month ? "outside" : ""}" data-calendar-date="${dateKey}"><span class="calendar-day">${day.getDate()}</span>${events.map((item) => `<button class="calendar-event" style="--event-color:${item.color}" data-calendar-item="${item.id}" draggable="${item.editable}">${escapeHtml(item.title)}</button>`).join("")}</div>`;
   }).join("");
   const filter = `<select class="Button" data-calendar-filter><option value="all">All Calendars</option><option value="personal" ${state.calendarFilter === "personal" ? "selected" : ""}>${escapeHtml(state.user.name)}</option>${state.dashboard.courses.map((course) => `<option value="${course.id}" ${state.calendarFilter === String(course.id) ? "selected" : ""}>${escapeHtml(course.name)}</option>`).join("")}</select>`;
-  mainContent.innerHTML = `${courseHeader("Calendar", `${filter}<button class="Button" data-calendar-today>Today</button><button class="Button Button--primary" data-new-event>+ Event</button>`)}<div class="calendar-toolbar"><button class="Button" data-calendar-prev>‹</button><h2>${new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(current)}</h2><button class="Button" data-calendar-next>›</button></div><p class="muted calendar-hint">Drag a personal event to another day to reschedule it.</p><div class="calendar-grid">${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => `<div class="calendar-cell calendar-weekday">${day}</div>`).join("")}${cells}</div>`;
+  const weekdays = localeCode() === "vi-VN"
+    ? ["CN", "T2", "T3", "T4", "T5", "T6", "T7"]
+    : ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  mainContent.innerHTML = `${courseHeader("Calendar", `${filter}<button class="Button" data-calendar-today>Today</button><button class="Button Button--primary" data-new-event>+ Event</button>`)}<div class="calendar-toolbar"><button class="Button" data-calendar-prev>‹</button><h2>${new Intl.DateTimeFormat(localeCode(), { month: "long", year: "numeric" }).format(current)}</h2><button class="Button" data-calendar-next>›</button></div><p class="muted calendar-hint">Drag a personal event to another day to reschedule it.</p><div class="calendar-grid">${weekdays.map((day) => `<div class="calendar-cell calendar-weekday">${day}</div>`).join("")}${cells}</div>`;
   document.querySelector("[data-calendar-prev]").addEventListener("click", () => { state.calendarDate = new Date(year, month - 1, 1); paintCalendar(); });
   document.querySelector("[data-calendar-next]").addEventListener("click", () => { state.calendarDate = new Date(year, month + 1, 1); paintCalendar(); });
   document.querySelector("[data-calendar-today]").addEventListener("click", () => { state.calendarDate = new Date(); paintCalendar(); });
@@ -946,6 +1315,7 @@ async function restoreSession() {
     document.querySelector("#nav-avatar").textContent = initials(state.user.name);
     loginScreen.classList.add("hidden");
     appShell.classList.remove("hidden");
+    await syncAccountLocale();
     await loadDashboard();
   } catch (_) {
     sessionStorage.removeItem("canvas_access_token");

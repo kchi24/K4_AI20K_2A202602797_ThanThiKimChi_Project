@@ -13,22 +13,39 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.learning_api import (
+    assignment_extension_payload,
+    can_access_resource,
+    module_extension_payload,
+    resource_extension_payload,
+    submission_history_payload,
+)
 from app.models import (
+    AppointmentGroup,
+    AppointmentReservation,
     Assignment,
     AuditLog,
     Course,
     CourseContent,
+    CourseGroup,
     CourseModule,
+    CourseSection,
     Enrollment,
     GradeHistory,
+    GroupCategory,
+    GroupMembership,
     IntegrationEvent,
     LaunchNonce,
+    LearningActivity,
     LearningEvidence,
     ModuleItem,
     OutcomeAlignment,
+    PlannerItem,
     QuizAttempt,
     QuizQuestion,
     Resource,
+    ResourceFolder,
+    SectionMembership,
     Submission,
     SubmissionDetail,
     User,
@@ -224,7 +241,11 @@ def enrollments(course_id: int, db: Session = Depends(get_db)) -> list[dict]:
 
 
 @service_router.get("/courses/{course_id}/assignments", dependencies=[Depends(require_service_key)])
-def assignments(course_id: int, db: Session = Depends(get_db)) -> list[dict]:
+def assignments(
+    course_id: int,
+    user_id: int | None = None,
+    db: Session = Depends(get_db),
+) -> list[dict]:
     require_course(db, course_id)
     items = db.scalars(select(Assignment).where(Assignment.course_id == course_id).order_by(Assignment.due_at)).all()
     return [
@@ -237,6 +258,7 @@ def assignments(course_id: int, db: Session = Depends(get_db)) -> list[dict]:
             "points_possible": item.points_possible,
             "submission_types": item.submission_types.split(","),
             "published": item.published,
+            **assignment_extension_payload(db, item, user_id),
         }
         for item in items
     ]
@@ -265,13 +287,18 @@ def submissions(course_id: int, user_id: int | None = None, db: Session = Depend
             "late": submission.late,
             "feedback": detail.instructor_comment if detail else "",
             "rubric": json.loads(detail.rubric_json or "{}") if detail else {},
+            "history": submission_history_payload(db, submission),
         }
         for submission, assignment, detail in db.execute(query).all()
     ]
 
 
 @service_router.get("/courses/{course_id}/modules", dependencies=[Depends(require_service_key)])
-def modules(course_id: int, db: Session = Depends(get_db)) -> list[dict]:
+def modules(
+    course_id: int,
+    user_id: int | None = None,
+    db: Session = Depends(get_db),
+) -> list[dict]:
     require_course(db, course_id)
     result = []
     for module in db.scalars(
@@ -298,6 +325,7 @@ def modules(course_id: int, db: Session = Depends(get_db)) -> list[dict]:
                     }
                     for item in items
                 ],
+                **module_extension_payload(db, module, user_id),
             }
         )
     return result
@@ -324,11 +352,166 @@ def content(course_id: int, kind: str | None = None, db: Session = Depends(get_d
 
 
 @service_router.get("/courses/{course_id}/files", dependencies=[Depends(require_service_key)])
-def files(course_id: int, db: Session = Depends(get_db)) -> list[dict]:
+def files(
+    course_id: int,
+    user_id: int | None = None,
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    require_course(db, course_id)
+    resources = db.scalars(
+        select(Resource).where(Resource.course_id == course_id).order_by(Resource.id)
+    ).all()
+    if user_id is not None:
+        resources = [item for item in resources if can_access_resource(db, item, user_id)]
+    return [
+        {
+            "id": item.id,
+            "title": item.title,
+            "kind": item.kind,
+            "source_url": item.source_url,
+            **resource_extension_payload(db, item),
+        }
+        for item in resources
+    ]
+
+
+@service_router.get("/courses/{course_id}/sections", dependencies=[Depends(require_service_key)])
+def sections(course_id: int, db: Session = Depends(get_db)) -> list[dict]:
+    require_course(db, course_id)
+    result = []
+    for section in db.scalars(select(CourseSection).where(CourseSection.course_id == course_id)).all():
+        result.append(
+            {
+                "id": section.id,
+                "name": section.name,
+                "member_ids": db.scalars(
+                    select(SectionMembership.user_id).where(SectionMembership.section_id == section.id)
+                ).all(),
+            }
+        )
+    return result
+
+
+@service_router.get("/courses/{course_id}/groups", dependencies=[Depends(require_service_key)])
+def groups(course_id: int, db: Session = Depends(get_db)) -> list[dict]:
+    require_course(db, course_id)
+    result = []
+    categories = db.scalars(select(GroupCategory).where(GroupCategory.course_id == course_id)).all()
+    for category in categories:
+        category_groups = []
+        for group in db.scalars(select(CourseGroup).where(CourseGroup.category_id == category.id)).all():
+            category_groups.append(
+                {
+                    "id": group.id,
+                    "name": group.name,
+                    "member_ids": db.scalars(
+                        select(GroupMembership.user_id).where(GroupMembership.group_id == group.id)
+                    ).all(),
+                }
+            )
+        result.append(
+            {
+                "id": category.id,
+                "name": category.name,
+                "self_signup": category.self_signup,
+                "groups": category_groups,
+            }
+        )
+    return result
+
+
+@service_router.get("/courses/{course_id}/analytics", dependencies=[Depends(require_service_key)])
+def analytics(course_id: int, db: Session = Depends(get_db)) -> dict:
+    require_course(db, course_id)
+    activities = db.scalars(
+        select(LearningActivity).where(LearningActivity.course_id == course_id)
+    ).all()
+    by_type: dict[str, int] = {}
+    total_duration = 0
+    active_users: set[int] = set()
+    for item in activities:
+        by_type[item.activity_type] = by_type.get(item.activity_type, 0) + 1
+        total_duration += item.duration_seconds
+        active_users.add(item.user_id)
+    return {
+        "events": len(activities),
+        "active_users": len(active_users),
+        "duration_seconds": total_duration,
+        "by_type": by_type,
+    }
+
+
+@service_router.get("/users/{user_id}/planner", dependencies=[Depends(require_service_key)])
+def planner(user_id: int, db: Session = Depends(get_db)) -> list[dict]:
+    if not db.get(User, user_id):
+        raise HTTPException(status_code=404, detail="User not found")
+    items = db.scalars(
+        select(PlannerItem)
+        .where(PlannerItem.user_id == user_id)
+        .order_by(PlannerItem.due_at)
+    ).all()
+    return [
+        {
+            "id": item.id,
+            "course_id": item.course_id,
+            "assignment_id": item.assignment_id,
+            "title": item.title,
+            "due_at": _iso(item.due_at),
+            "completed": item.completed,
+        }
+        for item in items
+    ]
+
+
+@service_router.get(
+    "/courses/{course_id}/appointment-groups",
+    dependencies=[Depends(require_service_key)],
+)
+def appointment_groups(course_id: int, db: Session = Depends(get_db)) -> list[dict]:
+    require_course(db, course_id)
+    items = db.scalars(
+        select(AppointmentGroup).where(AppointmentGroup.course_id == course_id)
+    ).all()
+    return [
+        {
+            "id": item.id,
+            "title": item.title,
+            "starts_at": _iso(item.starts_at),
+            "ends_at": _iso(item.ends_at),
+            "slot_minutes": item.slot_minutes,
+            "participants_per_slot": item.participants_per_slot,
+            "reservations": [
+                {
+                    "id": reservation.id,
+                    "user_id": reservation.user_id,
+                    "starts_at": _iso(reservation.starts_at),
+                    "ends_at": _iso(reservation.ends_at),
+                }
+                for reservation in db.scalars(
+                    select(AppointmentReservation).where(
+                        AppointmentReservation.appointment_group_id == item.id
+                    )
+                ).all()
+            ],
+        }
+        for item in items
+    ]
+
+
+@service_router.get("/courses/{course_id}/resource-folders", dependencies=[Depends(require_service_key)])
+def resource_folders(course_id: int, db: Session = Depends(get_db)) -> list[dict]:
     require_course(db, course_id)
     return [
-        {"id": item.id, "title": item.title, "kind": item.kind, "source_url": item.source_url}
-        for item in db.scalars(select(Resource).where(Resource.course_id == course_id).order_by(Resource.id)).all()
+        {
+            "id": item.id,
+            "parent_id": item.parent_id,
+            "name": item.name,
+        }
+        for item in db.scalars(
+            select(ResourceFolder)
+            .where(ResourceFolder.course_id == course_id)
+            .order_by(ResourceFolder.parent_id, ResourceFolder.name)
+        ).all()
     ]
 
 

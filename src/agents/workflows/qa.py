@@ -188,6 +188,8 @@ def qa_node(state: LearningGraphState) -> dict[str, Any]:
         top_k=3,
         score_threshold=0.72,
         course_code=course_code or None,
+        institution_id=str(state.get("institution_id") or "") or None,
+        course_id=str(state.get("course_id") or "") or None,
     )
     passages = rag_result.get("passages", [])
     is_insufficient = rag_result.get("insufficient_sources", False)

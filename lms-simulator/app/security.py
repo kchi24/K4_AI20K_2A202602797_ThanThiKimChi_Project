@@ -127,7 +127,7 @@ class SessionAuthMiddleware:
     so clients cannot select a different acting user.
     """
 
-    PUBLIC_PATHS = {"/api/health", "/api/session"}
+    PUBLIC_PATHS = {"/api/health"}
     EXEMPT_PREFIXES = ("/api/pacewise/v1",)
     WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -145,6 +145,7 @@ class SessionAuthMiddleware:
             not path.startswith("/api/")
             or method == "OPTIONS"
             or path in self.PUBLIC_PATHS
+            or (path == "/api/session" and method == "POST")
             or path.startswith(self.EXEMPT_PREFIXES)
         ):
             await self.app(scope, receive, send)
