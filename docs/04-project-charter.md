@@ -109,7 +109,7 @@ Ký hiệu: **R** thực hiện, **A** chịu trách nhiệm cuối, **C** tham 
 **Mục tiêu:** khép vòng từ sai lệch/bằng chứng đến hành động.
 
 - Tech Lead: snapshot/diff/recovery API, ingestion pipeline, retention job.
-- AI Engineer: Recover, retriever/reranker, Llama Guard, check/diagnosis schema và độ tin cậy.
+- AI Engineer: Recover, retriever/reranker, classifier liêm chính học thuật, output policy, check/diagnosis schema và độ tin cậy.
 - PO: màn cảnh báo, xác nhận Recover, tutor, guardrail và kết quả hiểu bài.
 - BA: duyệt bộ 1–3 câu cho mỗi đơn vị kiến thức; phối hợp hai annotator và người phân xử.
 - Hoàn tất `grounding_safety_v1` và `understanding_journey_v1`, mỗi bộ ≥120 mẫu.

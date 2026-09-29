@@ -65,6 +65,56 @@ class SyncCursor(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class LmsEventProjection(Base):
+    """Durable copy of an LMS event before downstream processing."""
+
+    __tablename__ = "pacewise_lms_event_projections"
+
+    id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    institution_id: Mapped[str] = mapped_column(String(128), index=True)
+    source_event_id: Mapped[int] = mapped_column(Integer, index=True)
+    event_type: Mapped[str] = mapped_column(String(128), index=True)
+    aggregate_type: Mapped[str] = mapped_column(String(64), index=True)
+    aggregate_id: Mapped[str] = mapped_column(String(128))
+    course_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    occurred_at: Mapped[str] = mapped_column(String(64), default="")
+    processed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CourseProjection(Base):
+    """Latest server-side LMS state used by risk and ingestion workflows."""
+
+    __tablename__ = "pacewise_course_projections"
+
+    id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    institution_id: Mapped[str] = mapped_column(String(128), index=True)
+    course_id: Mapped[int] = mapped_column(Integer, index=True)
+    assignments_json: Mapped[str] = mapped_column(Text, default="[]")
+    risk_signals_json: Mapped[str] = mapped_column(Text, default="[]")
+    content_version: Mapped[str] = mapped_column(String(64), default="")
+    risk_refresh_required: Mapped[int] = mapped_column(Integer, default=0)
+    last_event_id: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class RagIngestionJob(Base):
+    """PostgreSQL-backed ingestion queue; one job represents one course snapshot."""
+
+    __tablename__ = "pacewise_rag_ingestion_jobs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    institution_id: Mapped[str] = mapped_column(String(128), index=True)
+    course_id: Mapped[int] = mapped_column(Integer, index=True)
+    resource_version: Mapped[str] = mapped_column(String(64), index=True)
+    resources_json: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class GoogleCalendarConnection(Base):
     __tablename__ = "google_calendar_connections"
 

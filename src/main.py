@@ -1,4 +1,3 @@
-import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -15,23 +14,18 @@ from src.config import get_settings
 from src.db import initialize_database
 from src.middleware import ProductionSecurityMiddleware
 from src.observability import render_prometheus
-from src.services.sync_worker import poll_lms_events
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
     initialize_database()
-    stop_sync = asyncio.Event()
-    sync_task = asyncio.create_task(poll_lms_events(settings, stop_sync))
     print(f"Starting {settings.app_name} in {settings.app_env} mode")
     try:
         async with runtime_agent(settings) as durable_agent:
             app.state.agent = durable_agent
             yield
     finally:
-        stop_sync.set()
-        await sync_task
         print("Shutting down...")
 
 

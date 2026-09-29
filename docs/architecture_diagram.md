@@ -1,6 +1,6 @@
 # PaceWise — Architecture
 
-**Trạng thái:** Kiến trúc thực thi cho MVP + hướng mở rộng production pilot · **Cập nhật:** 28/09/2026
+**Trạng thái:** Kiến trúc thực thi cho MVP + hướng mở rộng production pilot · **Cập nhật:** 29/09/2026
 
 ## 1. System context
 
@@ -12,11 +12,13 @@ flowchart LR
     Web -->|HTTPS / HttpOnly session + CSRF| API[FastAPI API]
     API -.->|Optional: REST read-only| Canvas
     API --> DB[(PostgreSQL)]
-    API --> Qdrant[(Qdrant embedded P0 / service P1)]
+    API -->|retrieval only| Qdrant[(Qdrant service)]
     API --> AI[LangGraph AI Harness]
     API -->|OAuth 2.0: identity + freebusy + confirmed events| GCal[Google Calendar API]
     API -->|RFC 5545 export, no OAuth| ICS[ICS file]
-    Worker --> AI
+    Canvas -->|event trigger + REST snapshot| Worker[Projection/RAG worker]
+    Worker --> DB
+    Worker -->|versioned ingestion| Qdrant
     AI --> Gateway[OpenRouter / OpenAI-compatible Models]
     API --> Obs[Request ID + structured logs + Prometheus/Grafana]
 ```
@@ -44,7 +46,7 @@ flowchart TB
     Graph --> ItemBuilder[Assessment Builder]
     Graph --> RubricScorer[CR Rubric Scorer]
     Graph --> Retriever[Qdrant Retriever + lazy FastEmbed + FlashRank ONNX]
-    Graph --> Guardrail[Rules + Llama Guard]
+    Graph --> Guardrail[Rules + calibrated classifier + output policy]
 
     Plan --> Deterministic[Constraint + Risk Validators]
     Assess --> Deterministic
@@ -59,12 +61,18 @@ flowchart TB
     Calendar --> DB
     Calendar --> GoogleAPI[Google Calendar REST API]
     Retriever --> Qdrant[(Qdrant)]
+    CanvasAdapter --> Queue[(PostgreSQL ingestion queue)]
+    Queue --> Worker[Projection/RAG worker]
+    Worker --> Qdrant
     Graph --> Checkpoint[(PostgreSQL LangGraph checkpoint)]
 ```
 
 Ranh giới quan trọng:
 
 - LLM hiểu ngữ nghĩa và sinh đề xuất; code kiểm tra quyền, schema, deadline, key MC, citation existence và privacy threshold.
+- Backend deterministic scheduler là nguồn duy nhất tạo study block và quyết định tính khả thi; frontend chỉ thu thập input và hiển thị bản nháp.
+- Thread học tập có khóa `institution:user:course:learning-cycle`, không phụ thuộc cookie session đăng nhập.
+- Request chat chỉ retrieval. Worker riêng nhận event, lấy REST snapshot, version hóa học liệu và cập nhật Qdrant; point được cô lập theo institution/course/resource/version/access scope.
 - Assessment builder không tự duyệt output của chính nó. Item/rubric phải qua quality gate và giảng viên xác nhận.
 - Độ tin cậy thấp, câu trả lời ngoài rubric hoặc bộ chấm bất đồng được chuyển vào hàng chờ giảng viên; không tự cập nhật bằng chứng học tập.
 - Mọi plan/re-plan, assessment publish và instructor action đều version hóa/audit.
@@ -121,19 +129,19 @@ Staging và production dùng project/schema, secret và telemetry environment t�
 |---|---|---|
 | Frontend | React 19 + TypeScript + Vite | Một codebase cho hai vai trò, production build phục vụ bằng Nginx |
 | Backend | Python 3.11 + FastAPI + Pydantic + SQLAlchemy/Alembic | Khớp repo, API/schema rõ, migration được kiểm soát |
-| Database/vector | PostgreSQL + Qdrant embedded P0 | PostgreSQL lưu nghiệp vụ/checkpoint; vector nằm trên volume demo, nâng thành Qdrant service khi scale |
-| Cache/job | Chưa triển khai P0; Redis + worker là P1 | Chỉ thêm khi đo được bottleneck ingestion hoặc rate limit nhiều instance |
+| Database/vector | PostgreSQL + Qdrant service | PostgreSQL lưu nghiệp vụ/checkpoint/job; Qdrant tách process để backend có thể scale nhiều replica |
+| Cache/job | Durable queue trong PostgreSQL + worker riêng | Event được project và ingestion retry được sau restart; Redis chỉ thêm khi throughput thực tế yêu cầu |
 | AI | LangGraph + OpenAI-compatible client/OpenRouter | Workflow có state/HITL, đổi model qua config |
 | RAG | FastEmbed đa ngôn ngữ + Qdrant + FlashRank ONNX | Pipeline ingest → retrieve → rerank → citation, lazy-load để giảm RAM |
-| Guardrail | Quy tắc xác định trước + Llama Guard | Không phụ thuộc một prompt/classifier duy nhất |
+| Guardrail | Quy tắc nhanh + classifier hiệu chuẩn + output policy | Chặn input/output nhiều lớp; khi classifier lỗi hệ thống hạ cấp sang guided help an toàn |
 | Canvas | Fixture bắt buộc; REST read-only có điều kiện; LTI 1.3 P1 | Demo tái lập, tích hợp thật khi có credential |
 | Calendar | Google OAuth 2.0 + Calendar REST qua HTTPX; RFC 5545 `.ics` | Kết nối trực tiếp có HITL và fallback không phụ thuộc Google |
 | Quality | Pytest, Vitest, Playwright, Locust/k6, RAGAS + metric xác định trước | Unit, integration, E2E, load và chất lượng AI |
 | Observability | Request ID, structured logs, Prometheus/Grafana | Theo dõi lỗi/latency HTTP, agent node và RAG; OpenTelemetry/LLM tracing là P1 |
 
 Hiện trạng P0 đã triển khai gồm request ID, structured logs, metrics Prometheus và dashboard
-Grafana. OpenTelemetry/LLM tracing, Redis/RQ và Qdrant service tách riêng là bước nâng cấp cho
-production; bản Docker hiện tại dùng Qdrant embedded trên volume để giảm RAM cho demo.
+Grafana. Qdrant và worker đã chạy thành service riêng trong Docker Compose. OpenTelemetry/LLM
+tracing và Redis chỉ là bước nâng cấp khi pilot đo được nhu cầu throughput tương ứng.
 
 LangGraph dùng PostgreSQL checkpointer trong Docker/production. `MemorySaver` chỉ được giữ làm
 fallback cho unit test hoặc cấu hình SQLite local. Embedding FastEmbed và FlashRank ONNX đều

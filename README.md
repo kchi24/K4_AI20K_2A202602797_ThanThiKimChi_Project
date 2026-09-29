@@ -65,10 +65,10 @@ LTI cấp trường và việc ghi dữ liệu ngược vào Canvas nằm ngoài
 | Backend | Python 3.11, FastAPI, Pydantic |
 | AI workflow | LangGraph, LangChain |
 | LLM | OpenAI-compatible API qua OpenRouter; model cấu hình bằng `.env` |
-| Database/vector | SQLite hiện tại; mục tiêu PostgreSQL + Qdrant |
-| Cache/job | Redis + RQ worker — chưa triển khai |
+| Database/vector | PostgreSQL + Qdrant service; SQLite chỉ cho test/local tối giản |
+| Cache/job | PostgreSQL durable ingestion queue + worker riêng |
 | Frontend | React 19 + TypeScript + Vite, HashRouter |
-| Guardrail | Quy tắc xác định trước + Llama Guard |
+| Guardrail | Quy tắc nhanh + semantic classifier hiệu chuẩn + output policy |
 | Test/eval | pytest/Ruff; mục tiêu Vitest, Playwright, Locust/k6, RAGAS và metric xác định trước |
 | Observability | Mục tiêu OpenTelemetry, structured logs, Prometheus/Grafana và LLM tracing |
 | Deploy | Docker; Render hoặc GCP Cloud Run sau khi chốt ngân sách |
@@ -124,7 +124,7 @@ Không commit `.env`, API key hoặc token Canvas lên GitHub.
 
 ### Chạy toàn bộ hệ thống bằng Docker
 
-Compose ở thư mục gốc chạy PaceWise frontend, backend, LMS Simulator và hai PostgreSQL bằng một lệnh:
+Compose ở thư mục gốc chạy PaceWise frontend, backend, worker, Qdrant, LMS Simulator và hai PostgreSQL bằng một lệnh:
 
 ```powershell
 Copy-Item .env.example .env
@@ -140,6 +140,7 @@ Mở các địa chỉ sau:
 - LMS Simulator: <http://localhost:8010>
 - PaceWise PostgreSQL: `localhost:5433`
 - LMS PostgreSQL: `localhost:5434`
+- Qdrant API/dashboard: <http://localhost:6333/dashboard>
 
 Frontend production build được phục vụ bởi Nginx. Request `/api/*` được reverse proxy nội bộ tới
 FastAPI; FastAPI gọi LMS qua `http://lms-simulator:8010`. Vì vậy service key LMS không xuất hiện
@@ -147,7 +148,7 @@ trong JavaScript hoặc trình duyệt.
 
 ```powershell
 # Xem log
-docker compose logs -f backend frontend lms-simulator
+docker compose logs -f backend worker frontend lms-simulator qdrant
 
 # Dừng nhưng giữ dữ liệu database
 docker compose down
@@ -172,8 +173,9 @@ Mô hình bảo mật:
 
 Dữ liệu kế hoạch, phiên học và reflection được lưu trong PostgreSQL thay vì chỉ nằm ở
 `localStorage`. Sau đăng nhập, frontend tự đồng bộ LMS mỗi 30 giây, tổng hợp deadline của
-tất cả môn đã đăng ký và cho phép đổi môn đang xem. Backend đồng thời đọc event feed của
-LMS và lưu cursor để tiếp tục đúng vị trí sau khi restart.
+tất cả môn đã đăng ký và cho phép đổi môn đang xem. Worker riêng đọc event feed của LMS, lưu
+cursor, cập nhật projection/risk và xếp job ingest RAG bền vững để tiếp tục đúng vị trí sau khi
+restart. Chat request không tải hoặc embedding học liệu.
 
 ## Kiểm thử
 
@@ -209,7 +211,7 @@ AI harness đã qua kiểm thử xác định, chưa thay thế kiểm thử pil
 liệu thật.
 
 Frontend gọi API AI bằng PaceWise session `HttpOnly`; backend tự lấy user, role,
-course, assignment và học liệu từ LMS simulator. Client không được tự truyền
+course và assignment từ LMS simulator. Học liệu do worker ingest trước vào Qdrant; request chat chỉ retrieval. Client không được tự truyền
 `user_id`, `role`, `course_id` hoặc `thread_id` cho agent.
 
 ## Tài liệu Gate 01
@@ -267,9 +269,9 @@ request trở lại `develop` và xóa branch sau khi merge. Khi một phiên b�
 ## AI runtime, observability và evaluation
 
 - LangGraph dùng PostgreSQL checkpointer khi `DATABASE_URL` là PostgreSQL; state của cùng một
-  PaceWise session được khôi phục qua `thread_id` phía server. `MemorySaver` chỉ còn là fallback
+  hành trình học được khôi phục qua khóa `institution:user:course:learning-cycle`. `MemorySaver` chỉ còn là fallback
   cho test/local SQLite.
-- RAG ingest học liệu đã được LMS phân quyền, tạo embedding đa ngôn ngữ bằng FastEmbed, truy xuất
+- Worker RAG ingest bất đồng bộ học liệu đã được LMS phân quyền và version hóa, tạo embedding đa ngôn ngữ bằng FastEmbed, truy xuất
   từ Qdrant, rerank bằng FlashRank ONNX đa ngôn ngữ và trả citation theo tài liệu/trang/đoạn.
   FastEmbed và reranker đều lazy-load, nên các workflow không dùng RAG không tốn RAM cho model.
 - Backend xuất structured request logs, `X-Request-ID` và Prometheus metrics tại `/metrics`.

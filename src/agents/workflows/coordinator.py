@@ -6,9 +6,10 @@ import json
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from src.agents.guardrails import classify_workflow, evaluate_guardrails
+from src.agents.guardrails import classify_workflow
 from src.agents.llm import get_agent_llm
 from src.agents.prompts.coordinator import COORDINATOR_SYSTEM_PROMPT
+from src.agents.safety import evaluate_input_policy
 from src.agents.state import LearningGraphState
 
 
@@ -23,7 +24,7 @@ def coordinator_node(state: LearningGraphState) -> dict:
         last_msg = state["messages"][-1]
         query = last_msg.get("content", "") if isinstance(last_msg, dict) else getattr(last_msg, "content", "")
 
-    security_flags = evaluate_guardrails(query)
+    security_flags = evaluate_input_policy(query)
     workflow, route_confidence = classify_workflow(query, state.get("pending_action"))
     workflow_hint = str((state.get("request") or {}).get("workflow_hint") or "").lower()
     if workflow_hint in {"plan", "tracking", "qa", "understanding", "recover", "reflect"}:

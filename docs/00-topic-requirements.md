@@ -75,7 +75,7 @@ PaceWise chỉ đọc course, assignment, syllabus và submission status cần t
 - **OpenRouter** làm cổng model; GPT-4o-mini hoặc Claude Haiku cho tác vụ thường, model lớn chỉ dùng cho ca Reflect khó sau khi bộ định tuyến cho phép.
 - **Qdrant** lưu vector tài liệu môn; embedding đa ngôn ngữ; **bge-reranker** là mặc định, Cohere Rerank là cấu hình thay thế.
 - **PostgreSQL** lưu dữ liệu nghiệp vụ và lịch sử; **Redis** cache, rate limit và hàng đợi ngắn.
-- Guardrail nhiều lớp: quy tắc xác định trước + **Llama Guard**. Zero-shot classifier chỉ là baseline đo đối chiếu, không phải lớp bảo vệ duy nhất.
+- Guardrail ba lớp: quy tắc nhanh + semantic classifier hiệu chuẩn + policy kiểm tra output. Khi classifier lỗi, yêu cầu mơ hồ được hạ cấp sang guided help an toàn.
 - **RAGAS**, metric xác định trước và LLM-as-Judge đã hiệu chuẩn cho đánh giá.
 - Docker; staging/production trên Render hoặc GCP Cloud Run tùy ngân sách đã chốt.
 

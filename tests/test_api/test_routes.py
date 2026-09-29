@@ -1,8 +1,11 @@
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
+from src.api.routes import _learning_thread_id, _load_lms_agent_context
+from src.config import get_settings
 from src.main import app
 from src.security import SessionContext, require_csrf
 
@@ -43,6 +46,41 @@ def _lms_response(path: str, _params=None):
     if path.endswith("/submissions"):
         return [{"assignment_id": 21, "workflow_state": "unsubmitted"}]
     raise AssertionError(f"Unexpected LMS path: {path}")
+
+
+def test_learning_thread_is_stable_across_login_sessions_and_isolated_by_course():
+    now = datetime(2026, 9, 29, tzinfo=UTC)
+    settings = get_settings()
+    first = SessionContext(12, 7, (7,), "student", "A", "a@x.edu", "x", "sid-1", 1)
+    relogin = SessionContext(12, 7, (7,), "student", "A", "a@x.edu", "y", "sid-2", 2)
+    other_course = SessionContext(12, 8, (8,), "student", "A", "a@x.edu", "z", "sid-3", 3)
+
+    assert _learning_thread_id(first, settings, now) == _learning_thread_id(relogin, settings, now)
+    assert _learning_thread_id(first, settings, now) != _learning_thread_id(other_course, settings, now)
+
+
+@pytest.mark.asyncio
+async def test_lms_context_normalizes_assignment_ids_across_courses(monkeypatch):
+    session = SessionContext(12, 7, (7, 8), "student", "A", "a@x.edu", "x", "sid", 1)
+
+    async def service_get(_client, path, _params=None):
+        if path == "/api/pacewise/v1/courses":
+            return [
+                {"id": 7, "code": "AI101", "name": "AI"},
+                {"id": 8, "code": "DB101", "name": "Database"},
+            ]
+        if path.endswith("/7/assignments"):
+            return [{"id": 21, "title": "AI task", "points_possible": 10}]
+        if path.endswith("/8/assignments"):
+            return [{"id": 31, "title": "DB task", "points_possible": 5}]
+        if path.endswith("/submissions"):
+            return []
+        raise AssertionError(path)
+
+    monkeypatch.setattr("src.api.routes.LMSClient.service_get", service_get)
+    context = await _load_lms_agent_context(session, get_settings())
+
+    assert [item["id"] for item in context["assignments"]] == ["7:21", "8:31"]
 
 
 @pytest.mark.asyncio
@@ -123,5 +161,59 @@ async def test_chat_uses_authenticated_identity_and_lms_context(
     assert state["role"] == "student"
     assert state["approved_rubric"][0]["criterion_id"] == "c1"
     assert state["assignments"][0]["title"] == "Bài giữa kỳ"
-    assert state["learning_resources"][0]["document_title"] == "Giáo trình AI"
-    assert config["configurable"]["thread_id"] == "pacewise:server-side-session"
+    assert state["assignments"][0]["id"] == "7:21"
+    assert state["learning_resources"] == []
+    assert not any(call.args[0].endswith("/content") for call in service_get.await_args_list)
+    thread_id = config["configurable"]["thread_id"]
+    assert thread_id.startswith("university-x:12:7:")
+    assert "week-" in thread_id
+
+
+@pytest.mark.asyncio
+async def test_plan_returns_server_side_canonical_schedule(client, authenticated_student, monkeypatch):
+    monkeypatch.setattr("src.api.routes.LMSClient.service_get", AsyncMock(side_effect=_lms_response))
+    ainvoke = AsyncMock(
+        return_value={
+            "response": "Bản kế hoạch nháp.",
+            "workflow": "plan",
+            "status": "awaiting_student",
+            "output": {
+                "plan_validation": {
+                    "valid": False,
+                    "errors": [{"code": "LLM_MILESTONE_ESTIMATE"}],
+                }
+            },
+        }
+    )
+    monkeypatch.setattr("src.api.routes.agent", SimpleNamespace(ainvoke=ainvoke))
+    response = await client.post(
+        "/api/v1/chat",
+        json={
+            "message": "Lập kế hoạch",
+            "workflow": "plan",
+            "context": {
+                "plan_input": {
+                    "goal": "Xong bài giữa kỳ",
+                    "tasks": [{"taskId": "7:21", "remainingMin": 60}],
+                    "availability": [
+                        {"weekday": index, "enabled": True, "start": "18:00", "end": "20:00"} for index in range(7)
+                    ],
+                    "unavailable": [],
+                    "preferred": "evening",
+                }
+            },
+        },
+    )
+    assert response.status_code == 200
+    draft = response.json()["output"]["plan_draft"]
+    assert response.json()["output"]["plan_validation"]["valid"] is True
+    assert response.json()["output"]["milestone_validation"]["valid"] is False
+    assert draft["feasibility"]["feasible"] is True
+    assert (
+        sum(
+            (int(block["end"][:2]) * 60 + int(block["end"][3:]))
+            - (int(block["start"][:2]) * 60 + int(block["start"][3:]))
+            for block in draft["blocks"]
+        )
+        == 60
+    )

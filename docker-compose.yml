@@ -35,6 +35,14 @@ services:
       retries: 10
     restart: unless-stopped
 
+  qdrant:
+    image: qdrant/qdrant:v1.15.4
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
   lms-simulator:
     build:
       context: .
@@ -77,7 +85,7 @@ services:
       PACEWISE_SESSION_SECRET: ${PACEWISE_SESSION_SECRET:-development-only-session-secret-change-me}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
       VECTOR_STORE_TYPE: qdrant
-      QDRANT_PATH: /app/data/qdrant
+      QDRANT_URL: http://qdrant:6333
       EMBEDDING_CACHE_DIR: /app/data/models/fastembed
       RERANKER_CACHE_DIR: /app/data/models/flashrank
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
@@ -92,12 +100,43 @@ services:
         condition: service_healthy
       lms-simulator:
         condition: service_healthy
+      qdrant:
+        condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
       timeout: 5s
       start_period: 20s
       retries: 10
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "src.worker"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg://pacewise:${PACEWISE_DB_PASSWORD:-pacewise-local-only}@pacewise-postgres:5432/pacewise
+      LMS_BASE_URL: http://lms-simulator:8010
+      PACEWISE_API_KEY: ${PACEWISE_API_KEY:-development-only-service-key-change-me}
+      INSTITUTION_ID: ${INSTITUTION_ID:-university-x}
+      QDRANT_URL: http://qdrant:6333
+      EMBEDDING_CACHE_DIR: /app/data/models/fastembed
+      RERANKER_CACHE_DIR: /app/data/models/flashrank
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      pacewise-postgres:
+        condition: service_healthy
+      lms-simulator:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    healthcheck:
+      disable: true
     restart: unless-stopped
 
   frontend:
@@ -153,3 +192,4 @@ volumes:
   lms_uploads:
   prometheus_data:
   grafana_data:
+  qdrant_data:

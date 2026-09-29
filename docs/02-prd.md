@@ -306,7 +306,7 @@ Baseline, cohort, kỳ quan sát và công thức phải được lưu cùng bá
 | Agent | LangGraph |
 | Model gateway | OpenRouter; model nhỏ mặc định, model lớn cho Reflect khó |
 | RAG | Qdrant, embedding đa ngôn ngữ, bge-reranker; Cohere Rerank tùy cấu hình |
-| Guardrail | Quy tắc xác định trước + Llama Guard |
+| Guardrail | Quy tắc nhanh + semantic classifier hiệu chuẩn + policy kiểm tra output |
 | Data | PostgreSQL |
 | Calendar | Google OAuth 2.0/Calendar REST tùy chọn; RFC 5545 `.ics` fallback |
 | Cache/rate limit | Redis |

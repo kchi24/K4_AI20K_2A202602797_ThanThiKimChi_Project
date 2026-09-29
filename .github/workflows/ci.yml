@@ -31,7 +31,7 @@ jobs:
           OPENAI_API_KEY: test-key
           PYTHONUTF8: "1"
 
-      - name: Run deterministic AI evaluation (3 x 120 samples)
+      - name: Run deterministic AI evaluation (4 x 120 samples)
         run: python -m evals.run_agent_eval
         env:
           APP_ENV: test

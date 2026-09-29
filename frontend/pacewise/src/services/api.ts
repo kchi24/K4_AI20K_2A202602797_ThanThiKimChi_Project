@@ -16,7 +16,6 @@ import type {
   UnavailableSlot,
   User,
 } from '../types';
-import { explainPlan, schedule } from '../utils/scheduler';
 import type { QAResult } from '../utils/qa';
 
 const API_BASE = (import.meta.env.VITE_API_URL || '/api/v1').replace(/\/$/, '');
@@ -214,7 +213,10 @@ export interface AgentResponse {
   mode?: string;
   status: string;
   pending_action?: Record<string, unknown> | null;
-  output?: { plan_validation?: { valid: boolean; errors: { code: string }[] } } | null;
+  output?: {
+    plan_validation?: { valid: boolean; errors: { code: string }[] };
+    plan_draft?: PlanDraft;
+  } | null;
   progress_metrics?: Record<string, unknown>;
   risk_signals?: Array<Record<string, unknown>>;
   assessment_result?: {
@@ -368,6 +370,7 @@ export async function generatePlan(input: PlanInput, tasks: Task[], opts: Reques
         end: item.end,
       })),
       goals: [{ title: input.goal }],
+      plan_input: input,
     },
   );
   if (agentResult.output?.plan_validation && !agentResult.output.plan_validation.valid) {
@@ -376,15 +379,13 @@ export async function generatePlan(input: PlanInput, tasks: Task[], opts: Reques
       `Kế hoạch AI chưa khả thi: ${agentResult.output.plan_validation.errors.map((item) => item.code).join(', ')}.`,
     );
   }
-  const result = schedule(input, tasks);
-  const explained = explainPlan(input, result, tasks);
+  const draft = agentResult.output?.plan_draft;
+  if (!draft) {
+    throw new ApiError('UPSTREAM', 'Backend không trả về lịch học chuẩn hóa.');
+  }
   return {
-    input,
-    blocks: result.blocks,
-    feasibility: result.feasibility,
-    reasons: [agentResult.response, ...explained.reasons],
-    assumptions: explained.assumptions,
-    createdAt: new Date().toISOString(),
+    ...draft,
+    reasons: [agentResult.response, ...draft.reasons],
   };
 }
 
