@@ -16,6 +16,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.agents.guardrails import evaluate_guardrails, normalize_text
 from src.agents.llm import get_agent_llm
+from src.config import get_settings
 
 CLASSIFIER_VERSION = "academic_safety_classifier_v1"
 ALLOWED_ACTIONS = {"allow", "guided_help", "block"}
@@ -133,11 +134,14 @@ def evaluate_input_policy(
     query: str,
     *,
     classifier_factory: Callable[..., Any] = get_agent_llm,
+    semantic_mode: str | None = None,
 ) -> dict[str, Any]:
     """Apply fast rules, then a calibrated semantic classifier when needed."""
     decision = evaluate_guardrails(query)
     decision["layers"] = ["rules"]
-    if decision["action"] != "allow" or not _needs_semantic_review(query):
+    mode = semantic_mode or get_settings().semantic_safety_mode
+    semantic_required = mode == "all" or _needs_semantic_review(query)
+    if decision["action"] != "allow" or not semantic_required:
         return decision
     try:
         classifier = classifier_factory(temperature=0.0)

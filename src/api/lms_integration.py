@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from src.api.workspace import check_login_rate_limit, record_failed_login, revoke_session
 from src.config import Settings, get_settings
 from src.db import get_db
-from src.persistence_models import InstructorAction, PaceWiseSession
+from src.persistence_models import AgentReviewCase, InstructorAction, PaceWiseSession
 from src.security import (
     SessionContext,
     get_current_session,
@@ -340,10 +340,43 @@ async def _sync_payload(session: SessionContext, settings: Settings, db: Session
         )
         .order_by(InstructorAction.created_at)
     ).all()
+    assessments = []
+    quizzes = await client.service_get(
+        f"/api/pacewise/v1/courses/{session.course_id}/quizzes"
+    )
+    assessment_actions = db.scalars(
+        select(InstructorAction)
+        .where(
+            InstructorAction.course_id == session.course_id,
+            InstructorAction.action_type == "assessment",
+        )
+        .order_by(InstructorAction.created_at)
+    ).all()
+    latest_assessment_actions = {item.entity_id: item for item in assessment_actions}
+    for quiz in quizzes:
+        for question in quiz.get("questions", []):
+            assessment_id = f"Q-{question['id']}"
+            action = latest_assessment_actions.get(assessment_id)
+            payload = json.loads(action.payload_json or "{}") if action else {}
+            if payload.get("status") != "approved":
+                continue
+            assessments.append(
+                {
+                    "id": assessment_id,
+                    "topic": quiz["title"],
+                    "question": payload.get("question") or question["prompt"],
+                    "rubric": payload.get("rubric")
+                    or ["Đúng khái niệm", "Giải thích có lập luận", "Không sao chép đáp án"],
+                    "status": "approved",
+                    "source": payload.get("source") or "Canvas quiz",
+                    "aiGenerated": False,
+                }
+            )
     return {
         "courses": ui_courses,
         "tasks": tasks,
         "guidance": _guidance_payload(list(guidance_actions)),
+        "assessments": assessments,
         "courseData": course_data,
         "syncedAt": datetime.now(UTC).isoformat(),
         "source": "canvas-lms-simulator",
@@ -450,6 +483,11 @@ async def instructor_overview(
         .where(InstructorAction.course_id == course_id)
         .order_by(InstructorAction.created_at)
     ).all()
+    agent_review_cases = db.scalars(
+        select(AgentReviewCase)
+        .where(AgentReviewCase.course_id == course_id)
+        .order_by(AgentReviewCase.created_at.desc())
+    ).all()
     guidance = _guidance_payload(list(saved_actions))
 
     submitted_by_student: dict[int, list[dict]] = defaultdict(list)
@@ -522,6 +560,21 @@ async def instructor_overview(
         }
         for item in low_evidence[:20]
     ]
+    review_queue.extend(
+        {
+            "id": item.id,
+            "topic": "Đánh giá hiểu bài"
+            if item.case_type == "understanding_review"
+            else "Khiếu nại trích dẫn",
+            "question": item.entity_id,
+            "responseExcerpt": "Nội dung cá nhân chỉ hiển thị cho giảng viên được phân quyền.",
+            "confidence": "low",
+            "reason": item.case_type,
+            "status": item.status,
+            "submittedAt": item.created_at.isoformat(),
+        }
+        for item in agent_review_cases
+    )
     assessments = []
     for quiz in quizzes:
         for question in quiz.get("questions", []):

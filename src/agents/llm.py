@@ -7,12 +7,15 @@ import os
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 
+from src.agents.telemetry import ModelUsageCallback
 from src.config import get_settings
 
 load_dotenv()
 
-# Tắt tạm tracing nếu key LangSmith là dummy để tránh spam log 403 trên terminal
-os.environ["LANGCHAIN_TRACING_V2"] = "false"
+# A placeholder key must not trigger background network calls in local/test
+# runs. Real LANGCHAIN_* settings remain untouched so production tracing works.
+if os.getenv("LANGCHAIN_API_KEY", "").startswith("your-"):
+    os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
 
 def get_agent_llm(model: str | None = None, temperature: float = 0.7) -> ChatOpenAI:
@@ -42,4 +45,5 @@ def get_agent_llm(model: str | None = None, temperature: float = 0.7) -> ChatOpe
         temperature=temperature,
         timeout=90.0,
         max_retries=1,
+        callbacks=[ModelUsageCallback()],
     )

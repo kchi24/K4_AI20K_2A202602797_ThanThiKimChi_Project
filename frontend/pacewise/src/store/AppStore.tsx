@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useReducer } from 'react';
-import { defaultAvailability, defaultUnavailable, savedPlan, sessions as seedSessions } from '../data/plan';
+import { defaultAvailability, defaultUnavailable } from '../data/plan';
 import { getCurrentSession, loadWorkspace, saveWorkspace, syncCanvas } from '../services/api';
 import type {
   ActiveSession,
@@ -31,7 +31,6 @@ import type {
 import { DEMO_TODAY, WEEK_START, uid } from '../utils/time';
 
 export interface Settings {
-  simulateAiError: boolean;
   staleData: boolean;
   lastSync: string;
 }
@@ -74,40 +73,20 @@ export const initialState: AppState = {
   courses: [],
   tasks: [],
   courseData: {},
-  plan: savedPlan,
+  plan: null,
   planHistory: [],
   availability: defaultAvailability,
   unavailable: defaultUnavailable,
-  sessions: seedSessions,
+  sessions: [],
   activeSession: null,
   wizardInput: null,
   planDraft: null,
   qaMessages: [],
-  quickChecks: [
-    {
-      id: 'qc-1',
-      topic: 'Hypothesis Testing',
-      question: 'Giải thích ý nghĩa của p-value = 0,03 trong kiểm định một mẫu.',
-      answer: 'p-value 0,03 nghĩa là giả thuyết H0 có 3% khả năng đúng.',
-      evidenceState: 'abstained',
-      confidence: 'low',
-      feedback: 'Chưa đủ bằng chứng để kết luận. Câu trả lời nằm ngoài rubric tự động và đã được chuyển cho Giảng viên xem xét.',
-      submittedAt: '29/09 08:40',
-      reviewItemId: 'PW-104',
-    },
-  ],
-  guidance: [
-    {
-      id: 'gd-1',
-      topic: 'Hypothesis Testing',
-      message: 'Lưu ý p-value là xác suất quan sát được dữ liệu (hoặc cực đoan hơn) khi H0 đúng, KHÔNG PHẢI xác suất H0 đúng. Các bạn ôn lại Slide tuần 3 trang 12.',
-      at: '28/09 14:00',
-      instructorName: 'TS. Nguyễn Văn A',
-    },
-  ],
+  quickChecks: [],
+  guidance: [],
   reflection: null,
   recoveryOptions: [],
-  settings: { simulateAiError: false, staleData: false, lastSync: '2026-09-29T08:10:00+07:00' },
+  settings: { staleData: false, lastSync: '' },
   reviewQueue: [],
   assessments: [],
   audit: [],
@@ -150,9 +129,9 @@ export type Action =
   | { type: 'SET_ASSESSMENT_STATUS'; id: string; status: AssessmentStatus; note?: string }
   | { type: 'UPDATE_ASSESSMENT'; item: Pick<AssessmentItem, 'id' | 'question' | 'rubric' | 'level' | 'source'>; status?: AssessmentStatus; note?: string; historyText: string }
   | { type: 'DISMISS_DRIFT'; taskId: string }
-  | { type: 'SYNC_CANVAS'; tasks: Task[]; courses?: Course[]; guidance?: ClassGuidance[]; courseData?: Record<string, LMSCourseData> }
+  | { type: 'SYNC_CANVAS'; tasks: Task[]; courses?: Course[]; guidance?: ClassGuidance[]; assessments?: AssessmentItem[]; courseData?: Record<string, LMSCourseData> }
   | { type: 'SET_INSTRUCTOR_DATA'; classGroups: ClassGroup[]; groupStats: Record<string, GroupStats>; reviewQueue: ReviewItem[]; assessments: AssessmentItem[]; audit: AuditEntry[]; guidance: ClassGuidance[]; lmsSummary: LMSInstructorSummary | null }
-  | { type: 'RESET_DEMO' };
+  ;
 
 function audit(state: AppState, action: string): AuditEntry[] {
   const d = new Date();
@@ -200,6 +179,7 @@ export function reducer(state: AppState, action: Action): AppState {
         courses: action.courses ?? state.courses,
         courseData: action.courseData ?? state.courseData,
         guidance: action.guidance ?? state.guidance,
+        assessments: action.assessments ?? state.assessments,
         settings: { ...state.settings, staleData: false, lastSync: new Date().toISOString() },
       };
     }
@@ -393,22 +373,6 @@ export function reducer(state: AppState, action: Action): AppState {
     }
     case 'DISMISS_DRIFT':
       return { ...state, dismissedDrifts: [...state.dismissedDrifts, action.taskId], recoveryOptions: [] };
-    case 'RESET_DEMO': {
-      if (state.user?.isNew) {
-        return {
-          ...initialState,
-          user: state.user,
-          authReady: true,
-          courses: [],
-          tasks: [],
-          plan: null,
-          sessions: [],
-          dismissedDrifts: [],
-          reflection: null,
-        };
-      }
-      return { ...initialState, user: state.user, authReady: true, courses: [], tasks: [] };
-    }
     default:
       return state;
   }
@@ -451,6 +415,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
           courses: result.courses,
           tasks: result.tasks,
           guidance: result.guidance,
+          assessments: result.assessments,
           courseData: result.courseData,
         }))
         .catch(() => active && dispatch({ type: 'UPDATE_SETTINGS', patch: { staleData: true } }));

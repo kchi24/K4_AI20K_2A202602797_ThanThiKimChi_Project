@@ -1,13 +1,21 @@
 import type { Clock, Weekday } from '../types';
 
-/**
- * Demo clock. The mock data describes the week 28/09 – 04/10/2026, and "now" is
- * Tuesday 29/09/2026 09:00 (GMT+7) so every flow is reproducible.
- */
-export const DEMO_TODAY = '2026-09-29';
-export const DEMO_NOW: Clock = '09:00';
-export const WEEK_START = '2026-09-28';
-export const TIMEZONE_LABEL = 'GMT+7';
+const runtimeNow = new Date();
+const localDate = (value: Date) => {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+const monday = new Date(runtimeNow);
+monday.setHours(0, 0, 0, 0);
+monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+
+/** Runtime clock aliases retained to avoid breaking existing domain helpers. */
+export const DEMO_TODAY = localDate(runtimeNow);
+export const DEMO_NOW: Clock = `${String(runtimeNow.getHours()).padStart(2, '0')}:${String(runtimeNow.getMinutes()).padStart(2, '0')}`;
+export const WEEK_START = localDate(monday);
+export const TIMEZONE_LABEL = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local';
 
 const WEEKDAY_LONG = ['Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy', 'Chủ Nhật'];
 const WEEKDAY_SHORT = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
@@ -79,7 +87,7 @@ export function daysUntil(date: string) {
   return diffDays(DEMO_TODAY, date);
 }
 
-/** Is `date start` already in the past relative to the demo clock? */
+/** Return whether the supplied date/time has passed in the user's local clock. */
 export function isPast(date: string, clock: Clock) {
   const d = diffDays(DEMO_TODAY, date);
   if (d < 0) return true;

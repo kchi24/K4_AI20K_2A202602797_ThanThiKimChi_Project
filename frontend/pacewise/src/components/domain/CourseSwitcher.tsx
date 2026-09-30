@@ -24,7 +24,7 @@ export function CourseSwitcher() {
             await switchCourse(courseId);
             dispatch({ type: 'SET_ACTIVE_COURSE', courseId });
             const synced = await syncCanvas();
-            dispatch({ type: 'SYNC_CANVAS', courses: synced.courses, tasks: synced.tasks, guidance: synced.guidance, courseData: synced.courseData });
+            dispatch({ type: 'SYNC_CANVAS', courses: synced.courses, tasks: synced.tasks, guidance: synced.guidance, assessments: synced.assessments, courseData: synced.courseData });
             toast({ tone: 'success', title: 'Đã chuyển môn học' });
           } finally {
             setBusy(false);

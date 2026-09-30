@@ -7,10 +7,11 @@ from src.config import Settings
 
 
 class LMSClient:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None):
         self.settings = settings
         self.base_url = settings.lms_base_url.rstrip("/")
         self.timeout = httpx.Timeout(12.0, connect=4.0)
+        self._client = client
 
     def _service_headers(self) -> dict[str, str]:
         if not self.settings.pacewise_api_key.strip():
@@ -19,8 +20,11 @@ class LMSClient:
 
     async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
         try:
-            async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout) as client:
-                response = await client.request(method, path, **kwargs)
+            if self._client:
+                response = await self._client.request(method, path, timeout=self.timeout, **kwargs)
+            else:
+                async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout) as client:
+                    response = await client.request(method, path, **kwargs)
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             raise HTTPException(status_code=503, detail="LMS simulator is unavailable") from exc
         except httpx.TimeoutException as exc:

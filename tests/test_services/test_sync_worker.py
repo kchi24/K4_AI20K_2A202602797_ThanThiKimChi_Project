@@ -5,7 +5,13 @@ import pytest
 
 from src.config import get_settings
 from src.db import SessionLocal
-from src.persistence_models import CourseProjection, LmsEventProjection, RagIngestionJob, SyncCursor
+from src.persistence_models import (
+    CourseProjection,
+    LmsCourseContextProjection,
+    LmsEventProjection,
+    RagIngestionJob,
+    SyncCursor,
+)
 from src.services.sync_worker import project_lms_events, recover_interrupted_ingestion_jobs
 
 
@@ -16,6 +22,7 @@ async def test_lms_event_updates_projection_and_enqueues_rag_snapshot():
         db.query(LmsEventProjection).delete()
         db.query(RagIngestionJob).delete()
         db.query(CourseProjection).delete()
+        db.query(LmsCourseContextProjection).delete()
         db.query(SyncCursor).delete()
         db.commit()
 
@@ -38,6 +45,8 @@ async def test_lms_event_updates_projection_and_enqueues_rag_snapshot():
             return [{"id": 7, "code": "AI101", "name": "AI"}]
         if path.endswith("/content"):
             return [{"id": 11, "title": "Updated lesson", "body": "Fresh content", "published": True}]
+        if path.endswith("/modules"):
+            return [{"id": 1, "name": "Week 1", "items": []}]
         raise AssertionError(path)
 
     client = AsyncMock()
@@ -47,10 +56,12 @@ async def test_lms_event_updates_projection_and_enqueues_rag_snapshot():
     with SessionLocal() as db:
         event = db.get(LmsEventProjection, f"{settings.institution_id}:901")
         projection = db.get(CourseProjection, f"{settings.institution_id}:7")
+        context = db.get(LmsCourseContextProjection, f"{settings.institution_id}:7")
         job = db.scalar(db.query(RagIngestionJob).statement)
         cursor = db.get(SyncCursor, "lms-global")
         assert event is not None
         assert projection is not None and projection.content_version
+        assert json.loads(context.modules_json)[0]["name"] == "Week 1"
         assert json.loads(job.resources_json)[0]["course_id"] == "7"
         assert cursor.last_event_id == 901
 

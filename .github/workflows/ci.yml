@@ -24,15 +24,22 @@ jobs:
       - name: Lint with ruff
         run: python -m ruff check src/ evals/ tests/ lms-simulator/app/ lms-simulator/tests/
 
-      - name: Run tests
-        run: python -m pytest tests/ -v --tb=short --cov=src.agents --cov-report=term-missing --cov-fail-under=80
+      - name: Run backend tests
+        run: python -m pytest tests/ -v --tb=short --cov=src --cov-report=term-missing --cov-fail-under=80
         env:
           APP_ENV: test
           OPENAI_API_KEY: test-key
           PYTHONUTF8: "1"
 
-      - name: Run deterministic AI evaluation (4 x 120 samples)
+      - name: Run deterministic AI evaluation (4 x 120 + 100 adversarial samples)
         run: python -m evals.run_agent_eval
+        env:
+          APP_ENV: test
+          OPENAI_API_KEY: test-key
+          PYTHONUTF8: "1"
+
+      - name: Run reproducible manual acceptance evidence
+        run: python -m evals.run_manual_evidence
         env:
           APP_ENV: test
           OPENAI_API_KEY: test-key
@@ -49,6 +56,10 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm.cmd ci --no-audit --no-fund
+        working-directory: frontend/pacewise
+
+      - name: Run frontend unit and accessibility tests
+        run: npm.cmd test
         working-directory: frontend/pacewise
 
       - name: Typecheck and build frontend

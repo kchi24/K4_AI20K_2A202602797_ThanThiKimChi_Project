@@ -145,6 +145,13 @@ def understanding_node(state: LearningGraphState) -> dict:
         }
 
     rubric_context = json.dumps(approved_rubric, ensure_ascii=False, indent=2)
+    learner_context = json.dumps(
+        {
+            "mastery": state.get("mastery_profile") or {},
+            "known_misconceptions": state.get("misconceptions") or [],
+        },
+        ensure_ascii=False,
+    )
     try:
         llm = get_agent_llm(temperature=0.2)
         messages = [
@@ -153,6 +160,7 @@ def understanding_node(state: LearningGraphState) -> dict:
                 content=(
                     f"Câu trả lời/nội dung sinh viên nộp để kiểm tra mức hiểu: '{query}'\n\n"
                     f"RUBRIC ĐÃ ĐƯỢC DUYỆT:\n{rubric_context}\n\n"
+                    f"HỒ SƠ HỌC TẬP DÀI HẠN (không thay thế bằng chứng hiện tại):\n{learner_context}\n\n"
                     "Hãy đánh giá chi tiết theo 4 khía cạnh rubric và đính kèm khối JSON ```json ở cuối bài "
                     "với các trường: status, confidence, evidence_quotes."
                 )

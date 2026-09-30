@@ -19,6 +19,7 @@ export interface CanvasSyncResult {
   tasks: Task[];
   courseData: Record<string, LMSCourseData>;
   guidance?: ClassGuidance[];
+  assessments?: AssessmentItem[];
   syncedAt: string;
   source: string;
   activeCourseId: string;
@@ -275,6 +276,7 @@ export interface QAMessage {
   text: string;
   kind?: QAKind;
   citations?: string[];
+  sources?: Source[];
   suggestions?: string[];
   createdAt: string;
 }

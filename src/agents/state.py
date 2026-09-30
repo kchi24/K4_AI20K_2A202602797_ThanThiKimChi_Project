@@ -37,7 +37,10 @@ class LearningGraphState(TypedDict, total=False):
     unavailable_slots: list[dict[str, Any]]
     current_plan: dict[str, Any] | None
     learning_resources: list[dict[str, Any]]
-    approved_rubric: dict[str, Any] | None
+    approved_rubric: list[dict[str, Any]] | dict[str, Any] | None
+    learner_profile: dict[str, Any]
+    mastery_profile: dict[str, Any]
+    misconceptions: list[dict[str, Any]]
 
     # --- 3. Trạng thái trung gian & Đầu ra của Agent ---
     proposed_milestones: list[dict[str, Any]]
@@ -45,14 +48,16 @@ class LearningGraphState(TypedDict, total=False):
     retrieved_passages: list[dict[str, Any]]
     assessment_result: dict[str, Any] | None
     progress_metrics: dict[str, Any]
-    risk_signals: Annotated[list[dict[str, Any]], operator.add]
+    # Snapshot fields describe the latest calculation. They replace values
+    # from the previous turn so resolved risks/errors do not remain visible.
+    risk_signals: list[dict[str, Any]]
     recovery_snapshot: dict[str, Any] | None
     recovery_options: list[dict[str, Any]]
     reflection_draft: dict[str, Any] | None
 
     # --- 4. Cờ kiểm duyệt & Bất định (Guardrails) ---
     security_flags: dict[str, Any]
-    validation_errors: Annotated[list[dict[str, Any]], operator.add]
+    validation_errors: list[dict[str, Any]]
     uncertainties: list[dict[str, Any]]
     disputed_evidence: list[dict[str, Any]]
 
@@ -65,3 +70,5 @@ class LearningGraphState(TypedDict, total=False):
     source_refs: list[dict[str, Any]]
     audit_events: Annotated[list[dict[str, Any]], operator.add]
     output: dict[str, Any] | None
+    quality_review: dict[str, Any]
+    quality_repair_count: int

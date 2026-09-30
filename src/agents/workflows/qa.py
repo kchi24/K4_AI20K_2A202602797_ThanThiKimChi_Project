@@ -25,6 +25,7 @@ from src.agents.tools.qdrant_retriever import (
     search_course_materials,
 )
 from src.agents.validators import validate_citations
+from src.config import get_settings
 
 
 def _state_resource_passages(
@@ -158,8 +159,9 @@ def qa_node(state: LearningGraphState) -> dict[str, Any]:
             "current_node": "qa",
             "response": response_text,
             "analysis": f"Đã ghi nhận khiếu nại trích dẫn {disputed_citation} vào state['disputed_evidence'].",
-            "disputed_evidence": state.get("disputed_evidence", []),
-            "audit_events": state.get("audit_events", []),
+            "disputed_evidence": dispute_res["disputed_evidence"],
+            "audit_events": dispute_res["audit_events"],
+            "output": {"citation_dispute": dispute_res["dispute"]},
         }
 
     # 2. Kiểm tra Liêm chính học thuật (Chế độ guided_help)
@@ -183,10 +185,11 @@ def qa_node(state: LearningGraphState) -> dict[str, Any]:
     course_code = str(
         state.get("course_code") or state.get("course_id") or request_context.get("course_code") or ""
     ).strip()
+    rag_threshold = get_settings().rag_score_threshold
     rag_result = search_course_materials(
         query=query,
         top_k=3,
-        score_threshold=0.72,
+        score_threshold=rag_threshold,
         course_code=course_code or None,
         institution_id=str(state.get("institution_id") or "") or None,
         course_id=str(state.get("course_id") or "") or None,
@@ -205,11 +208,13 @@ def qa_node(state: LearningGraphState) -> dict[str, Any]:
 
     source_refs = [
         {
+            "id": str(p.get("resource_id") or p["citation"]),
             "citation": p["citation"],
             "document_title": p["document_title"],
             "course_code": p["course_code"],
             "page": p["page"],
             "paragraph": p["paragraph"],
+            "excerpt": str(p.get("content") or "")[:500],
             "score": p["score"],
         }
         for p in passages
@@ -227,7 +232,7 @@ def qa_node(state: LearningGraphState) -> dict[str, Any]:
         user_prompt = (
             f"Thắc mắc của sinh viên: '{query}'.\n\n"
             f"HỆ THỐNG THÔNG BÁO:\n"
-            f"Kho tài liệu học liệu môn học hiện tại không tìm thấy văn bản phù hợp hoặc độ tương đồng quá thấp (điểm cao nhất: {rag_result.get('top_score', 0.0)} < ngưỡng 0.72).\n"
+            f"Kho tài liệu học liệu môn học hiện tại không tìm thấy văn bản phù hợp hoặc độ tương đồng quá thấp (điểm cao nhất: {rag_result.get('top_score', 0.0)} < ngưỡng {rag_threshold:.2f}).\n"
             f"YÊU CẦU: Phản hồi theo chế độ 'insufficient_sources'. Trung thực thừa nhận kho học liệu môn học chưa đủ dữ kiện chứng minh 100%, gợi ý từ khóa học thuật cần tra cứu và khuyến khích sinh viên gặp giảng viên trong giờ Office Hour."
         )
         analysis_mode = "insufficient_sources (Low similarity or missing context)"
@@ -282,7 +287,6 @@ def qa_node(state: LearningGraphState) -> dict[str, Any]:
         "retrieved_passages": passages,
         "source_refs": source_refs,
         "disputed_evidence": state.get("disputed_evidence", []),
-        "audit_events": state.get("audit_events", []),
         "security_flags": guardrail,
         "output": {"citation_validation": citation_check},
     }

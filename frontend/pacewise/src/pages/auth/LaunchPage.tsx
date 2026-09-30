@@ -24,7 +24,7 @@ export function LaunchPage() {
       dispatch({ type: 'LOGIN', user });
       if (user.role === 'student') {
         const synced = await syncCanvas();
-        dispatch({ type: 'SYNC_CANVAS', courses: synced.courses, tasks: synced.tasks, guidance: synced.guidance, courseData: synced.courseData });
+        dispatch({ type: 'SYNC_CANVAS', courses: synced.courses, tasks: synced.tasks, guidance: synced.guidance, assessments: synced.assessments, courseData: synced.courseData });
       }
       navigate(homeFor(user.role), { replace: true });
     } catch (cause) {

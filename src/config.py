@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://openrouter.ai/api/v1"
     model_name: str = "openai/gpt-4o-mini"
     llm_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    semantic_safety_mode: Literal["signals", "all"] = "signals"
+    llm_input_cost_per_million: float = Field(default=0.0, ge=0.0)
+    llm_output_cost_per_million: float = Field(default=0.0, ge=0.0)
 
     # Database
     database_url: str = "sqlite:///./data/pacewise.db"
@@ -78,6 +81,7 @@ class Settings(BaseSettings):
     rag_top_k: int = Field(default=8, ge=3, le=30)
     rag_final_k: int = Field(default=3, ge=1, le=10)
     rag_rerank_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    rag_score_threshold: float = Field(default=0.72, ge=0.0, le=1.0)
     metrics_enabled: bool = True
 
     def model_post_init(self, __context: object) -> None:

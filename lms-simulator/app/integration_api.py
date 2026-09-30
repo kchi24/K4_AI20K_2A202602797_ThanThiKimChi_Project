@@ -545,7 +545,12 @@ def grades(course_id: int, user_id: int | None = None, db: Session = Depends(get
 
 
 @service_router.get("/courses/{course_id}/quizzes", dependencies=[Depends(require_service_key)])
-def quizzes(course_id: int, user_id: int | None = None, db: Session = Depends(get_db)) -> list[dict]:
+def quizzes(
+    course_id: int,
+    user_id: int | None = None,
+    include_answers: bool = False,
+    db: Session = Depends(get_db),
+) -> list[dict]:
     require_course(db, course_id)
     quiz_items = db.scalars(
         select(CourseContent).where(CourseContent.course_id == course_id, CourseContent.kind == "quiz")
@@ -563,7 +568,14 @@ def quizzes(course_id: int, user_id: int | None = None, db: Session = Depends(ge
                 "title": quiz.title,
                 "due_at": _iso(quiz.due_at),
                 "questions": [
-                    {"id": q.id, "prompt": q.prompt, "points": q.points, "position": q.position}
+                    {
+                        "id": q.id,
+                        "prompt": q.prompt,
+                        "points": q.points,
+                        "position": q.position,
+                        "question_type": "closed" if q.correct_answer else "open",
+                        **({"correct_answer": q.correct_answer} if include_answers else {}),
+                    }
                     for q in questions
                 ],
                 "attempts": [

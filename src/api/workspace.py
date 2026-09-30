@@ -9,7 +9,13 @@ from sqlalchemy.orm import Session
 
 from src.config import Settings
 from src.db import get_db
-from src.persistence_models import InstructorAction, LoginAttempt, PaceWiseSession, UserWorkspace
+from src.persistence_models import (
+    AgentReviewCase,
+    InstructorAction,
+    LoginAttempt,
+    PaceWiseSession,
+    UserWorkspace,
+)
 from src.security import SessionContext, get_current_session, require_csrf, require_instructor
 
 router = APIRouter()
@@ -97,6 +103,14 @@ def create_instructor_action(
         payload_json=json.dumps(payload.payload, ensure_ascii=False),
     )
     db.add(action)
+    if payload.action_type == "review":
+        review_case = db.get(AgentReviewCase, payload.entity_id)
+        if review_case and review_case.course_id == session.course_id:
+            review_case.status = str(payload.payload.get("status") or review_case.status)
+            review_payload = json.loads(review_case.payload_json or "{}")
+            if payload.payload.get("note"):
+                review_payload["instructor_note"] = payload.payload["note"]
+                review_case.payload_json = json.dumps(review_payload, ensure_ascii=False)
     db.commit()
     return {"id": action.id, "createdAt": action.created_at.isoformat()}
 

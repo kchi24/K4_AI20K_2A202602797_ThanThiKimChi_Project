@@ -1,4 +1,5 @@
 from src.agents.evaluation import (
+    adversarial_safety_dataset,
     grounding_safety_dataset,
     planning_dataset,
     run_full_evaluation,
@@ -10,6 +11,7 @@ def test_each_versioned_dataset_has_at_least_120_samples():
     assert len(planning_dataset()) >= 120
     assert len(grounding_safety_dataset()) >= 120
     assert len(understanding_journey_dataset()) >= 120
+    assert len(adversarial_safety_dataset()) >= 100
 
 
 def test_deterministic_release_metrics_pass():
