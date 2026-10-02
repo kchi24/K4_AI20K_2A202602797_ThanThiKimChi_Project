@@ -43,10 +43,15 @@ export function SourceModal({ source, onClose }: { source: Source | null; onClos
             onClick={async () => {
               if (!source) return;
               setReporting(true);
-              const { disputeId } = await reportCitation(source.id);
-              setReporting(false);
-              onClose();
-              toast({ tone: 'info', title: 'Đã ghi nhận phản ánh', description: `Đoạn nguồn tạm không dùng làm căn cứ chính. Mã: ${disputeId}` });
+              try {
+                const { disputeId } = await reportCitation(source.id);
+                onClose();
+                toast({ tone: 'info', title: 'Đã ghi nhận phản ánh', description: `Đoạn nguồn tạm không dùng làm căn cứ chính. Mã: ${disputeId}` });
+              } catch {
+                toast({ tone: 'danger', title: 'Chưa thể gửi phản ánh', description: 'Vui lòng thử lại sau.' });
+              } finally {
+                setReporting(false);
+              }
             }}
           >
             Báo nguồn sai

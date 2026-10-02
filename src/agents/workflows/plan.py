@@ -277,6 +277,7 @@ def plan_node(state: LearningGraphState) -> dict[str, Any]:
             "availability": state.get("availability") or [],
             "unavailable_slots": state.get("unavailable_slots") or [],
             "goals": state.get("goals") or [],
+            "learner_profile": state.get("learner_profile") or {},
         }
         prompt_content = (
             f"Nhiệm vụ của sinh viên: '{query}'\n\n"

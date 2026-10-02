@@ -18,22 +18,32 @@ flowchart TD
     R --> U[Understanding]
     R --> V[Recover]
     R --> F[Reflect]
-    P --> H1{Sinh viên xác nhận?}
-    V --> H2{Sinh viên xác nhận?}
-    F --> H3{Sinh viên xác nhận?}
-    U --> H4{Đủ rubric, bằng chứng, độ tin cậy?}
+    P --> G[Quality Gate]
+    T --> G
+    Q2 --> G
+    U --> G
+    V --> G
+    F --> G
+    G --> C2{Output hợp lệ?}
+    C2 -->|Không, lần đầu| RP[Repair Agent: safe correction]
+    RP --> G
+    C2 -->|Có hoặc đã repair 1 lần| D{Workflow outcome}
+    D -->|Plan| H1{Sinh viên xác nhận?}
+    D -->|Recover| H2{Sinh viên xác nhận?}
+    D -->|Reflect| H3{Sinh viên xác nhận?}
+    D -->|Understanding| H4{Đủ rubric, bằng chứng, độ tin cậy?}
+    D -->|Tracking / QA| O[Output]
     H4 -->|Không| I[Hàng chờ giảng viên]
-    H4 -->|Có| O[Output]
+    H4 -->|Có| O
+    I --> O
     H1 --> O
     H2 --> O
     H3 --> O
-    T --> O
-    Q2 --> O
     X --> O
     Q --> O
 ```
 
-Coordinator chạy rule nhanh trước, gọi semantic classifier cho ca mơ hồ và áp output policy trước khi trả kết quả. Khi intent rõ, bộ định tuyến xác định được ưu tiên để giảm latency và tránh phụ thuộc cách diễn đạt của LLM. Mỗi node ghi audit event chỉ gồm tên node, workflow, kết quả, latency và thời gian; không ghi prompt thô.
+Coordinator chạy rule nhanh trước, gọi semantic classifier theo cấu hình và áp output policy trước khi trả kết quả. Specialist luôn đi qua Critic; output lỗi được chuyển sang Repair Agent rồi Critic kiểm tra lại đúng một lần. Giới hạn một lần repair tránh vòng lặp agent vô hạn và giữ latency dự đoán được. Khi intent rõ, bộ định tuyến xác định được ưu tiên để giảm latency và tránh phụ thuộc cách diễn đạt của LLM. Mỗi node ghi audit event chỉ gồm tên node, workflow, kết quả, latency và thời gian; không ghi prompt thô.
 
 ## 2. Hợp đồng của từng workflow
 
@@ -42,11 +52,11 @@ Coordinator chạy rule nhanh trước, gọi semantic classifier cho ca mơ h�
 | Plan | assignment, availability, unavailable slot | thời lượng, capacity, ID, dependency, cycle | bản nháp; chỉ áp dụng sau xác nhận |
 | Tracking | deadline, estimated hours, current time | phép tính slack và overlap theo ngày/timezone | risk signal; đề nghị Recover nếu có nguy cơ |
 | QA | query, course_id, tài liệu môn | course filter, retrieval score, citation khớp passage | trả lời có nguồn; từ chối khi thiếu nguồn |
-| Understanding | câu trả lời, rubric đã duyệt | trạng thái, evidence, confidence, rubric | kết quả hỗ trợ; ca không chắc vào hàng chờ giảng viên |
+| Understanding | câu trả lời + `assessment_id`; backend lấy rubric/đáp án đã duyệt từ LMS | trạng thái, evidence, confidence, rubric | kết quả hỗ trợ; ca không chắc được ghi bền vững vào hàng chờ giảng viên |
 | Recover | plan hiện tại, milestone, assignment | ít nhất hai phương án, đủ schema, bảo vệ deadline | snapshot + phương án; chưa sửa lịch trước xác nhận |
 | Reflect | progress metrics, lịch sử tuần | draft có điều hiệu quả, nguyên nhân, một điều chỉnh, evidence | điều chỉnh tuần sau; chỉ áp dụng sau xác nhận |
 
-API dùng PaceWise session trong cookie `HttpOnly` và bắt buộc CSRF cho request ghi dữ liệu. Backend tự lấy `user_id`, vai trò và môn đang chọn từ session; `thread_id` được dựng theo `institution:user:course:learning-cycle`. Client không được tự chọn danh tính hoặc phạm vi course. Backend kiểm tra enrollment rồi nạp assignment/submission; học liệu thô được worker ingest bất đồng bộ và request QA chỉ retrieval từ namespace Qdrant đã phân quyền. Lỗi nội bộ không được trả nguyên văn cho client.
+API dùng PaceWise session trong cookie `HttpOnly` và bắt buộc CSRF cho request ghi dữ liệu. Backend tự lấy `user_id`, vai trò và môn đang chọn từ session; `thread_id` được dựng theo `institution:user:course:learning-cycle`. Working memory theo tuần được tách khỏi learner memory dài hạn theo `institution:user:course`. Client không được tự chọn danh tính, rubric, đáp án hoặc phạm vi course. Worker duy trì LMS projection để chat đọc snapshot nội bộ; học liệu thô được ingest bất đồng bộ và request QA chỉ retrieval từ namespace Qdrant đã phân quyền. Lỗi nội bộ không được trả nguyên văn cho client.
 
 ## 3. Test tự động
 
@@ -54,12 +64,15 @@ Chạy toàn bộ test và lint:
 
 ```powershell
 python -m ruff check src/ evals/ tests/
-python -m pytest tests/ -q
+python -m pytest tests/ -q --cov=src --cov-fail-under=80
+cd frontend/pacewise
+npm test
+npm run test:e2e
 ```
 
-Test bao phủ routing, guardrail, prompt injection, yêu cầu làm hộ, RAG theo course, citation, plan constraint, overlap/timezone, HITL, rubric, assessment escalation, recovery, reflection, xác thực PaceWise, phân quyền course và API. CI yêu cầu line coverage của `src.agents` tối thiểu 80%.
+Test bao phủ routing, Critic–Repair, guardrail, prompt injection, yêu cầu làm hộ, RAG theo course, citation, plan constraint, overlap/timezone, HITL, rubric, assessment escalation, recovery, reflection, xác thực PaceWise, Google Calendar, LMS client, phân quyền course và API. Frontend có Vitest + Testing Library, kiểm tra accessibility bằng axe-core và smoke test trình duyệt bằng Playwright.
 
-Lần chạy local ngày 29/09/2026 đạt **147 test backend/agent pass**, **81,15% coverage `src.agents`** và **4 test LMS simulator pass**. CI dùng `pytest-cov` làm cổng chính thức và sẽ fail nếu line coverage của `src.agents` dưới 80%.
+CI dùng `pytest-cov` làm cổng chính thức và sẽ fail nếu line coverage của toàn bộ package `src` dưới 80%. Con số pass/coverage phải lấy từ run CI gần nhất, không ghi cứng một baseline đã cũ vào tài liệu.
 
 Toàn bộ dependency Python của backend, LMS simulator, test, eval và load test được quản lý tập trung trong `requirements.txt`. Hai Dockerfile chỉ cài section runtime tương ứng để tránh đưa pytest/RAGAS/Locust hoặc AI stack vào image không cần chúng. Adapter vector vẫn được kiểm thử bằng fake module; kiểm thử tích hợp Qdrant thật phải chạy ở job/service riêng.
 
@@ -73,7 +86,7 @@ python -m evals.run_agent_eval --output evals/reports/latest.json
 python -m evals.run_safety_eval
 ```
 
-Ba dataset chính đều có 120 mẫu; routing có thêm 120 mẫu hỗ trợ. Kết quả baseline đã lưu tại `evals/reports/deterministic-2026-09-28.json`.
+Ba dataset chính đều có 120 mẫu; routing có thêm 120 mẫu hỗ trợ và bộ adversarial tĩnh có 100 mẫu. Kết quả baseline đã lưu tại `evals/reports/deterministic-2026-09-28.json`.
 
 Guardrail có thêm `safety_adversarial_v1.jsonl` gồm 100 mẫu tĩnh độc lập với regex trong code,
 bao phủ tiếng lóng, Anh–Việt, yêu cầu gián tiếp, prompt injection trong tài liệu và intent hỗn hợp.
@@ -106,6 +119,17 @@ pip install -r requirements.txt
 python evals/run_ragas_eval.py evals/datasets/rag-pilot.jsonl
 ```
 
+### Độ đồng thuận SME và sai số safety
+
+`evals/run_pilot_eval.py` yêu cầu tối thiểu 100 mẫu, hai nhãn độc lập, một nhãn đã
+adjudicate và output AI. Runner báo Cohen's Kappa, quadratic weighted Kappa cho mức
+hiểu bài, safety precision/recall, false-positive và false-negative. File
+`pilot-human-template.jsonl` chỉ là schema minh họa, không phải bằng chứng pilot.
+
+```powershell
+python evals/run_pilot_eval.py evals/datasets/pilot-human-v1.jsonl
+```
+
 ### Load test và quan sát hệ thống
 
 ```powershell
@@ -114,7 +138,8 @@ locust -f load_tests/locustfile.py --host http://localhost:5173 --headless -u 10
 docker compose --profile observability up -d
 ```
 
-Backend xuất request ID, structured log và Prometheus metrics cho HTTP, agent node và RAG.
+Backend xuất request ID, structured log và Prometheus metrics cho HTTP, agent node, RAG,
+LLM call, token và chi phí ước tính (khi cấu hình đơn giá model).
 Prometheus scrape `/metrics`; Grafana tự provision dashboard `PaceWise Overview`. Kịch bản 1.000
 virtual users chỉ là acceptance profile: phải chạy trên staging đủ tài nguyên và lưu report trước
 khi tuyên bố đạt tải.
@@ -125,7 +150,7 @@ Kết quả 100% chỉ chứng minh các rule/validator hiện tại vượt b�
 
 Trước production pilot vẫn bắt buộc:
 
-- SME duyệt nhãn `understanding_journey_v1`, hai người gán nhãn độc lập và báo cáo độ đồng thuận.
+- Thu thập `pilot-human-v1.jsonl` ≥100 mẫu; hai SME gán nhãn độc lập, adjudicate bất đồng rồi chạy `run_pilot_eval.py`.
 - Chạy RAGAS/faithfulness với tài liệu pilot thật và hiệu chuẩn LLM-as-Judge bằng nhãn người.
 - Test Qdrant thật, Postgres checkpointer, timeout/retry và model provider thật.
 - Chạy load test 100 virtual users; chỉ tuyên bố 1.000 concurrent khi có bằng chứng.

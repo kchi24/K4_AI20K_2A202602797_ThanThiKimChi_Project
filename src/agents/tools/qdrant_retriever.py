@@ -549,7 +549,9 @@ def search_course_materials(
 
         payload = point.payload or {}
         content = str(payload.get("content") or "")
-        passage_policy = evaluate_input_policy(content)
+        # Retrieved chunks use targeted injection signals; running a remote
+        # classifier for every passage would multiply latency and token cost.
+        passage_policy = evaluate_input_policy(content, semantic_mode="signals")
         if passage_policy.get("action") == "block":
             logger.warning("rag_passage_blocked reason=prompt_injection point_id=%s", point.id)
             continue
@@ -623,22 +625,20 @@ def record_disputed_evidence(
         "status": "flagged_for_review",
     }
 
-    current_disputes = list(state.get("disputed_evidence") or [])
-    current_disputes.append(dispute_entry)
-    state["disputed_evidence"] = current_disputes
-
     audit_entry = {
         "event": "CITATION_DISPUTED",
         "citation": citation,
         "reason": reason,
         "timestamp": datetime.now().isoformat(),
     }
-    audit_events = list(state.get("audit_events") or [])
-    audit_events.append(audit_entry)
-    state["audit_events"] = audit_events
+    current_disputes = [*(state.get("disputed_evidence") or []), dispute_entry]
 
     return {
         "status": "recorded",
         "dispute": dispute_entry,
+        "disputed_evidence": current_disputes,
+        # This is a delta. LangGraph's reducer appends it to durable history
+        # exactly once instead of receiving the full history again.
+        "audit_events": [audit_entry],
         "message": f"Hệ thống đã tiếp nhận phản hồi khiếu nại cho trích dẫn '{citation}'. Thông tin đã được chuyển tới Giảng viên/Ban học vụ để rà soát.",
     }

@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { Button } from '../../components/ui/Button';
 import { Card, CardHeader } from '../../components/ui/Card';
-import { Switch } from '../../components/ui/Field';
 import { Modal } from '../../components/ui/Modal';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { useToast } from '../../components/ui/Toast';
@@ -23,7 +21,6 @@ export function SettingsPage() {
   useDocumentTitle('Cài đặt');
   const { state, dispatch } = useAppStore();
   const toast = useToast();
-  const navigate = useNavigate();
   const [calendar, setCalendar] = useState<GoogleCalendarStatus | null>(null);
   const [calendarLoaded, setCalendarLoaded] = useState(false);
   const [calendarBusy, setCalendarBusy] = useState(false);
@@ -239,47 +236,6 @@ export function SettingsPage() {
           </ul>
         </Card>
 
-        <Card aria-labelledby="demo">
-          <CardHeader id="demo" title="Công cụ demo" subtitle="Mô phỏng các trạng thái để kiểm thử giao diện." />
-          <div className="space-y-5">
-            <Switch
-              label="Mô phỏng lỗi dịch vụ AI"
-              description="Tạo kế hoạch và hỏi đáp sẽ trả về lỗi để xem trạng thái Error / Thử lại."
-              checked={state.settings.simulateAiError}
-              onChange={(v) => dispatch({ type: 'UPDATE_SETTINGS', patch: { simulateAiError: v } })}
-            />
-            <Switch
-              label="Mô phỏng dữ liệu Canvas cũ"
-              description="Hiện banner dữ liệu có thể đã cũ trên mọi trang."
-              checked={state.settings.staleData}
-              onChange={(v) => dispatch({ type: 'UPDATE_SETTINGS', patch: { staleData: v } })}
-            />
-            <div className="flex flex-col gap-3 border-t border-line pt-5 sm:flex-row">
-              <Button
-                variant="secondary"
-                icon="calendar"
-                disabled={!state.plan}
-                onClick={() => {
-                  dispatch({ type: 'CLEAR_PLAN' });
-                  toast({ tone: 'info', title: 'Đã gỡ kế hoạch hiện tại', description: 'Xem trạng thái “Chưa có kế hoạch”.' });
-                  navigate('/dashboard');
-                }}
-              >
-                Xem trạng thái chưa có kế hoạch
-              </Button>
-              <Button
-                variant="danger"
-                icon="refresh"
-                onClick={() => {
-                  dispatch({ type: 'RESET_DEMO' });
-                  toast({ tone: 'success', title: 'Đã khôi phục dữ liệu demo' });
-                }}
-              >
-                Khôi phục dữ liệu demo
-              </Button>
-            </div>
-          </div>
-        </Card>
       </div>
       <Modal
         open={confirmExport}

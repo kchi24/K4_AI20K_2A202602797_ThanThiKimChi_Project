@@ -27,7 +27,7 @@ export function PlanGeneratingPage() {
     const t2 = window.setTimeout(() => run.current === id && setStep(2), 1800);
     const timeout = new Promise<never>((_, rej) => window.setTimeout(() => rej(new ApiError('TIMEOUT', 'Tác vụ mất nhiều thời gian hơn dự kiến.')), HARD_TIMEOUT));
     try {
-      const draft = await Promise.race([generatePlan(state.wizardInput, state.tasks, { simulateError: state.settings.simulateAiError }), timeout]);
+      const draft = await Promise.race([generatePlan(state.wizardInput, state.tasks), timeout]);
       if (run.current !== id) return;
       dispatch({ type: 'SET_DRAFT', draft });
       navigate('/plan/preview', { replace: true });
@@ -43,7 +43,7 @@ export function PlanGeneratingPage() {
       window.clearTimeout(t1);
       window.clearTimeout(t2);
     }
-  }, [state.wizardInput, state.tasks, state.settings.simulateAiError, dispatch, navigate]);
+  }, [state.wizardInput, state.tasks, dispatch, navigate]);
 
   useEffect(() => {
     start();

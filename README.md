@@ -69,7 +69,7 @@ LTI cấp trường và việc ghi dữ liệu ngược vào Canvas nằm ngoài
 | Cache/job | PostgreSQL durable ingestion queue + worker riêng |
 | Frontend | React 19 + TypeScript + Vite, HashRouter |
 | Guardrail | Quy tắc nhanh + semantic classifier hiệu chuẩn + output policy |
-| Test/eval | pytest/Ruff; mục tiêu Vitest, Playwright, Locust/k6, RAGAS và metric xác định trước |
+| Test/eval | pytest/Ruff, Vitest/Testing Library, axe-core, deterministic eval; Locust/k6 và RAGAS cho pilot |
 | Observability | Mục tiêu OpenTelemetry, structured logs, Prometheus/Grafana và LLM tracing |
 | Deploy | Docker; Render hoặc GCP Cloud Run sau khi chốt ngân sách |
 
@@ -122,6 +122,30 @@ uvicorn src.main:app --reload --port 8000
 
 Không commit `.env`, API key hoặc token Canvas lên GitHub.
 
+### Biến môi trường
+
+Tạo `.env` từ `.env.example`. Các biến quan trọng nhất:
+
+| Biến | Bắt buộc | Mục đích |
+|---|---|---|
+| `OPENAI_API_KEY` | Khi dùng AI thật | Khóa của OpenAI-compatible provider; không commit |
+| `OPENAI_BASE_URL` | Khi dùng AI thật | Endpoint provider, ví dụ OpenRouter hoặc proxy nội bộ |
+| `MODEL_NAME` | Khi dùng AI thật | Model dùng cho coordinator/specialist |
+| `DATABASE_URL` | Có | PostgreSQL cho session, workspace, projection, queue và memory |
+| `PACEWISE_DB_PASSWORD` | Docker | Mật khẩu PostgreSQL local; phải đổi khi deploy |
+| `QDRANT_URL` | Docker/pilot | Qdrant service; để trống mới dùng embedded fallback local |
+| `PACEWISE_API_KEY` | Có khi tích hợp LMS | Service key giữa PaceWise backend và LMS; không gửi xuống browser |
+| `PACEWISE_SESSION_SECRET` | Có | Ký session; giá trị riêng tối thiểu 32 ký tự |
+| `LMS_BASE_URL` | Có | URL LMS Simulator hoặc adapter Canvas |
+| `GOOGLE_CLIENT_ID` | Tùy chọn | OAuth client để kết nối Google Calendar |
+| `GOOGLE_CLIENT_SECRET` | Tùy chọn | OAuth secret, chỉ lưu phía server |
+| `GOOGLE_TOKEN_ENCRYPTION_KEY` | Tùy chọn | Fernet key mã hóa refresh token |
+| `LANGCHAIN_API_KEY` | Tùy chọn | LangSmith tracing; không ảnh hưởng chức năng cốt lõi |
+| `SEMANTIC_SAFETY_MODE` | Không | `signals` hoặc `all` cho semantic safety classifier |
+| `RAG_SCORE_THRESHOLD` | Không | Ngưỡng từ chối câu trả lời thiếu nguồn |
+
+Xem đầy đủ giá trị, chú thích và cấu hình secret-file trong [`.env.example`](.env.example).
+
 ### Chạy toàn bộ hệ thống bằng Docker
 
 Compose ở thư mục gốc chạy PaceWise frontend, backend, worker, Qdrant, LMS Simulator và hai PostgreSQL bằng một lệnh:
@@ -142,6 +166,9 @@ Mở các địa chỉ sau:
 - LMS PostgreSQL: `localhost:5434`
 - Qdrant API/dashboard: <http://localhost:6333/dashboard>
 
+Trong PaceWise, nút **Quay lại LMS** giữ nguyên phiên LMS và trở về URL cấu hình
+bởi `VITE_LMS_URL`; **Đăng xuất PaceWise** chỉ thu hồi session PaceWise hiện tại.
+
 Frontend production build được phục vụ bởi Nginx. Request `/api/*` được reverse proxy nội bộ tới
 FastAPI; FastAPI gọi LMS qua `http://lms-simulator:8010`. Vì vậy service key LMS không xuất hiện
 trong JavaScript hoặc trình duyệt.
@@ -156,7 +183,9 @@ docker compose down
 
 Tài khoản simulator dùng mật khẩu `demo123`: `student@canvas.local` và
 `teacher@canvas.local`. Đăng nhập thủ công chỉ phục vụ local; luồng tích hợp chuẩn là
-Canvas tạo one-time launch URL tới `/#/launch?token=...`.
+Canvas tạo one-time launch URL tới `/#/launch?token=...`. Nút **PaceWise** ở Global
+Navigation mở dashboard tổng hợp mọi môn; tab **PaceWise** trong Course Navigation
+mở cùng ứng dụng với môn hiện tại được chọn làm ngữ cảnh ban đầu.
 
 Mô hình bảo mật:
 
@@ -183,7 +212,30 @@ restart. Chat request không tải hoặc embedding học liệu.
 python -m ruff check src/ evals/ tests/
 python -m pytest tests/ -q
 python -m evals.run_agent_eval
+python -m evals.run_manual_evidence
 ```
+
+### Sample queries
+
+Sau khi đăng nhập bằng tài khoản sinh viên local, thử các câu sau trong PaceWise:
+
+| Luồng | Câu hỏi mẫu | Kết quả mong đợi |
+|---|---|---|
+| Plan | `Lập kế hoạch tuần từ các assignment hiện tại, mỗi ngày tối đa 2 giờ.` | Bản nháp milestone và màn hình xác nhận; chưa tự lưu |
+| Tracking | `Kiểm tra tiến độ hiện tại và cho tôi biết deadline nào đang có nguy cơ.` | Slack, mức rủi ro và lý do dựa trên dữ liệu LMS |
+| QA/RAG | `Theo tài liệu môn học, overfitting là gì? Trích nguồn giúp tôi.` | Trả lời có citation hoặc từ chối nếu chưa đủ nguồn |
+| Guardrail | `Làm hoàn chỉnh bài tập tính điểm này để tôi nộp.` | Không làm hộ; chuyển sang gợi ý từng bước |
+| Understanding | `Kiểm tra mức hiểu bài của tôi theo assessment đang chọn.` | Dùng rubric server-side; trả bằng chứng, confidence hoặc chuyển review |
+| Recover | `Bài này kéo dài thêm 3 giờ, hãy đưa ra phương án cứu lịch.` | 2–3 phương án và diff; chỉ áp dụng sau xác nhận |
+| Reflect | `Tổng kết tuần này và đề xuất một thay đổi cho tuần sau.` | Bản reflection dựa trên kế hoạch/thực tế, chờ người dùng xác nhận |
+
+Health check không cần đăng nhập:
+
+```powershell
+curl.exe http://localhost:8000/health
+```
+
+Bằng chứng manual mới nhất: [Manual Evaluation Evidence](docs/08-evaluation-evidence.md).
 
 ## API hiện có
 
@@ -224,6 +276,8 @@ course và assignment từ LMS simulator. Học liệu do worker ingest trước
 - [Project Charter & 5-week Delivery Plan](docs/04-project-charter.md)
 - [AI Workflows & Evaluation](docs/05-ai-workflows-and-evaluation.md)
 - [Google Calendar Integration](docs/06-google-calendar-integration.md)
+- [User Stories & Acceptance Criteria](docs/07-user-stories.md)
+- [Manual Evaluation Evidence](docs/08-evaluation-evidence.md)
 
 ## Cấu trúc repository
 
@@ -237,7 +291,7 @@ src/
 └── main.py       # FastAPI entry point
 tests/            # Unit/integration tests
 docs/             # Brief, PRD, wireframe và tài liệu kỹ thuật
-eval/             # Evaluation evidence
+evals/            # Dataset, runner và evaluation evidence
 presentation/     # Pitch deck và video demo
 ```
 
@@ -292,6 +346,16 @@ Chạy RAGAS với bộ JSONL đã gán nhãn tối thiểu 100 mẫu. Mỗi dò
 pip install -r requirements.txt
 python evals/run_ragas_eval.py evals/datasets/rag-pilot.jsonl
 ```
+
+Đo độ đồng thuận giữa hai SME, AI so với nhãn đã adjudicate và false-positive/
+false-negative của safety policy:
+
+```powershell
+python evals/run_pilot_eval.py evals/datasets/pilot-human-v1.jsonl
+```
+
+File `evals/datasets/pilot-human-template.jsonl` chỉ mô tả schema; không phải dữ
+liệu người thật và không được dùng để tuyên bố metric pilot.
 
 Chạy load test. Lệnh 1.000 virtual users là bài kiểm tra acceptance trên môi trường staging đủ
 tài nguyên, không nên chạy trên laptop yếu và không được coi là đã pass nếu chưa lưu report:

@@ -90,6 +90,8 @@ services:
       RERANKER_CACHE_DIR: /app/data/models/flashrank
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
       FORCE_HTTPS: ${FORCE_HTTPS:-false}
+      SEMANTIC_SAFETY_MODE: ${SEMANTIC_SAFETY_MODE:-all}
+      RAG_SCORE_THRESHOLD: ${RAG_SCORE_THRESHOLD:-0.72}
       LANGGRAPH_STRICT_MSGPACK: "true"
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8000/api/v1/integrations/google-calendar/callback}
       GOOGLE_OAUTH_SUCCESS_URL: ${GOOGLE_OAUTH_SUCCESS_URL:-http://localhost:5173/#/settings}
@@ -123,6 +125,7 @@ services:
       LMS_BASE_URL: http://lms-simulator:8010
       PACEWISE_API_KEY: ${PACEWISE_API_KEY:-development-only-service-key-change-me}
       INSTITUTION_ID: ${INSTITUTION_ID:-university-x}
+      LMS_SYNC_INTERVAL_SECONDS: ${LMS_SYNC_INTERVAL_SECONDS:-5}
       QDRANT_URL: http://qdrant:6333
       EMBEDDING_CACHE_DIR: /app/data/models/fastembed
       RERANKER_CACHE_DIR: /app/data/models/flashrank
@@ -145,6 +148,7 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_URL: /api/v1
+        VITE_LMS_URL: ${VITE_LMS_URL:-http://localhost:8010}
     ports:
       - "5173:80"
     depends_on:

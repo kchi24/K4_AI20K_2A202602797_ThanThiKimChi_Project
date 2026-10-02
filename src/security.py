@@ -11,7 +11,7 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from src.config import Settings, get_settings
-from src.db import get_db
+from src.db import SessionLocal, get_db
 from src.persistence_models import PaceWiseSession
 
 
@@ -148,6 +148,23 @@ def get_current_session(
     if not token:
         raise HTTPException(status_code=401, detail="Authentication required")
     return decode_session(token, settings, db)
+
+
+def get_detached_session(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> SessionContext:
+    """Authenticate a long-lived request without retaining a DB connection.
+
+    Streaming endpoints must not keep a SQLAlchemy session checked out for the
+    entire lifetime of the client connection. Each stream poll opens its own
+    short-lived session instead.
+    """
+    token = request.cookies.get(settings.pacewise_session_cookie, "")
+    if not token:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    with SessionLocal() as db:
+        return decode_session(token, settings, db)
 
 
 def require_instructor(session: SessionContext = Depends(get_current_session)) -> SessionContext:

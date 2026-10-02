@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from src.api.workspace import check_login_rate_limit, record_failed_login, revoke_session
 from src.config import Settings, get_settings
 from src.db import get_db
-from src.persistence_models import InstructorAction, PaceWiseSession
+from src.persistence_models import AgentReviewCase, InstructorAction, PaceWiseSession
 from src.security import (
     SessionContext,
     get_current_session,
@@ -41,6 +41,63 @@ class CourseSwitchRequest(BaseModel):
 
 def _client(settings: Settings) -> LMSClient:
     return LMSClient(settings)
+
+
+def _parse_lms_datetime(value: object) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _weekly_completion(
+    assignments: list[dict],
+    submissions: list[dict],
+    student_ids: set[int],
+    *,
+    limit: int = 8,
+) -> list[dict]:
+    """Aggregate on-time completion by assignment due week without identifiers."""
+    assignments_by_week: dict[tuple[int, int], list[int]] = defaultdict(list)
+    for assignment in assignments:
+        due_at = _parse_lms_datetime(assignment.get("due_at"))
+        if due_at is None:
+            continue
+        calendar = due_at.isocalendar()
+        assignments_by_week[(calendar.year, calendar.week)].append(int(assignment["id"]))
+
+    submissions_by_key = {
+        (int(item["assignment_id"]), int(item["user_id"])): item
+        for item in submissions
+        if int(item.get("user_id") or 0) in student_ids
+    }
+    rows = []
+    for year_week, assignment_ids in sorted(assignments_by_week.items())[-limit:]:
+        total = len(assignment_ids) * len(student_ids)
+        completed = sum(
+            1
+            for assignment_id in assignment_ids
+            for student_id in student_ids
+            if (
+                (submission := submissions_by_key.get((assignment_id, student_id)))
+                and not bool(submission.get("late"))
+                and str(submission.get("workflow_state") or "submitted")
+                in {"submitted", "graded", "pending_review"}
+            )
+        )
+        year, week = year_week
+        week_start = datetime.fromisocalendar(year, week, 1)
+        rows.append(
+            {
+                "week": f"{week_start:%d/%m}",
+                "rate": completed / total if total else 0,
+                "count": completed,
+                "total": total,
+            }
+        )
+    return rows
 
 
 def _validate_claims(claims: dict) -> None:
@@ -335,15 +392,69 @@ async def _sync_payload(session: SessionContext, settings: Settings, db: Session
     guidance_actions = db.scalars(
         select(InstructorAction)
         .where(
-            InstructorAction.course_id.in_(session.course_ids),
+            InstructorAction.course_id == session.course_id,
             InstructorAction.action_type == "guidance",
         )
         .order_by(InstructorAction.created_at)
     ).all()
+    assessments = []
+    quizzes = await client.service_get(
+        f"/api/pacewise/v1/courses/{session.course_id}/quizzes"
+    )
+    assessment_actions = db.scalars(
+        select(InstructorAction)
+        .where(
+            InstructorAction.course_id == session.course_id,
+            InstructorAction.action_type == "assessment",
+        )
+        .order_by(InstructorAction.created_at)
+    ).all()
+    latest_assessment_actions = {item.entity_id: item for item in assessment_actions}
+    for quiz in quizzes:
+        for question in quiz.get("questions", []):
+            assessment_id = f"Q-{question['id']}"
+            action = latest_assessment_actions.get(assessment_id)
+            payload = json.loads(action.payload_json or "{}") if action else {}
+            if payload.get("status") != "approved":
+                continue
+            assessments.append(
+                {
+                    "id": assessment_id,
+                    "topic": quiz["title"],
+                    "question": payload.get("question") or question["prompt"],
+                    "rubric": payload.get("rubric")
+                    or ["Đúng khái niệm", "Giải thích có lập luận", "Không sao chép đáp án"],
+                    "status": "approved",
+                    "version": max(1, int(payload.get("version") or 1)),
+                    "source": payload.get("source") or "Canvas quiz",
+                    "aiGenerated": False,
+                }
+            )
+    review_resolutions = {}
+    if session.role == "student":
+        review_cases = db.scalars(
+            select(AgentReviewCase).where(
+                AgentReviewCase.institution_id == settings.institution_id,
+                AgentReviewCase.student_user_id == session.user_id,
+                AgentReviewCase.course_id.in_(session.course_ids),
+            )
+        ).all()
+        for review_case in review_cases:
+            case_payload = json.loads(review_case.payload_json or "{}")
+            review_resolutions[review_case.id] = {
+                "status": review_case.status,
+                "note": case_payload.get("instructor_note"),
+                "resolvedStatus": (
+                    (case_payload.get("edited_result") or {}).get("status")
+                    or (case_payload.get("assessment_result") or {}).get("status")
+                ),
+            }
     return {
         "courses": ui_courses,
         "tasks": tasks,
         "guidance": _guidance_payload(list(guidance_actions)),
+        "assessments": assessments,
+        "reviewResolutions": review_resolutions,
         "courseData": course_data,
         "syncedAt": datetime.now(UTC).isoformat(),
         "source": "canvas-lms-simulator",
@@ -450,6 +561,11 @@ async def instructor_overview(
         .where(InstructorAction.course_id == course_id)
         .order_by(InstructorAction.created_at)
     ).all()
+    agent_review_cases = db.scalars(
+        select(AgentReviewCase)
+        .where(AgentReviewCase.course_id == course_id)
+        .order_by(AgentReviewCase.created_at.desc())
+    ).all()
     guidance = _guidance_payload(list(saved_actions))
 
     submitted_by_student: dict[int, list[dict]] = defaultdict(list)
@@ -496,11 +612,12 @@ async def instructor_overview(
             "lmsSummary": None,
         }
     rate = len(on_time_ids) / total_students if total_students else 0
+    weekly_completion = _weekly_completion(assignments, submissions, student_ids)
     stats = {
         "groupId": "all",
         "onTimeRate": rate,
         "onTimeCount": len(on_time_ids),
-        "weeklyCompletion": [
+        "weeklyCompletion": weekly_completion or [
             {"week": "Hiện tại", "rate": rate, "count": len(on_time_ids), "total": total_students}
         ],
         "topics": [
@@ -522,6 +639,23 @@ async def instructor_overview(
         }
         for item in low_evidence[:20]
     ]
+    review_queue.extend(
+        {
+            "id": item.id,
+            "topic": "Đánh giá hiểu bài"
+            if item.case_type == "understanding_review"
+            else "Khiếu nại trích dẫn",
+            "question": item.entity_id,
+            "responseExcerpt": "Nội dung cá nhân chỉ hiển thị cho giảng viên được phân quyền.",
+            "confidence": "low",
+            "reason": item.case_type,
+            "status": item.status,
+            "submittedAt": item.created_at.isoformat(),
+            "suggestedStatus": (json.loads(item.payload_json or "{}").get("assessment_result") or {}).get("status"),
+            "rubricVersion": json.loads(item.payload_json or "{}").get("rubric_version"),
+        }
+        for item in agent_review_cases
+    )
     assessments = []
     for quiz in quizzes:
         for question in quiz.get("questions", []):
@@ -532,6 +666,7 @@ async def instructor_overview(
                     "question": question["prompt"],
                     "rubric": ["Đúng khái niệm", "Giải thích có lập luận", "Không sao chép đáp án"],
                     "status": "review",
+                    "version": 0,
                     "source": "Canvas quiz",
                     "aiGenerated": False,
                 }
@@ -546,7 +681,7 @@ async def instructor_overview(
             )
         if action.action_type == "assessment" and action.entity_id in assessment_by_id:
             assessment_by_id[action.entity_id].update(
-                {key: payload[key] for key in ("status", "note", "question", "rubric", "level", "source") if key in payload}
+                {key: payload[key] for key in ("status", "note", "question", "rubric", "level", "source", "version") if key in payload}
             )
     audit = [
         {

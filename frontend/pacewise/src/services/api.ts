@@ -13,6 +13,7 @@ import type {
   PlanInput,
   ReviewItem,
   RecoveryOption,
+  Source,
   Task,
   UnavailableSlot,
   User,
@@ -143,8 +144,8 @@ export async function saveInstructorAction(
   actionType: 'review' | 'assessment' | 'guidance',
   entityId: string,
   payload: Record<string, unknown>,
-): Promise<void> {
-  await request('/instructor/actions', {
+): Promise<{ id: string; createdAt: string; payload: Record<string, unknown> }> {
+  return request('/instructor/actions', {
     method: 'POST',
     body: JSON.stringify({ actionType, entityId, payload }),
   });
@@ -206,8 +207,6 @@ export async function disconnectGoogleCalendar(): Promise<void> {
   await request('/integrations/google-calendar', { method: 'DELETE' });
 }
 
-export interface RequestOptions { simulateError?: boolean }
-
 export interface AgentResponse {
   response: string;
   workflow: 'plan' | 'tracking' | 'qa' | 'understanding' | 'recover' | 'reflect';
@@ -217,17 +216,28 @@ export interface AgentResponse {
   output?: {
     plan_validation?: { valid: boolean; errors: { code: string }[] };
     plan_draft?: PlanDraft;
+    citation_dispute?: { dispute_id: string };
   } | null;
   progress_metrics?: Record<string, unknown>;
   risk_signals?: Array<Record<string, unknown>>;
   assessment_result?: {
+    assessment_id?: string;
     status?: string;
     confidence?: string;
     evidence_quotes?: string[];
+    rubric_version?: number;
   } | null;
+  review_case_id?: string | null;
   recovery_options?: Array<Record<string, unknown>>;
   reflection_draft?: Record<string, unknown> | null;
-  source_refs: { citation: string }[];
+  source_refs: Array<{
+    id?: string;
+    citation: string;
+    document_title?: string;
+    page?: number | string;
+    paragraph?: number | string;
+    excerpt?: string;
+  }>;
 }
 
 async function runAgent(
@@ -263,20 +273,22 @@ export interface UnderstandingResult {
   feedback: string;
   requiresInstructorReview: boolean;
   evidenceQuotes: string[];
+  rubricVersion?: number;
+  reviewCaseId?: string;
 }
 
 export async function assessUnderstanding(assessment: AssessmentItem, answer: string): Promise<UnderstandingResult> {
   const result = await runAgent(answer, 'understanding', {
-    approved_rubric: assessment.rubric.map((criterion, index) => ({
-      criterion_id: `${assessment.id}-${index + 1}`,
-      description: criterion,
-    })),
+    assessment_id: assessment.id,
   });
   const assessmentResult = result.assessment_result ?? {};
   const status = fold(assessmentResult.status ?? '');
   const confidence = fold(assessmentResult.confidence ?? '');
+  const requiresInstructorReview = result.status === 'awaiting_teacher';
   return {
-    evidenceState: status.includes('the hien')
+    evidenceState: requiresInstructorReview
+      ? 'abstained'
+      : status.includes('the hien')
       ? 'demonstrated'
       : status.includes('hinh thanh')
         ? 'developing'
@@ -289,8 +301,10 @@ export async function assessUnderstanding(assessment: AssessmentItem, answer: st
         ? 'medium'
         : 'low',
     feedback: result.response,
-    requiresInstructorReview: result.status === 'awaiting_teacher',
+    requiresInstructorReview,
     evidenceQuotes: assessmentResult.evidence_quotes ?? [],
+    rubricVersion: assessmentResult.rubric_version,
+    reviewCaseId: result.review_case_id ?? undefined,
   };
 }
 
@@ -350,8 +364,7 @@ export async function confirmReflection(): Promise<void> {
   await runAgent('Tôi xác nhận điều chỉnh cho tuần sau.', 'reflect');
 }
 
-export async function generatePlan(input: PlanInput, tasks: Task[], opts: RequestOptions = {}): Promise<PlanDraft> {
-  if (opts.simulateError) throw new ApiError('AI_UNAVAILABLE', 'Chưa thể kết nối dịch vụ AI.');
+export async function generatePlan(input: PlanInput, tasks: Task[]): Promise<PlanDraft> {
   const selected = input.tasks
     .map((item) => tasks.find((task) => task.id === item.taskId)?.title)
     .filter(Boolean)
@@ -390,13 +403,14 @@ export async function generatePlan(input: PlanInput, tasks: Task[], opts: Reques
   };
 }
 
-export async function askQuestion(question: string, opts: RequestOptions = {}): Promise<QAResult> {
-  if (opts.simulateError) throw new ApiError('AI_UNAVAILABLE', 'Chưa thể kết nối dịch vụ AI.');
+export async function askQuestion(question: string): Promise<QAResult> {
   const result = await runAgent(question, 'qa');
+  const sources = result.source_refs.map(toSource);
   return {
     kind: result.mode === 'integrity' ? 'integrity' : result.source_refs.length ? 'grounded' : 'abstained',
     text: result.response,
-    citations: result.source_refs.map((item) => item.citation),
+    citations: sources.map((item) => item.id),
+    sources,
     suggestions: [],
   };
 }
@@ -406,11 +420,26 @@ export async function askHint(): Promise<QAResult> {
     'Hãy gợi ý từng bước và đặt câu hỏi Socratic để tôi tự làm, không đưa đáp án hoàn chỉnh.',
     'qa',
   );
+  const sources = result.source_refs.map(toSource);
   return {
     kind: 'hint',
     text: result.response,
-    citations: result.source_refs.map((item) => item.citation),
+    citations: sources.map((item) => item.id),
+    sources,
     suggestions: [],
+  };
+}
+
+function toSource(item: AgentResponse['source_refs'][number]): Source {
+  const position = [
+    item.page !== undefined ? `Trang ${item.page}` : '',
+    item.paragraph !== undefined ? `Đoạn ${item.paragraph}` : '',
+  ].filter(Boolean).join(' · ');
+  return {
+    id: item.id || item.citation,
+    name: item.document_title || item.citation,
+    location: position || item.citation,
+    excerpt: item.excerpt || 'Đoạn nguồn được truy xuất từ học liệu đã duyệt của môn học.',
   };
 }
 
@@ -422,8 +451,17 @@ export async function syncCanvas(): Promise<CanvasSyncResult> {
   return request<CanvasSyncResult>('/lms/sync');
 }
 
+export function lmsEventStreamUrl(): string {
+  return `${API_BASE}/lms/events/stream`;
+}
+
 export async function reportCitation(sourceId: string): Promise<{ disputeId: string }> {
-  return { disputeId: `CD-${sourceId.length}${Math.floor(Math.random() * 9000 + 1000)}` };
+  const result = await runAgent(`Khiếu nại trích dẫn [${sourceId}] vì nguồn có thể không chính xác.`, 'qa');
+  const disputeId = result.output?.citation_dispute?.dispute_id;
+  if (!disputeId) {
+    throw new ApiError('UPSTREAM', 'Hệ thống chưa thể ghi nhận phản ánh nguồn.');
+  }
+  return { disputeId };
 }
 
 export interface InstructorData {

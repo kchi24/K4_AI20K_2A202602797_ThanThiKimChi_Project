@@ -1,8 +1,9 @@
 import hashlib
 import json
 import shutil
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
@@ -23,6 +24,7 @@ from app.learning_api import (
 )
 from app.models import (
     Assignment,
+    CalendarEvent,
     ConversationMessage,
     ConversationParticipant,
     ConversationState,
@@ -82,6 +84,25 @@ class AssignmentRequest(BaseModel):
     points_possible: float = 10
     submission_types: list[str] = ["online_text_entry"]
     published: bool = True
+
+
+class CourseActivityRequest(BaseModel):
+    user_id: int
+    activity_type: Literal[
+        "class_session",
+        "lecture_video",
+        "quiz",
+        "assignment",
+        "midterm",
+        "final_exam",
+    ]
+    title: str
+    description: str = ""
+    starts_at: datetime
+    ends_at: datetime | None = None
+    repeat_count: int = 1
+    source_url: str = ""
+    points_possible: float = 10
 
 
 class SubmissionRequest(BaseModel):
@@ -358,6 +379,45 @@ def add_enrollment(course_id: int, payload: EnrollmentRequest, db: Session = Dep
     else:
         enrollment = Enrollment(course_id=course_id, user_id=payload.member_id, role=payload.role, progress=0)
         db.add(enrollment)
+    db.flush()
+    existing_event_keys = {
+        (item.title, as_utc(item.starts_at), item.event_kind)
+        for item in db.scalars(
+            select(CalendarEvent).where(
+                CalendarEvent.course_id == course_id,
+                CalendarEvent.user_id == payload.member_id,
+            )
+        ).all()
+    }
+    templates = db.scalars(
+        select(CalendarEvent).where(
+            CalendarEvent.course_id == course_id,
+            CalendarEvent.user_id == payload.user_id,
+        )
+    ).all()
+    for template in templates:
+        if not template.description.startswith(("pacewise-2026-v1;", "course-activity-v1;")):
+            continue
+        key = (template.title, as_utc(template.starts_at), template.event_kind)
+        if key in existing_event_keys:
+            continue
+        copied_event = CalendarEvent(
+            user_id=payload.member_id,
+            course_id=course_id,
+            title=template.title,
+            description=template.description,
+            starts_at=template.starts_at,
+            ends_at=template.ends_at,
+            event_kind=template.event_kind,
+            attendance_status=(
+                "scheduled" if template.event_kind == "class_session" else None
+            ),
+        )
+        db.add(copied_event)
+        db.flush()
+        if copied_event.event_kind == "class_session":
+            copied_event.join_url = f"/api/calendar/events/{copied_event.id}/join"
+        existing_event_keys.add(key)
     record_change(
         db,
         actor_user_id=payload.user_id,
@@ -391,6 +451,124 @@ def remove_enrollment(course_id: int, member_id: int, user_id: int = Query(...),
     db.delete(enrollment)
     db.commit()
     return {"status": "deleted"}
+
+
+@router.post("/courses/{course_id}/activities")
+def create_course_activity(
+    course_id: int,
+    payload: CourseActivityRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    course = get_course(db, course_id)
+    require_enrollment(db, payload.user_id, course_id, "instructor")
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="Title is required")
+    if payload.repeat_count < 1 or payload.repeat_count > 52:
+        raise HTTPException(status_code=422, detail="Repeat count must be between 1 and 52")
+    if payload.activity_type != "class_session" and payload.repeat_count != 1:
+        raise HTTPException(status_code=422, detail="Only online classes can repeat weekly")
+
+    starts_at = as_utc(payload.starts_at)
+    ends_at = as_utc(payload.ends_at) if payload.ends_at else None
+    if payload.activity_type != "assignment" and (ends_at is None or ends_at <= starts_at):
+        raise HTTPException(status_code=422, detail="End time must be after start time")
+
+    if payload.activity_type == "assignment":
+        assignment = Assignment(
+            course_id=course_id,
+            title=title,
+            description=payload.description.strip(),
+            due_at=starts_at,
+            points_possible=payload.points_possible,
+            submission_types="online_text_entry",
+            published=True,
+        )
+        db.add(assignment)
+        db.flush()
+        entity_type, entity_id = "assignment", assignment.id
+        created_events = 0
+    else:
+        entity_type = payload.activity_type
+        entity_id: int | None = None
+        if payload.activity_type == "lecture_video":
+            resource = Resource(
+                course_id=course_id,
+                title=title,
+                kind="video",
+                source_url=(
+                    payload.source_url.strip()
+                    or f"/mock-videos/{course.code.lower()}-{uuid4().hex[:12]}.mp4"
+                ),
+            )
+            db.add(resource)
+            db.flush()
+            entity_id = resource.id
+        elif payload.activity_type in {"quiz", "midterm", "final_exam"}:
+            content = CourseContent(
+                course_id=course_id,
+                kind="quiz",
+                title=title,
+                body=payload.description.strip(),
+                due_at=ends_at,
+                points_possible=payload.points_possible,
+                published=True,
+            )
+            db.add(content)
+            db.flush()
+            entity_id = content.id
+
+        enrollments = db.scalars(
+            select(Enrollment).where(Enrollment.course_id == course_id)
+        ).all()
+        created_events = 0
+        for occurrence in range(payload.repeat_count):
+            occurrence_start = starts_at + timedelta(days=7 * occurrence)
+            occurrence_end = ends_at + timedelta(days=7 * occurrence) if ends_at else None
+            for enrollment in enrollments:
+                calendar_event = CalendarEvent(
+                    user_id=enrollment.user_id,
+                    course_id=course_id,
+                    title=f"[{course.code}] {title}",
+                    description=f"course-activity-v1; {payload.description.strip()}",
+                    starts_at=occurrence_start,
+                    ends_at=occurrence_end,
+                    event_kind=payload.activity_type,
+                    attendance_status=(
+                        "scheduled" if payload.activity_type == "class_session" else None
+                    ),
+                )
+                db.add(calendar_event)
+                db.flush()
+                if payload.activity_type == "class_session":
+                    calendar_event.join_url = (
+                        f"/api/calendar/events/{calendar_event.id}/join"
+                    )
+                created_events += 1
+
+    record_change(
+        db,
+        actor_user_id=payload.user_id,
+        action="course.activity.created",
+        entity_type=entity_type,
+        entity_id=entity_id,
+        course_id=course_id,
+        metadata={
+            "activity_type": payload.activity_type,
+            "title": title,
+            "starts_at": starts_at,
+            "ends_at": ends_at,
+            "repeat_count": payload.repeat_count,
+            "calendar_events_created": created_events,
+        },
+    )
+    db.commit()
+    return {
+        "status": "created",
+        "activity_type": payload.activity_type,
+        "entity_id": entity_id,
+        "calendar_events_created": created_events,
+    }
 
 
 @router.post("/courses/{course_id}/assignments")

@@ -13,6 +13,7 @@ from src.config import Settings
 from src.db import SessionLocal
 from src.persistence_models import (
     CourseProjection,
+    LmsCourseContextProjection,
     LmsEventProjection,
     RagIngestionJob,
     SyncCursor,
@@ -75,6 +76,11 @@ async def _refresh_course(
     assignments = (
         await client.service_get(f"/api/pacewise/v1/courses/{course_id}/assignments") if refresh_assignments else None
     )
+    modules = (
+        await client.service_get(f"/api/pacewise/v1/courses/{course_id}/modules")
+        if refresh_content
+        else None
+    )
 
     with SessionLocal() as db:
         identifier = f"{settings.institution_id}:{course_id}"
@@ -122,6 +128,18 @@ async def _refresh_course(
                 resources=resources,
             )
         projection.last_event_id = max(projection.last_event_id or 0, event_id)
+        context_id = f"{settings.institution_id}:{course_id}"
+        context = db.get(LmsCourseContextProjection, context_id) or LmsCourseContextProjection(
+            id=context_id,
+            institution_id=settings.institution_id,
+            course_id=course_id,
+        )
+        context.course_json = json.dumps(course, ensure_ascii=False)
+        if assignments is not None:
+            context.assignments_json = json.dumps(assignments, ensure_ascii=False)
+        if modules is not None:
+            context.modules_json = json.dumps(modules, ensure_ascii=False)
+        db.add(context)
         db.commit()
 
 

@@ -25,15 +25,47 @@ export function AssessmentPage() {
   const [returning, setReturning] = useState<AssessmentItem | null>(null);
   const [note, setNote] = useState('');
   const [err, setErr] = useState('');
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState('');
+
+  const updateStatus = async (item: AssessmentItem, status: AssessmentStatus, actionNote?: string) => {
+    setBusyId(item.id);
+    setActionError('');
+    try {
+      const saved = await saveInstructorAction('assessment', item.id, {
+        question: item.question,
+        rubric: item.rubric,
+        level: item.level,
+        source: item.source,
+        status,
+        ...(actionNote ? { note: actionNote } : {}),
+      });
+      dispatch({
+        type: 'UPDATE_ASSESSMENT',
+        item: { ...item, version: Number(saved.payload.version ?? item.version ?? 1) },
+        status,
+        note: actionNote,
+        historyText: status === 'approved' ? 'Duyệt và xuất bản' : status === 'rejected' ? 'Trả lại kèm ghi chú' : 'Gửi duyệt',
+      });
+      return true;
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Chưa lưu được thay đổi.');
+      return false;
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   return (
     <div className="page max-w-4xl">
       <PageHeader title="Ngân hàng câu hỏi" description="Duyệt câu hỏi và rubric trước khi dùng cho sinh viên. Nội dung do hệ thống tạo không tự xuất bản." />
+      {actionError && <p role="alert" className="mb-4 text-sm font-medium text-danger-ink">{actionError}</p>}
       <div className="space-y-4">
         {state.assessments.map((a) => (
           <Card as="article" key={a.id} aria-labelledby={`as-${a.id}`}>
             <div className="flex flex-wrap items-center gap-2">
               <p className="caption">{a.topic}</p>
+              <Badge tone="neutral">v{a.version ?? 0}</Badge>
               <Badge tone={meta[a.status].tone} className="ml-auto">
                 {meta[a.status].label}
               </Badge>
@@ -50,7 +82,7 @@ export function AssessmentPage() {
             {a.note && <p className="mt-3 rounded-xl bg-danger-light px-3 py-2 text-sm text-danger-ink">Ghi chú khi trả lại: {a.note}</p>}
             <div className="mt-4 flex flex-col gap-3 sm:flex-row">
               {a.status === 'draft' && (
-                <Button size="sm" variant="secondary" onClick={() => { dispatch({ type: 'SET_ASSESSMENT_STATUS', id: a.id, status: 'review' }); void saveInstructorAction('assessment', a.id, { status: 'review' }); }}>
+                <Button size="sm" variant="secondary" loading={busyId === a.id} onClick={() => void updateStatus(a, 'review')}>
                   Gửi duyệt
                 </Button>
               )}
@@ -59,11 +91,10 @@ export function AssessmentPage() {
                   <Button
                     size="sm"
                     icon="check"
-                    onClick={() => {
-                      dispatch({ type: 'SET_ASSESSMENT_STATUS', id: a.id, status: 'approved' });
-                      void saveInstructorAction('assessment', a.id, { status: 'approved' });
-                      toast({ tone: 'success', title: 'Đã duyệt và xuất bản cho pilot' });
-                    }}
+                    loading={busyId === a.id}
+                    onClick={() => void updateStatus(a, 'approved').then((saved) => {
+                      if (saved) toast({ tone: 'success', title: 'Đã duyệt và xuất bản cho pilot' });
+                    })}
                   >
                     Duyệt và xuất bản
                   </Button>
@@ -109,11 +140,13 @@ export function AssessmentPage() {
                   setErr('Ghi chú là bắt buộc khi trả lại.');
                   return;
                 }
-                dispatch({ type: 'SET_ASSESSMENT_STATUS', id: returning!.id, status: 'rejected', note: note.trim() });
-                void saveInstructorAction('assessment', returning!.id, { status: 'rejected', note: note.trim() });
-                toast({ tone: 'info', title: 'Đã trả lại kèm ghi chú' });
-                setReturning(null);
+                void updateStatus(returning!, 'rejected', note.trim()).then((saved) => {
+                  if (!saved) return;
+                  toast({ tone: 'info', title: 'Đã trả lại kèm ghi chú' });
+                  setReturning(null);
+                });
               }}
+              loading={busyId === returning?.id}
             >
               Trả lại
             </Button>

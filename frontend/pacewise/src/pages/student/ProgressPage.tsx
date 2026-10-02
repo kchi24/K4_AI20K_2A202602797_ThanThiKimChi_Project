@@ -20,11 +20,20 @@ import { DEMO_TODAY, formatDay, formatDuration, formatHours, weekDates } from '.
 export function ProgressPage() {
   useDocumentTitle('Tiến độ');
   const { state, dispatch } = useAppStore();
-  const { stats, drifts, taskById, courseById } = useDerived();
+  const {
+    activeCourse,
+    activeDrifts: drifts,
+    activePlan,
+    activeSessions,
+    activeStats: stats,
+    activeTasks: courseTasks,
+    taskById,
+    courseById,
+  } = useDerived();
   const navigate = useNavigate();
   const toast = useToast();
-  const open = state.tasks.filter((t) => t.status !== 'done');
-  const done = state.tasks.filter((t) => t.status === 'done');
+  const open = courseTasks.filter((t) => t.status !== 'done');
+  const done = courseTasks.filter((t) => t.status === 'done');
 
   const [studyTask, setStudyTask] = useState(open[0]?.id ?? '');
   const [form, setForm] = useState({ taskId: open[0]?.id ?? '', minutes: '', date: DEMO_TODAY, note: '' });
@@ -34,11 +43,18 @@ export function ProgressPage() {
 
   useEffect(() => {
     let active = true;
-    void trackProgress(state.plan, state.availability, state.unavailable)
+    void trackProgress(activePlan, state.availability, state.unavailable)
       .then((result) => active && setTracking(result))
       .catch(() => active && setTracking(null));
     return () => { active = false; };
-  }, [state.plan?.id, state.settings.lastSync]);
+  }, [activePlan, state.settings.lastSync, state.user?.courseId, state.availability, state.unavailable]);
+
+  useEffect(() => {
+    const nextTaskId = open[0]?.id ?? '';
+    setStudyTask(nextTaskId);
+    setForm((current) => ({ ...current, taskId: nextTaskId }));
+    setTracking(null);
+  }, [state.user?.courseId]);
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -56,7 +72,10 @@ export function ProgressPage() {
 
   return (
     <div className="page">
-      <PageHeader title="Tiến độ" description="Thời gian thực tế so với kế hoạch tuần này." />
+      <PageHeader
+        title="Tiến độ"
+        description={`Thời gian thực tế so với kế hoạch của ${activeCourse?.code ?? 'môn đang chọn'}.`}
+      />
 
       {tracking && (
         <div className="mb-5">
@@ -102,7 +121,7 @@ export function ProgressPage() {
         <Card aria-labelledby="manual-title" id="manual">
           <CardHeader id="manual-title" title="Nhập thủ công" subtitle="Dùng khi bạn học mà quên bật hẹn giờ, hoặc để sửa dữ liệu." />
           <form className="space-y-4" onSubmit={submit} noValidate>
-            <Select label="Nhiệm vụ" value={form.taskId} onChange={(e) => setForm({ ...form, taskId: e.target.value })} options={state.tasks.map((t) => ({ value: t.id, label: t.title }))} error={errors.taskId} />
+            <Select label="Nhiệm vụ" value={form.taskId} onChange={(e) => setForm({ ...form, taskId: e.target.value })} options={courseTasks.map((t) => ({ value: t.id, label: t.title }))} error={errors.taskId} />
             <div className="grid grid-cols-2 gap-3">
               <Input label="Thời lượng (phút)" inputMode="numeric" value={form.minutes} onChange={(e) => setForm({ ...form, minutes: e.target.value.replace(/[^\d]/g, '') })} error={errors.minutes} placeholder="45" />
               <Select label="Ngày" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} options={weekDates().filter((d) => d <= DEMO_TODAY).map((d) => ({ value: d, label: formatDay(d, { relative: true }) }))} />
@@ -136,9 +155,9 @@ export function ProgressPage() {
         </Card>
         <Card aria-labelledby="sessions">
           <CardHeader id="sessions" title="Lịch sử phiên học" subtitle="Mới nhất trước" />
-          {state.sessions.length ? (
+          {activeSessions.length ? (
             <ul className="divide-y divide-line">
-              {state.sessions.slice(0, 10).map((s) => (
+              {activeSessions.slice(0, 10).map((s) => (
                 <li key={s.id} className="flex items-center gap-3 py-3">
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-medium">{taskById.get(s.taskId)?.title}</p>

@@ -27,12 +27,14 @@ from app.models import (
     User,
 )
 from app.security import hash_password
+from app.year_schedule_seed import seed_2026_demo_calendars
 
 
 def seed_demo_data(db: Session) -> None:
     if db.scalar(select(func.count(User.id))):
         seed_canvas_features(db)
         seed_pacewise_data(db)
+        seed_2026_demo_calendars(db)
         seed_learning_extensions(db)
         return
 
@@ -188,6 +190,7 @@ def seed_demo_data(db: Session) -> None:
     db.commit()
     seed_canvas_features(db)
     seed_pacewise_data(db)
+    seed_2026_demo_calendars(db)
     seed_learning_extensions(db)
 
 

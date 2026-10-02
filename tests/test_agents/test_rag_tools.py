@@ -110,8 +110,9 @@ def test_record_disputed_evidence_adds_audit_event():
     state = {}
     result = record_disputed_evidence(state, "[Nguồn, Trang 1]", "Sai trang", "Em thấy sai")
     assert result["status"] == "recorded"
-    assert state["disputed_evidence"][0]["status"] == "flagged_for_review"
-    assert state["audit_events"][0]["event"] == "CITATION_DISPUTED"
+    assert result["disputed_evidence"][0]["status"] == "flagged_for_review"
+    assert result["audit_events"][0]["event"] == "CITATION_DISPUTED"
+    assert state == {}
 
 
 def test_ingest_documents_with_fake_vector_backend(tmp_path, monkeypatch, fake_qdrant_models):

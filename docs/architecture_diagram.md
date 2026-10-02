@@ -1,6 +1,6 @@
 # PaceWise — Architecture
 
-**Trạng thái:** Kiến trúc thực thi cho MVP + hướng mở rộng production pilot · **Cập nhật:** 29/09/2026
+**Trạng thái:** Kiến trúc thực thi cho MVP + hướng mở rộng production pilot · **Cập nhật:** 30/09/2026
 
 ## 1. System context
 
@@ -47,6 +47,9 @@ flowchart TB
     Graph --> RubricScorer[CR Rubric Scorer]
     Graph --> Retriever[Qdrant Retriever + lazy FastEmbed + FlashRank ONNX]
     Graph --> Guardrail[Rules + calibrated classifier + output policy]
+    Graph --> Critic[Deterministic quality gate]
+    Critic -->|invalid, max 1 pass| Repair[Safe Repair Agent]
+    Repair --> Critic
 
     Plan --> Deterministic[Constraint + Risk Validators]
     Assess --> Deterministic
@@ -72,6 +75,10 @@ Ranh giới quan trọng:
 - LLM hiểu ngữ nghĩa và sinh đề xuất; code kiểm tra quyền, schema, deadline, key MC, citation existence và privacy threshold.
 - Backend deterministic scheduler là nguồn duy nhất tạo study block và quyết định tính khả thi; frontend chỉ thu thập input và hiển thị bản nháp.
 - Thread học tập có khóa `institution:user:course:learning-cycle`, không phụ thuộc cookie session đăng nhập.
+- PostgreSQL lưu learner profile/mastery/misconception theo `institution:user:course`; checkpoint theo tuần chỉ giữ working memory.
+- Browser chỉ gửi `assessment_id`; backend kiểm tra bản duyệt của giảng viên rồi lấy rubric/đáp án từ LMS bằng service credential.
+- Ca đánh giá thiếu chắc chắn và khiếu nại citation tạo `AgentReviewCase` bền vững, không chỉ nằm trong LangGraph state.
+- Chat ưu tiên đọc LMS course projection do worker duy trì; chỉ fallback sang REST khi projection thiếu hoặc quá hạn.
 - Request chat chỉ retrieval. Worker riêng nhận event, lấy REST snapshot, version hóa học liệu và cập nhật Qdrant; point được cô lập theo institution/course/resource/version/access scope.
 - Assessment builder không tự duyệt output của chính nó. Item/rubric phải qua quality gate và giảng viên xác nhận.
 - Độ tin cậy thấp, câu trả lời ngoài rubric hoặc bộ chấm bất đồng được chuyển vào hàng chờ giảng viên; không tự cập nhật bằng chứng học tập.
@@ -102,6 +109,62 @@ stateDiagram-v2
     Reflecting --> PlanDraft: Confirmed adjustment
 ```
 
+### 3.1 End-to-end data flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Student / Instructor
+    participant UI as React Web
+    participant API as FastAPI
+    participant Auth as Session + RBAC
+    participant LMS as LMS Adapter
+    participant DB as PostgreSQL
+    participant Agent as LangGraph
+    participant Vector as Qdrant
+    participant Model as LLM Gateway
+
+    User->>UI: Login or LMS launch
+    UI->>API: Credentials / one-time launch token
+    API->>LMS: Verify identity and enrollments
+    LMS-->>API: User, role, allowed courses
+    API->>DB: Create revocable session
+    API-->>UI: HttpOnly session + CSRF cookie
+
+    User->>UI: Plan, Track, Ask, Check, Recover, Reflect
+    UI->>API: Request + CSRF (no client user_id/role)
+    API->>Auth: Validate session, role and course access
+    API->>DB: Read workspace, projection and learner memory
+    API->>Agent: Authorized state + workflow request
+    opt Grounded QA
+        Agent->>Vector: Retrieve tenant/course-scoped passages
+        Vector-->>Agent: Versioned passages + metadata
+        Agent->>Model: Prompt + authorized context
+        Model-->>Agent: Candidate response
+    end
+    Agent->>Agent: Validate constraints, safety and citations
+    Agent->>Agent: Critic → one bounded repair → Critic
+    Agent-->>API: Draft/result + status + pending action
+    API->>DB: Persist outcome, audit and review case
+    API-->>UI: Safe response and source references
+    UI-->>User: Result or confirmation screen
+```
+
+LMS event ingestion không nằm trên request chat:
+
+```mermaid
+flowchart LR
+    Event[LMS event / periodic sync] --> Queue[(Durable ingestion queue)]
+    Queue --> Worker[Projection and RAG worker]
+    Worker --> REST[LMS REST current snapshot]
+    REST --> Normalize[Normalize + checksum + version]
+    Normalize --> DB[(Course projection in PostgreSQL)]
+    Normalize --> Chunk[Chunk by resource/version/access scope]
+    Chunk --> Embed[Lazy FastEmbed]
+    Embed --> Vector[(Qdrant)]
+    Worker --> Audit[Sync cursor + retry + audit]
+```
+
 ## 4. Deployment and observability
 
 ```mermaid
@@ -121,14 +184,14 @@ flowchart LR
     Monitor --> Production
 ```
 
-Staging và production dùng project/schema, secret và telemetry environment tách biệt. Release gắn Git SHA, chạy Alembic migration, smoke test và có đường rollback image/migration tương thích.
+Staging và production phải dùng project/schema, secret và telemetry environment tách biệt. Alembic migration, smoke test và rollback tương thích là release gate trước pilot; bản hiện tại vẫn dùng `create_all` và chưa được tuyên bố production-ready.
 
 ## 5. Technology decisions
 
 | Thành phần | Lựa chọn P0 | Lý do |
 |---|---|---|
 | Frontend | React 19 + TypeScript + Vite | Một codebase cho hai vai trò, production build phục vụ bằng Nginx |
-| Backend | Python 3.11 + FastAPI + Pydantic + SQLAlchemy/Alembic | Khớp repo, API/schema rõ, migration được kiểm soát |
+| Backend | Python 3.11 + FastAPI + Pydantic + SQLAlchemy | Khớp repo và API/schema rõ; Alembic là hardening bắt buộc trước pilot |
 | Database/vector | PostgreSQL + Qdrant service | PostgreSQL lưu nghiệp vụ/checkpoint/job; Qdrant tách process để backend có thể scale nhiều replica |
 | Cache/job | Durable queue trong PostgreSQL + worker riêng | Event được project và ingestion retry được sau restart; Redis chỉ thêm khi throughput thực tế yêu cầu |
 | AI | LangGraph + OpenAI-compatible client/OpenRouter | Workflow có state/HITL, đổi model qua config |
@@ -136,7 +199,7 @@ Staging và production dùng project/schema, secret và telemetry environment t�
 | Guardrail | Quy tắc nhanh + classifier hiệu chuẩn + output policy | Chặn input/output nhiều lớp; khi classifier lỗi hệ thống hạ cấp sang guided help an toàn |
 | Canvas | Fixture bắt buộc; REST read-only có điều kiện; LTI 1.3 P1 | Demo tái lập, tích hợp thật khi có credential |
 | Calendar | Google OAuth 2.0 + Calendar REST qua HTTPX; RFC 5545 `.ics` | Kết nối trực tiếp có HITL và fallback không phụ thuộc Google |
-| Quality | Pytest, Vitest, Playwright, Locust/k6, RAGAS + metric xác định trước | Unit, integration, E2E, load và chất lượng AI |
+| Quality | Pytest, Ruff, Vitest/Testing Library, axe-core, Locust/k6, RAGAS + metric xác định trước | Unit, integration, accessibility, load và chất lượng AI; browser E2E là bước hardening sau MVP |
 | Observability | Request ID, structured logs, Prometheus/Grafana | Theo dõi lỗi/latency HTTP, agent node và RAG; OpenTelemetry/LLM tracing là P1 |
 
 Hiện trạng P0 đã triển khai gồm request ID, structured logs, metrics Prometheus và dashboard

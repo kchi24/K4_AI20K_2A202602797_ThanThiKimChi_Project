@@ -46,6 +46,7 @@ def reflect_node(state: LearningGraphState) -> dict:
                 content=(
                     f"Dữ liệu phản tư cuối tuần của sinh viên: '{query}'\n"
                     f"Chỉ số tiến độ: {json.dumps(state.get('progress_metrics') or {}, ensure_ascii=False)}\n"
+                    f"Hồ sơ dài hạn: {json.dumps(state.get('learner_profile') or {}, ensure_ascii=False)}\n"
                     "Cuối phản hồi thêm JSON gồm effective, deviation_cause, adjustment, evidence."
                 )
             ),

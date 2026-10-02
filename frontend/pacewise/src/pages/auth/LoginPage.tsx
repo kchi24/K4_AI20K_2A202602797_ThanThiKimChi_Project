@@ -9,12 +9,6 @@ import { ApiError, login, syncCanvas } from '../../services/api';
 import { useAppStore } from '../../store/AppStore';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 
-const demoAccounts = [
-  { email: 'student@canvas.local', label: 'Sinh viên', icon: 'calendar' as const },
-  { email: 'minh@canvas.local', label: 'SV Minh', icon: 'book' as const },
-  { email: 'teacher@canvas.local', label: 'Giảng viên', icon: 'users' as const },
-];
-
 export function LoginPage() {
   useDocumentTitle('Đăng nhập');
   const { state, dispatch } = useAppStore();
@@ -41,7 +35,7 @@ export function LoginPage() {
       dispatch({ type: 'LOGIN', user });
       if (user.role === 'student') {
         const synced = await syncCanvas();
-        dispatch({ type: 'SYNC_CANVAS', courses: synced.courses, tasks: synced.tasks, guidance: synced.guidance, courseData: synced.courseData });
+        dispatch({ type: 'SYNC_CANVAS', courses: synced.courses, tasks: synced.tasks, guidance: synced.guidance, assessments: synced.assessments, courseData: synced.courseData });
       }
       navigate(homeFor(user.role), { replace: true });
     } catch (err) {
@@ -97,27 +91,6 @@ export function LoginPage() {
             </Button>
           </form>
 
-          <div className="mt-8 rounded-2xl border border-line bg-white p-4">
-            <p className="text-sm font-semibold">Tài khoản demo</p>
-            <p className="caption">Chọn để điền sẵn · mật khẩu: demo123</p>
-            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
-              {demoAccounts.map((a) => (
-                <button
-                  key={a.email}
-                  type="button"
-                  onClick={() => {
-                    setEmail(a.email);
-                    setPassword('demo123');
-                    setErrors({});
-                  }}
-                  className="flex min-h-[44px] items-center justify-center gap-2 rounded-xl border border-line px-3 text-sm font-semibold hover:border-[#C9D8FB] hover:bg-primary-light"
-                >
-                  <Icon name={a.icon} size={16} />
-                  {a.label}
-                </button>
-              ))}
-            </div>
-          </div>
         </div>
       </section>
     </div>

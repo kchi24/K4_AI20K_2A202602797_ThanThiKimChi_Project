@@ -4,7 +4,9 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 from cryptography.fernet import Fernet
+from pydantic import ValidationError
 
+from src.api.google_calendar import FreeBusyRequest
 from src.config import Settings, get_settings
 from src.db import SessionLocal
 from src.main import app
@@ -15,7 +17,7 @@ from src.persistence_models import (
     IntegrationAuditLog,
 )
 from src.security import decode_session
-from src.services.google_calendar import OAuthTokens, TokenCipher
+from src.services.google_calendar import GoogleCalendarError, OAuthTokens, TokenCipher
 
 
 @pytest.fixture
@@ -247,3 +249,215 @@ async def test_instructor_cannot_connect_personal_calendar(client, monkeypatch, 
     headers = await login_student(client, monkeypatch, role="instructor")
     response = await client.post("/api/v1/integrations/google-calendar/connect", headers=headers)
     assert response.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "timeMin": "2026-10-02T10:00:00+07:00",
+            "timeMax": "2026-10-02T09:00:00+07:00",
+            "timeZone": "Asia/Ho_Chi_Minh",
+        },
+        {
+            "timeMin": "2026-10-01T00:00:00+07:00",
+            "timeMax": "2026-12-01T00:00:00+07:00",
+            "timeZone": "Asia/Ho_Chi_Minh",
+        },
+        {
+            "timeMin": "2026-10-01T00:00:00+07:00",
+            "timeMax": "2026-10-02T00:00:00+07:00",
+            "timeZone": "Mars/Olympus_Mons",
+        },
+    ],
+)
+def test_freebusy_request_rejects_invalid_windows_and_timezones(payload):
+    with pytest.raises(ValidationError):
+        FreeBusyRequest.model_validate(payload)
+
+
+@pytest.mark.asyncio
+async def test_status_hides_provider_error_and_multiday_busy_is_split(
+    client, monkeypatch, calendar_settings
+):
+    headers = await login_student(client, monkeypatch)
+    add_connection(calendar_settings)
+    monkeypatch.setattr(
+        "src.services.google_calendar.GoogleCalendarClient.access_token",
+        AsyncMock(side_effect=GoogleCalendarError("provider unavailable")),
+    )
+    status_response = await client.get("/api/v1/integrations/google-calendar/status")
+    assert status_response.status_code == 200
+    assert status_response.json()["accountEmail"] is None
+
+    monkeypatch.setattr(
+        "src.services.google_calendar.GoogleCalendarClient.access_token",
+        AsyncMock(return_value="access"),
+    )
+    monkeypatch.setattr(
+        "src.services.google_calendar.GoogleCalendarClient.freebusy",
+        AsyncMock(
+            return_value=[
+                {"start": "2026-10-02T23:00:00+07:00", "end": "2026-10-04T01:00:00+07:00"}
+            ]
+        ),
+    )
+    response = await client.post(
+        "/api/v1/integrations/google-calendar/freebusy",
+        headers=headers,
+        json={
+            "timeMin": "2026-10-02T00:00:00+07:00",
+            "timeMax": "2026-10-05T00:00:00+07:00",
+            "timeZone": "Asia/Ho_Chi_Minh",
+        },
+    )
+    assert [slot["date"] for slot in response.json()["unavailableSlots"]] == [
+        "2026-10-02",
+        "2026-10-03",
+        "2026-10-04",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_callback_handles_denial_missing_refresh_and_existing_connection(
+    client, monkeypatch, calendar_settings
+):
+    headers = await login_student(client, monkeypatch)
+
+    async def new_state():
+        started = await client.post("/api/v1/integrations/google-calendar/connect", headers=headers)
+        return parse_qs(urlparse(started.json()["authorizationUrl"]).query)["state"][0]
+
+    denied_state = await new_state()
+    denied = await client.get(
+        "/api/v1/integrations/google-calendar/callback",
+        params={"state": denied_state, "error": "access_denied"},
+        follow_redirects=False,
+    )
+    assert "google_calendar=denied" in denied.headers["location"]
+
+    missing_state = await new_state()
+    monkeypatch.setattr(
+        "src.services.google_calendar.GoogleCalendarClient.exchange_code",
+        AsyncMock(
+            return_value=OAuthTokens(
+                access_token="access",
+                refresh_token="",
+                scope=calendar_settings.google_calendar_scopes,
+            )
+        ),
+    )
+    missing = await client.get(
+        "/api/v1/integrations/google-calendar/callback",
+        params={"state": missing_state, "code": "code"},
+        follow_redirects=False,
+    )
+    assert "google_calendar=error" in missing.headers["location"]
+
+    add_connection(calendar_settings)
+    existing_state = await new_state()
+    existing = await client.get(
+        "/api/v1/integrations/google-calendar/callback",
+        params={"state": existing_state, "code": "code"},
+        follow_redirects=False,
+    )
+    assert "google_calendar=connected" in existing.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_callback_rejects_missing_required_scope(client, monkeypatch, calendar_settings):
+    headers = await login_student(client, monkeypatch)
+    started = await client.post("/api/v1/integrations/google-calendar/connect", headers=headers)
+    state = parse_qs(urlparse(started.json()["authorizationUrl"]).query)["state"][0]
+    monkeypatch.setattr(
+        "src.services.google_calendar.GoogleCalendarClient.exchange_code",
+        AsyncMock(
+            return_value=OAuthTokens(
+                access_token="access",
+                refresh_token="refresh",
+                scope="https://www.googleapis.com/auth/calendar.freebusy",
+            )
+        ),
+    )
+    response = await client.get(
+        "/api/v1/integrations/google-calendar/callback",
+        params={"state": state, "code": "code"},
+        follow_redirects=False,
+    )
+    assert "google_calendar=error" in response.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_provider_failures_return_gateway_errors(client, monkeypatch, calendar_settings):
+    headers = await login_student(client, monkeypatch)
+    add_connection(calendar_settings)
+    provider_error = AsyncMock(side_effect=GoogleCalendarError("provider timeout"))
+    monkeypatch.setattr(
+        "src.services.google_calendar.GoogleCalendarClient.access_token",
+        provider_error,
+    )
+    window = {
+        "timeMin": "2026-10-02T00:00:00+07:00",
+        "timeMax": "2026-10-03T00:00:00+07:00",
+        "timeZone": "Asia/Ho_Chi_Minh",
+    }
+    assert (
+        await client.post("/api/v1/integrations/google-calendar/freebusy", headers=headers, json=window)
+    ).status_code == 502
+    event_payload = {
+        "confirmed": True,
+        "timeZone": "Asia/Ho_Chi_Minh",
+        "blocks": [
+            {
+                "blockId": "failure-block",
+                "title": "Study",
+                "start": "2026-10-02T09:00:00+07:00",
+                "end": "2026-10-02T10:00:00+07:00",
+            }
+        ],
+    }
+    assert (
+        await client.post(
+            "/api/v1/integrations/google-calendar/events", headers=headers, json=event_payload
+        )
+    ).status_code == 502
+
+    monkeypatch.setattr(
+        "src.services.google_calendar.GoogleCalendarClient.revoke",
+        AsyncMock(side_effect=GoogleCalendarError("revocation failed")),
+    )
+    assert (
+        await client.delete("/api/v1/integrations/google-calendar", headers=headers)
+    ).status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_event_creation_failure_reports_partial_progress(client, monkeypatch, calendar_settings):
+    headers = await login_student(client, monkeypatch)
+    add_connection(calendar_settings)
+    monkeypatch.setattr(
+        "src.services.google_calendar.GoogleCalendarClient.access_token",
+        AsyncMock(return_value="access"),
+    )
+    monkeypatch.setattr(
+        "src.services.google_calendar.GoogleCalendarClient.create_event",
+        AsyncMock(side_effect=GoogleCalendarError("quota exceeded")),
+    )
+    response = await client.post(
+        "/api/v1/integrations/google-calendar/events",
+        headers=headers,
+        json={
+            "confirmed": True,
+            "timeZone": "Asia/Ho_Chi_Minh",
+            "blocks": [
+                {
+                    "blockId": "quota-block",
+                    "title": "Study",
+                    "start": "2026-10-02T09:00:00+07:00",
+                    "end": "2026-10-02T10:00:00+07:00",
+                }
+            ],
+        },
+    )
+    assert response.status_code == 502
+    assert "Created 0 event" in response.json()["detail"]

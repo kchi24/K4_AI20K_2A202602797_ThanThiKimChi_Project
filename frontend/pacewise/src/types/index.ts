@@ -19,6 +19,12 @@ export interface CanvasSyncResult {
   tasks: Task[];
   courseData: Record<string, LMSCourseData>;
   guidance?: ClassGuidance[];
+  assessments?: AssessmentItem[];
+  reviewResolutions?: Record<string, {
+    status: ReviewStatus;
+    note?: string;
+    resolvedStatus?: string;
+  }>;
   syncedAt: string;
   source: string;
   activeCourseId: string;
@@ -61,6 +67,14 @@ export interface Task {
   groupCategoryId?: string | null;
   rubric?: LMSRubric | null;
   submission?: LMSSubmissionSummary;
+}
+
+/** User-owned fields layered on top of the latest LMS task snapshot. */
+export interface TaskProgress {
+  estimateMin: number;
+  loggedMin: number;
+  status: TaskStatus;
+  updatedAt: string;
 }
 
 export interface LMSAssignmentGroup {
@@ -275,6 +289,7 @@ export interface QAMessage {
   text: string;
   kind?: QAKind;
   citations?: string[];
+  sources?: Source[];
   suggestions?: string[];
   createdAt: string;
 }
@@ -311,6 +326,7 @@ export interface RecoveryOption {
 }
 
 export interface Reflection {
+  courseId: string;
   weekStart: string;
   answers: [string, string, string];
   savedAt: string;
@@ -351,7 +367,13 @@ export interface LMSInstructorSummary {
   rubricAssignments: number;
 }
 
-export type ReviewStatus = 'pending' | 'in_review' | 'approved' | 'needs_review';
+export type ReviewStatus =
+  | 'pending'
+  | 'in_review'
+  | 'approved'
+  | 'edited'
+  | 'rejected'
+  | 'needs_evidence';
 
 export interface ReviewItem {
   id: string;
@@ -363,6 +385,8 @@ export interface ReviewItem {
   status: ReviewStatus;
   submittedAt: string;
   note?: string;
+  suggestedStatus?: string;
+  rubricVersion?: number;
 }
 
 export type AssessmentStatus = 'draft' | 'review' | 'approved' | 'rejected';
@@ -378,6 +402,7 @@ export interface AssessmentItem {
   source?: string;
   aiGenerated?: boolean;
   history?: { at: string; text: string }[];
+  version?: number;
 }
 
 export interface AuditEntry {
@@ -400,6 +425,7 @@ export interface QuickCheckResult {
   submittedAt: string;
   reviewItemId?: string;
   instructorNote?: string;
+  rubricVersion?: number;
 }
 
 export interface ClassGuidance {

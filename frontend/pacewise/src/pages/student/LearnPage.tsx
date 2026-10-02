@@ -9,18 +9,16 @@ import { Icon } from '../../components/ui/Icon';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { Banner, EmptyState, ErrorState } from '../../components/ui/States';
 import { useToast } from '../../components/ui/Toast';
-import { sources, suggestedQuestions } from '../../data/knowledge';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
+import { useDerived } from '../../hooks/useDerived';
 import { ApiError, askHint, askQuestion, assessUnderstanding } from '../../services/api';
 import { useAppStore } from '../../store/AppStore';
-import type { QAMessage, QuickCheckResult, ReviewItem, Source, Tone } from '../../types';
+import type { QAMessage, QuickCheckResult, Source, Tone } from '../../types';
 import type { QAResult } from '../../utils/qa';
 import { cx } from '../../utils/cx';
 import { uid } from '../../utils/time';
 
 const MAX_LEN = 1000;
-const sourceById = new Map(sources.map((s) => [s.id, s]));
-
 const evidenceMeta: Record<QuickCheckResult['evidenceState'], { label: string; tone: Tone }> = {
   demonstrated: { label: 'Đã thể hiện được', tone: 'success' },
   developing: { label: 'Đang hình thành', tone: 'primary' },
@@ -60,7 +58,7 @@ function AssistantMessage({ m, onOpen, onHint, onAsk, hintLoading }: { m: QAMess
       <div className="mb-3 flex flex-wrap items-center gap-2">
         {m.kind === 'grounded' && (
           <Badge tone="success" icon="checkCircle">
-            Có nguồn · {m.citations?.length} tài liệu
+            Có nguồn · {m.sources?.length ?? 0} tài liệu
           </Badge>
         )}
         {m.kind === 'abstained' && (
@@ -77,14 +75,13 @@ function AssistantMessage({ m, onOpen, onHint, onAsk, hintLoading }: { m: QAMess
       {m.kind === 'abstained' && <h3 className="mb-1 font-semibold">Chưa đủ nguồn để trả lời chắc chắn</h3>}
       <p className="whitespace-pre-line leading-relaxed">{m.text}</p>
       {m.kind === 'abstained' && <p className="caption mt-2">Bạn có thể xem syllabus của môn hoặc hỏi giảng viên trong office hour.</p>}
-      {!!m.citations?.length && (
+      {!!m.sources?.length && (
         <div className="mt-4">
           <h4 className="mb-2 text-sm font-semibold text-muted">Nguồn</h4>
           <div className="space-y-2">
-            {m.citations.map((id, i) => {
-              const s = sourceById.get(id);
-              return s ? <Citation key={id} index={i + 1} source={s} onOpen={onOpen} /> : null;
-            })}
+            {m.sources.map((source, index) => (
+              <Citation key={source.id} index={index + 1} source={source} onOpen={onOpen} />
+            ))}
           </div>
         </div>
       )}
@@ -107,6 +104,7 @@ export function LearnPage() {
   const [tab, setTab] = useState<'qa' | 'check'>(initialTab);
   useDocumentTitle(tab === 'check' ? 'Kiểm tra nhanh' : 'Học tập & Hỏi đáp');
   const { state, dispatch } = useAppStore();
+  const { activeCourse, activeTasks } = useDerived();
   const toast = useToast();
 
   // Q&A state
@@ -123,6 +121,9 @@ export function LearnPage() {
   const initialAssessmentId = approvedAssessments[0]?.id ?? '';
   const [selectedAssessmentId, setSelectedAssessmentId] = useState(initialAssessmentId);
   const selectedAssessment = approvedAssessments.find((a) => a.id === selectedAssessmentId) ?? approvedAssessments[0];
+  const suggestedQuestions = activeTasks.slice(0, 3).map(
+    (task) => `Giải thích kiến thức cần để thực hiện “${task.title}”.`,
+  );
   const [checkAnswer, setCheckAnswer] = useState('');
   const [submittingCheck, setSubmittingCheck] = useState(false);
 
@@ -132,6 +133,12 @@ export function LearnPage() {
     }
   }, [state.qaMessages.length, loading, tab]);
 
+  useEffect(() => {
+    setSelectedAssessmentId(approvedAssessments[0]?.id ?? '');
+    setCheckAnswer('');
+    setError(null);
+  }, [state.user?.courseId, state.assessments]);
+
   const switchTab = (nextTab: 'qa' | 'check') => {
     setTab(nextTab);
     setSearchParams(nextTab === 'check' ? { tab: 'check' } : {});
@@ -140,7 +147,7 @@ export function LearnPage() {
   const push = (role: 'user' | 'assistant', text: string, r?: QAResult) =>
     dispatch({
       type: 'ADD_QA',
-      message: { id: uid('qa'), role, text, kind: r?.kind, citations: r?.citations, suggestions: r?.suggestions, createdAt: new Date().toISOString() },
+      message: { id: uid('qa'), role, text, kind: r?.kind, citations: r?.citations, sources: r?.sources, suggestions: r?.suggestions, createdAt: new Date().toISOString() },
     });
 
   const ask = async (question: string, alreadyShown = false) => {
@@ -159,7 +166,7 @@ export function LearnPage() {
     setQ('');
     setLoading(true);
     try {
-      const r = await askQuestion(text, { simulateError: state.settings.simulateAiError });
+      const r = await askQuestion(text);
       push('assistant', r.text, r);
     } catch (e) {
       setError({ question: text, requestId: e instanceof ApiError ? e.requestId : 'PW-REQ-UNKNOWN' });
@@ -181,7 +188,7 @@ export function LearnPage() {
     const resultId = uid('qc');
     try {
       const assessment = await assessUnderstanding(selectedAssessment, text);
-      const reviewId = assessment.requiresInstructorReview ? `PW-${crypto.randomUUID().slice(0, 8)}` : undefined;
+      const reviewId = assessment.requiresInstructorReview ? assessment.reviewCaseId : undefined;
       const result: QuickCheckResult = {
         id: resultId,
         topic: selectedAssessment.topic,
@@ -192,22 +199,13 @@ export function LearnPage() {
         feedback: assessment.feedback,
         submittedAt: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
         reviewItemId: reviewId,
+        rubricVersion: assessment.rubricVersion,
       };
-      const reviewItem: ReviewItem | undefined = reviewId ? {
-        id: reviewId,
-        topic: selectedAssessment.topic,
-        question: selectedAssessment.question,
-        responseExcerpt: `“${text}”`,
-        confidence: assessment.confidence === 'medium' ? 'medium' : 'low',
-        reason: assessment.feedback,
-        status: 'pending',
-        submittedAt: new Date().toLocaleString('vi-VN'),
-      } : undefined;
-      dispatch({ type: 'SUBMIT_QUICK_CHECK', result, reviewItem });
+      dispatch({ type: 'SUBMIT_QUICK_CHECK', result });
       setCheckAnswer('');
       toast({
-        tone: reviewItem ? 'warning' : 'success',
-        title: reviewItem ? 'Đã chuyển giảng viên xem xét' : 'Đã đánh giá theo rubric',
+        tone: reviewId ? 'warning' : 'success',
+        title: reviewId ? 'Đã chuyển giảng viên xem xét' : 'Đã đánh giá theo rubric',
         description: assessment.feedback,
       });
     } catch (error) {
@@ -221,7 +219,7 @@ export function LearnPage() {
     <div className="page max-w-3xl">
       <PageHeader
         title="Học tập & Kiểm tra"
-        description="Hỏi đáp có trích dẫn từ tài liệu môn học và kiểm tra nhanh mức độ hiểu bài theo Rubric."
+        description={`Hỏi đáp có trích dẫn và kiểm tra nhanh theo Rubric của ${activeCourse?.code ?? 'môn đang chọn'}.`}
         actions={
           tab === 'qa' && state.qaMessages.length > 0 ? (
             <Button variant="ghost" size="sm" icon="trash" onClick={() => dispatch({ type: 'CLEAR_QA' })}>
@@ -263,14 +261,16 @@ export function LearnPage() {
                   <Icon name="message" size={24} />
                 </span>
                 <h2 className="mt-3 text-lg font-semibold">Bạn muốn hỏi điều gì?</h2>
-                <p className="mx-auto mt-1 max-w-md text-muted">PaceWise chỉ trả lời từ học liệu đã được giảng viên duyệt: Machine Learning, Data Visualization, Statistics.</p>
-                <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-center">
-                  {suggestedQuestions.map((s) => (
-                    <button key={s} onClick={() => ask(s)} className="min-h-[44px] rounded-xl border border-line bg-white px-4 text-left text-sm font-medium hover:border-[#C9D8FB] hover:bg-primary-light sm:text-center">
-                      {s}
-                    </button>
-                  ))}
-                </div>
+                <p className="mx-auto mt-1 max-w-md text-muted">PaceWise chỉ trả lời từ học liệu đã được giảng viên duyệt trong môn đang chọn.</p>
+                {suggestedQuestions.length > 0 && (
+                  <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-center">
+                    {suggestedQuestions.map((suggestion) => (
+                      <button key={suggestion} onClick={() => ask(suggestion)} className="min-h-[44px] rounded-xl border border-line bg-white px-4 text-left text-sm font-medium hover:border-[#C9D8FB] hover:bg-primary-light sm:text-center">
+                        {suggestion}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </Card>
             )}
 
@@ -448,6 +448,7 @@ export function LearnPage() {
                       <Badge tone={qc.confidence === 'low' ? 'danger' : 'success'}>
                         Độ tin cậy: {qc.confidence === 'low' ? 'thấp' : 'cao'}
                       </Badge>
+                      {qc.rubricVersion && <Badge tone="neutral">Rubric v{qc.rubricVersion}</Badge>}
                       <span className="caption ml-auto">{qc.submittedAt}</span>
                     </div>
 
@@ -463,6 +464,9 @@ export function LearnPage() {
                         <p className="text-xs font-semibold text-primary-ink">Phản hồi từ Giảng viên (Hàng chờ duyệt):</p>
                         <p className="mt-0.5 text-sm text-primary-ink">{qc.instructorNote}</p>
                       </div>
+                    )}
+                    {qc.reviewItemId && !qc.instructorNote && (
+                      <Banner tone="warning" icon="clock">Đang chờ giảng viên xem xét; hệ thống chưa ghi nhận kết luận mastery.</Banner>
                     )}
 
                     <p className="caption text-xs text-muted">

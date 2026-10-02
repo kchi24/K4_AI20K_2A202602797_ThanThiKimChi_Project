@@ -39,6 +39,9 @@ def coordinator_node(state: LearningGraphState) -> dict:
             "analysis": "Guardrail chặn prompt injection trước khi gọi mô hình.",
             "security_flags": security_flags,
             "status": "failed",
+            "output": {},
+            "quality_review": {},
+            "quality_repair_count": 0,
         }
 
     has_existing_milestones = bool(state.get("proposed_milestones"))
@@ -79,6 +82,9 @@ def coordinator_node(state: LearningGraphState) -> dict:
         "current_node": "coordinator",
         "analysis": reasoning,
         "security_flags": security_flags,
+        "output": {},
+        "quality_review": {},
+        "quality_repair_count": 0,
         "request": {
             **(state.get("request") or {}),
             "intent_summary": intent_summary,

@@ -50,3 +50,89 @@ async def test_graph_preserves_workflow_audit_events(mock_llm):
         config=config,
     )
     assert any(event["event"] == "CITATION_DISPUTED" for event in result["audit_events"])
+
+
+@pytest.mark.asyncio
+async def test_graph_appends_only_new_audit_events_per_turn(mock_llm):
+    config = {"configurable": {"thread_id": "audit-events-are-deltas"}}
+
+    first = await agent.ainvoke({"query": "Giải thích khái niệm"}, config=config)
+    second = await agent.ainvoke({"query": "Giải thích ví dụ tiếp theo"}, config=config)
+
+    first_nodes = [
+        event["node"]
+        for event in first["audit_events"]
+        if event["event"] == "AGENT_NODE_COMPLETED"
+    ]
+    second_nodes = [
+        event["node"]
+        for event in second["audit_events"]
+        if event["event"] == "AGENT_NODE_COMPLETED"
+    ]
+    assert first_nodes == ["coordinator", "qa", "quality_gate"]
+    assert second_nodes == [
+        "coordinator",
+        "qa",
+        "quality_gate",
+        "coordinator",
+        "qa",
+        "quality_gate",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_graph_replaces_resolved_risk_signals(mock_llm):
+    config = {"configurable": {"thread_id": "risk-signals-are-a-snapshot"}}
+    at_risk = await agent.ainvoke(
+        {
+            "query": "Kiểm tra tiến độ",
+            "assignments": [
+                {
+                    "id": "assignment-1",
+                    "title": "Bài sắp đến hạn",
+                    "deadline": "2026-10-01T10:00:00Z",
+                    "estimated_hours": 5,
+                }
+            ],
+            "request": {
+                "workflow_hint": "tracking",
+                "current_time": "2026-10-01T09:00:00Z",
+            },
+        },
+        config=config,
+    )
+    resolved = await agent.ainvoke(
+        {
+            "query": "Kiểm tra lại tiến độ",
+            "assignments": [],
+            "request": {"workflow_hint": "tracking"},
+        },
+        config=config,
+    )
+
+    assert at_risk["risk_signals"]
+    assert resolved["risk_signals"] == []
+
+
+@pytest.mark.asyncio
+async def test_graph_replaces_resolved_validation_errors(mock_llm):
+    config = {"configurable": {"thread_id": "validation-errors-are-a-snapshot"}}
+    invalid = await agent.ainvoke(
+        {
+            "query": "Lập kế hoạch tuần",
+            "availability": [{"hours": 1}],
+            "request": {"workflow_hint": "plan"},
+        },
+        config=config,
+    )
+    valid = await agent.ainvoke(
+        {
+            "query": "Lập kế hoạch tuần mới",
+            "availability": [{"hours": 10}],
+            "request": {"workflow_hint": "plan"},
+        },
+        config=config,
+    )
+
+    assert invalid["validation_errors"]
+    assert valid["validation_errors"] == []

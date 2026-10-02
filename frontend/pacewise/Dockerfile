@@ -7,7 +7,9 @@ RUN npm ci --no-audit --no-fund
 
 COPY . .
 ARG VITE_API_URL=/api/v1
+ARG VITE_LMS_URL=http://localhost:8010
 ENV VITE_API_URL=${VITE_API_URL}
+ENV VITE_LMS_URL=${VITE_LMS_URL}
 RUN npm run build
 
 FROM nginx:1.27-alpine

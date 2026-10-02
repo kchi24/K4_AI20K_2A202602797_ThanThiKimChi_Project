@@ -27,7 +27,7 @@ function StaleBanner() {
               setBusy(true);
               try {
                 const r = await syncCanvas();
-                dispatch({ type: 'SYNC_CANVAS', courses: r.courses, tasks: r.tasks, guidance: r.guidance, courseData: r.courseData });
+                dispatch({ type: 'SYNC_CANVAS', courses: r.courses, tasks: r.tasks, guidance: r.guidance, assessments: r.assessments, courseData: r.courseData });
                 toast({ tone: 'success', title: 'Đã đồng bộ dữ liệu Canvas' });
               } finally {
                 setBusy(false);
@@ -46,7 +46,7 @@ function StaleBanner() {
 
 export function StudentLayout() {
   const { state } = useAppStore();
-  const { drifts } = useDerived();
+  const { activeDrifts: drifts } = useDerived();
   const items: NavItem[] = [
     { to: '/dashboard', label: 'Tổng quan', icon: 'home', primary: true },
     { to: '/plan', label: 'Kế hoạch', icon: 'calendar', primary: true },

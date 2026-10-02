@@ -27,6 +27,24 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
+def _ensure_runtime_schema() -> None:
+    """Apply small additive migrations for existing simulator volumes."""
+
+    if engine.dialect.name != "postgresql":
+        return
+    statements = (
+        "ALTER TABLE calendar_events ADD COLUMN IF NOT EXISTS event_kind VARCHAR(50)",
+        "ALTER TABLE calendar_events ADD COLUMN IF NOT EXISTS join_url VARCHAR(500)",
+        "ALTER TABLE calendar_events ADD COLUMN IF NOT EXISTS attendance_status VARCHAR(20)",
+        "UPDATE calendar_events SET event_kind = 'personal' WHERE event_kind IS NULL",
+        "ALTER TABLE calendar_events ALTER COLUMN event_kind SET DEFAULT 'personal'",
+        "ALTER TABLE calendar_events ALTER COLUMN event_kind SET NOT NULL",
+    )
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
 def initialize_database(max_attempts: int = 30) -> None:
     """Wait for PostgreSQL, create the small schema, and add demo fixtures."""
     last_error: Exception | None = None
@@ -45,5 +63,6 @@ def initialize_database(max_attempts: int = 30) -> None:
     from app.seed import seed_demo_data
 
     Base.metadata.create_all(bind=engine)
+    _ensure_runtime_schema()
     with SessionLocal() as db:
         seed_demo_data(db)

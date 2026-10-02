@@ -6,7 +6,11 @@ from src.agents.workflows.qa import qa_node
 from src.agents.workflows.recover import recover_node
 from src.agents.workflows.reflect import reflect_node
 from src.agents.workflows.tracking import tracking_node
-from src.agents.workflows.understanding import understanding_node
+from src.agents.workflows.understanding import (
+    _extract_assessment_result,
+    _normalize_confidence,
+    understanding_node,
+)
 
 
 def test_coordinator_persists_security_flags():
@@ -258,6 +262,66 @@ def test_missing_rubric_moves_assessment_to_teacher_queue(monkeypatch):
     result = understanding_node({"query": "Câu trả lời chưa có rubric"})
     assert result["status"] == "awaiting_teacher"
     assert "missing_approved_rubric" in result["output"]["assessment_validation"]["reasons"]
+
+
+def test_understanding_parser_handles_generic_json_and_natural_language_fallbacks():
+    generic = _extract_assessment_result(
+        '```{"status":"con nham lan","confidence":"low","evidence_quotes":["wrong premise"]}```',
+        "student answer",
+    )
+    assert generic["confidence"] == _normalize_confidence("low")
+    assert generic["evidence_quotes"] == ["wrong premise"]
+    assert _normalize_confidence("thap") == generic["confidence"]
+
+    fallback = _extract_assessment_result(
+        '```json\n{broken}\n```\nÄ‘ang hÃ¬nh thÃ nh; Ä‘á»™ tin cáº­y: cao; "láº­p luáº­n cÃ³ báº±ng chá»©ng"',
+        "",
+    )
+    assert fallback["confidence"]
+    assert fallback["evidence_quotes"] == ["láº­p luáº­n cÃ³ báº±ng chá»©ng"]
+
+    answer_evidence = _extract_assessment_result(
+        "KhÃ´ng cÃ³ JSON hay trÃ­ch dáº«n",
+        "CÃ¢u tráº£ lá»i nÃ y Ä‘á»§ dÃ i Ä‘á»ƒ lÃ m báº±ng chá»©ng.",
+    )
+    assert answer_evidence["evidence_quotes"]
+
+
+def test_understanding_uses_message_fallback_and_survives_provider_failure(monkeypatch):
+    monkeypatch.setattr(
+        "src.agents.workflows.understanding.get_agent_llm",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("provider offline")),
+    )
+    result = understanding_node(
+        {
+            "messages": [{"content": "Em giáº£i thÃ­ch kháº¯c phá»¥c báº±ng retry cÃ³ giá»›i háº¡n."}],
+            "approved_rubric": {
+                "criteria": [{"id": "reasoning", "description": "Reasoning", "points": 4}]
+            },
+        }
+    )
+    assert result["current_node"] == "understanding"
+    assert result["assessment_result"]["evidence_quotes"]
+
+
+def test_understanding_preserves_machine_result_when_response_is_only_json(monkeypatch):
+    content = (
+        '```json\n{"status":"Ä‘Ã£ thá»ƒ hiá»‡n Ä‘Æ°á»£c","confidence":"Cao",'
+        '"evidence_quotes":"reasoned answer"}\n```'
+    )
+    monkeypatch.setattr(
+        "src.agents.workflows.understanding.get_agent_llm",
+        lambda **_kwargs: SimpleNamespace(invoke=lambda _messages: SimpleNamespace(content=content)),
+    )
+    result = understanding_node(
+        {
+            "query": "reasoned answer",
+            "approved_rubric": {
+                "criteria": [{"id": "reasoning", "description": "Reasoning", "points": 4}]
+            },
+        }
+    )
+    assert result["response"] == content
 
 
 def test_reflect_creates_structured_draft_and_hitl(monkeypatch):

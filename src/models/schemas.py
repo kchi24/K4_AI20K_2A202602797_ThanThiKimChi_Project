@@ -20,6 +20,7 @@ class ChatResponse(BaseModel):
     recovery_options: list[dict[str, Any]] = Field(default_factory=list)
     reflection_draft: dict[str, Any] | None = None
     assessment_result: dict[str, Any] | None = None
+    review_case_id: str | None = None
     progress_metrics: dict[str, Any] = Field(default_factory=dict)
     risk_signals: list[dict[str, Any]] = Field(default_factory=list)
     source_refs: list[dict[str, Any]] = Field(default_factory=list)

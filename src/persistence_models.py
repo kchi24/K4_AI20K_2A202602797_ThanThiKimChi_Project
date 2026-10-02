@@ -98,6 +98,53 @@ class CourseProjection(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class LmsCourseContextProjection(Base):
+    """Read-optimized LMS context consumed by agent requests."""
+
+    __tablename__ = "pacewise_lms_course_contexts"
+
+    id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    institution_id: Mapped[str] = mapped_column(String(128), index=True)
+    course_id: Mapped[int] = mapped_column(Integer, index=True)
+    course_json: Mapped[str] = mapped_column(Text, default="{}")
+    assignments_json: Mapped[str] = mapped_column(Text, default="[]")
+    modules_json: Mapped[str] = mapped_column(Text, default="[]")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class LearnerMemory(Base):
+    """Long-lived learner profile separate from weekly LangGraph memory."""
+
+    __tablename__ = "pacewise_learner_memories"
+
+    id: Mapped[str] = mapped_column(String(256), primary_key=True)
+    institution_id: Mapped[str] = mapped_column(String(128), index=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    course_id: Mapped[int] = mapped_column(Integer, index=True)
+    profile_json: Mapped[str] = mapped_column(Text, default="{}")
+    mastery_json: Mapped[str] = mapped_column(Text, default="{}")
+    misconceptions_json: Mapped[str] = mapped_column(Text, default="[]")
+    history_json: Mapped[str] = mapped_column(Text, default="[]")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class AgentReviewCase(Base):
+    """Durable instructor queue for AI uncertainty and citation disputes."""
+
+    __tablename__ = "pacewise_agent_review_cases"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    institution_id: Mapped[str] = mapped_column(String(128), index=True)
+    course_id: Mapped[int] = mapped_column(Integer, index=True)
+    student_user_id: Mapped[int] = mapped_column(Integer, index=True)
+    case_type: Mapped[str] = mapped_column(String(64), index=True)
+    entity_id: Mapped[str] = mapped_column(String(160), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class RagIngestionJob(Base):
     """PostgreSQL-backed ingestion queue; one job represents one course snapshot."""
 

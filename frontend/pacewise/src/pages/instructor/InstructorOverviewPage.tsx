@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { StatTile } from '../../components/domain/StatTile';
 import { Button, ButtonLink } from '../../components/ui/Button';
 import { Card, CardHeader } from '../../components/ui/Card';
@@ -7,10 +7,14 @@ import { Icon } from '../../components/ui/Icon';
 import { Modal } from '../../components/ui/Modal';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { ProgressBar } from '../../components/ui/ProgressBar';
-import { ErrorState, LoadingState } from '../../components/ui/States';
+import { ErrorState } from '../../components/ui/States';
 import { useToast } from '../../components/ui/Toast';
 import { ApiError, fetchInstructorData } from '../../services/api';
 import { saveInstructorAction } from '../../services/api';
+import {
+  readInstructorOverviewCache,
+  writeInstructorOverviewCache,
+} from '../../services/instructorOverviewCache';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useAppStore } from '../../store/AppStore';
 
@@ -24,21 +28,42 @@ export function InstructorOverviewPage() {
   const [groupId, setGroupId] = useState('all');
   const [guidanceTopic, setGuidanceTopic] = useState<string | null>(null);
   const [guidanceText, setGuidanceText] = useState('');
-  const [loading, setLoading] = useState(true);
+  const cachedData = useMemo(
+    () => readInstructorOverviewCache(state.user?.id, state.user?.courseId),
+    [state.user?.courseId, state.user?.id],
+  );
+  const [loading, setLoading] = useState(!cachedData);
   const [loadError, setLoadError] = useState<ApiError | null>(null);
-  const { classGroups, groupStats } = state;
+  const classGroups = state.classGroups.length > 0
+    ? state.classGroups
+    : cachedData?.classGroups ?? [];
+  const groupStats = state.classGroups.length > 0
+    ? state.groupStats
+    : cachedData?.groupStats ?? {};
   const group = classGroups.find((g) => g.id === groupId) ?? classGroups[0] ?? { id: 'all', name: 'Cả lớp', n: 0 };
   const stats = groupStats[group.id];
-  const pending = state.reviewQueue.filter((r) => r.status === 'pending' || r.status === 'in_review').length;
-  const lmsSummary = state.lmsInstructorSummary;
+  const reviewQueue = state.classGroups.length > 0
+    ? state.reviewQueue
+    : cachedData?.reviewQueue ?? [];
+  const pending = reviewQueue.filter((r) => r.status === 'pending' || r.status === 'in_review').length;
+  const lmsSummary = state.classGroups.length > 0
+    ? state.lmsInstructorSummary
+    : cachedData?.lmsSummary ?? null;
+  const activeCourse = state.courses.find((course) => course.id === state.user?.courseId);
   const enough = group.n >= MIN_GROUP && !!stats;
 
   useEffect(() => {
     let active = true;
-    setLoading(true);
+    const cached = readInstructorOverviewCache(state.user?.id, state.user?.courseId);
+    if (cached) {
+      dispatch({ type: 'SET_INSTRUCTOR_DATA', ...cached });
+      setGroupId(cached.classGroups[0]?.id ?? 'all');
+    }
+    setLoading(!cached && state.classGroups.length === 0);
     fetchInstructorData()
       .then((data) => {
         if (!active) return;
+        writeInstructorOverviewCache(state.user?.id, state.user?.courseId, data);
         dispatch({ type: 'SET_INSTRUCTOR_DATA', ...data });
         setGroupId(data.classGroups[0]?.id ?? 'all');
         setLoadError(null);
@@ -46,12 +71,31 @@ export function InstructorOverviewPage() {
       .catch((error) => active && setLoadError(error instanceof ApiError ? error : new ApiError('UNKNOWN', 'Không thể tải dữ liệu lớp.')))
       .finally(() => active && setLoading(false));
     return () => { active = false; };
-  }, [dispatch, state.user?.courseId]);
+  }, [dispatch, state.lmsRevision, state.user?.courseId, state.user?.id]);
 
-  if (loading) {
-    return <div className="page"><LoadingState title="Đang tải tổng quan lớp" steps={['Xác thực vai trò giảng viên', 'Tổng hợp dữ liệu ẩn danh', 'Tính chỉ số lớp']} current={1} /></div>;
+  if (loading && classGroups.length === 0) {
+    return (
+      <div className="page" aria-busy="true">
+        <PageHeader
+          title="Tổng quan lớp"
+          description="Đang đồng bộ dữ liệu tổng hợp từ LMS..."
+        />
+        <Card className="flex items-center gap-4 px-5 py-6">
+          <span
+            className="h-6 w-6 shrink-0 animate-spin rounded-full border-2 border-primary border-r-transparent"
+            aria-hidden="true"
+          />
+          <div>
+            <h2 className="font-semibold">Đang chuẩn bị số liệu lớp</h2>
+            <p className="mt-1 text-sm text-muted">
+              Dữ liệu được tổng hợp và loại bỏ định danh trước khi hiển thị.
+            </p>
+          </div>
+        </Card>
+      </div>
+    );
   }
-  if (loadError) {
+  if (loadError && classGroups.length === 0) {
     return <div className="page"><ErrorState title="Không thể tải tổng quan lớp" description={loadError.message} requestId={loadError.requestId} /></div>;
   }
 
@@ -59,7 +103,7 @@ export function InstructorOverviewPage() {
     <div className="page">
       <PageHeader
         title="Tổng quan lớp"
-        description="Machine Learning · Data Visualization · Statistics — tuần 28/09 – 04/10"
+        description={`${activeCourse?.code ?? 'Môn đang chọn'} · ${activeCourse?.name ?? 'Dữ liệu lớp học'} — tuần 28/09 – 04/10`}
         actions={
           <Select
             className="w-full sm:w-64"

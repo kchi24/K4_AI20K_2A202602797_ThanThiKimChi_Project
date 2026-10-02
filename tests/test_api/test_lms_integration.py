@@ -1,14 +1,24 @@
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
 
-from src.api.lms_integration import _task_payload
-from src.api.workspace import check_login_rate_limit, record_failed_login
+from src.api.lms_integration import _task_payload, _weekly_completion
+from src.api.workspace import (
+    InstructorActionRequest,
+    _safe_workspace,
+    _versioned_assessment_payload,
+    check_login_rate_limit,
+    create_instructor_action,
+    record_failed_login,
+)
 from src.config import Settings, get_settings
 from src.db import SessionLocal
 from src.main import app
+from src.persistence_models import AgentReviewCase, InstructorAction
+from src.security import SessionContext
 
 
 @pytest.fixture
@@ -124,7 +134,21 @@ async def test_switch_course_and_persist_workspace(client, monkeypatch, integrat
     )
     saved = await client.put(
         "/api/v1/workspace",
-        json={"state": {"plan": {"id": "plan-1"}, "user": {"should": "not persist"}}},
+        json={
+            "state": {
+                "plan": {"id": "plan-1"},
+                "taskProgress": {
+                    "7:10": {
+                        "estimateMin": 90,
+                        "loggedMin": 45,
+                        "status": "in_progress",
+                        "updatedAt": "2026-10-02T08:00:00Z",
+                    }
+                },
+                "reflections": {"8": {"courseId": "8", "answers": ["a", "b", "c"]}},
+                "user": {"should": "not persist"},
+            }
+        },
         headers={"X-CSRF-Token": csrf},
     )
     loaded = await client.get("/api/v1/workspace")
@@ -132,7 +156,16 @@ async def test_switch_course_and_persist_workspace(client, monkeypatch, integrat
     assert switched.json()["courseId"] == "8"
     assert saved.status_code == 200
     assert loaded.json()["state"]["plan"]["id"] == "plan-1"
+    assert loaded.json()["state"]["taskProgress"]["7:10"]["loggedMin"] == 45
+    assert loaded.json()["state"]["reflections"]["8"]["courseId"] == "8"
     assert "user" not in loaded.json()["state"]
+
+    updated = await client.put(
+        "/api/v1/workspace",
+        json={"state": {"plan": {"id": "plan-2"}}},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert updated.json()["version"] == saved.json()["version"] + 1
 
 
 def test_login_rate_limit_is_shared_in_database():
@@ -145,6 +178,96 @@ def test_login_rate_limit_is_shared_in_database():
         with pytest.raises(HTTPException) as blocked:
             check_login_rate_limit(request, "student@example.edu", db, settings)
     assert blocked.value.status_code == 429
+
+
+def test_workspace_rejects_payload_larger_than_one_megabyte():
+    with pytest.raises(HTTPException) as too_large:
+        _safe_workspace({"settings": {"blob": "x" * 1_000_001}})
+    assert too_large.value.status_code == 413
+
+
+def test_instructor_actions_validate_and_persist_review_workflow(monkeypatch):
+    settings = Settings(_env_file=None, institution_id="test-university")
+    session = SessionContext(
+        user_id=22,
+        course_id=707,
+        course_ids=(707,),
+        role="instructor",
+        name="Teacher",
+        email="teacher@example.edu",
+        csrf_hash="hash",
+        sid="sid",
+        exp=4_102_444_800,
+    )
+    with SessionLocal() as db:
+        db.query(InstructorAction).filter(InstructorAction.course_id == 707).delete()
+        db.query(AgentReviewCase).filter(AgentReviewCase.course_id == 707).delete()
+        db.add(
+            AgentReviewCase(
+                id="review-action-case",
+                institution_id=settings.institution_id,
+                course_id=707,
+                student_user_id=12,
+                case_type="understanding_review",
+                entity_id="Q-7",
+                status="pending",
+                payload_json=json.dumps({"assessment_result": {"status": "developing"}}),
+            )
+        )
+        db.commit()
+
+        assessment = create_instructor_action(
+            InstructorActionRequest(
+                actionType="assessment",
+                entityId="Q-7",
+                payload={"status": "approved", "rubric": ["Reasoning"]},
+            ),
+            session,
+            session,
+            settings,
+            db,
+        )
+        assert assessment["payload"]["version"] == 1
+
+        with pytest.raises(HTTPException, match="Unsupported review"):
+            create_instructor_action(
+                InstructorActionRequest(
+                    actionType="review",
+                    entityId="review-action-case",
+                    payload={"status": "unknown"},
+                ),
+                session,
+                session,
+                settings,
+                db,
+            )
+
+        resolved = []
+        monkeypatch.setattr(
+            "src.api.workspace.resolve_review_case",
+            lambda _db, case, payload, _settings: resolved.append((case.id, payload["status"])),
+        )
+        review = create_instructor_action(
+            InstructorActionRequest(
+                actionType="review",
+                entityId="review-action-case",
+                payload={
+                    "status": "edited",
+                    "note": "Corrected after reviewing evidence",
+                    "edited_result": {"status": "mastered"},
+                },
+            ),
+            session,
+            session,
+            settings,
+            db,
+        )
+        case = db.get(AgentReviewCase, "review-action-case")
+        case_payload = json.loads(case.payload_json)
+
+    assert review["payload"]["status"] == "edited"
+    assert case_payload["instructor_note"] == "Corrected after reviewing evidence"
+    assert resolved == [("review-action-case", "edited")]
 
 
 def test_task_payload_preserves_effective_lms_policy_and_evidence():
@@ -180,6 +303,56 @@ def test_task_payload_preserves_effective_lms_policy_and_evidence():
     assert task["assignmentGroup"] == {"id": "2", "name": "Projects", "weight": 60.0}
     assert task["submission"]["attempts"] == 2
     assert task["rubric"]["title"] == "Reasoning"
+
+
+def test_weekly_completion_uses_real_due_weeks_and_on_time_submissions():
+    assignments = [
+        {"id": 10, "due_at": "2026-10-06T23:59:00+07:00"},
+        {"id": 11, "due_at": "2026-10-14T23:59:00+07:00"},
+    ]
+    submissions = [
+        {"assignment_id": 10, "user_id": 1, "late": False, "workflow_state": "submitted"},
+        {"assignment_id": 10, "user_id": 2, "late": True, "workflow_state": "submitted"},
+        {"assignment_id": 11, "user_id": 1, "late": False, "workflow_state": "graded"},
+    ]
+
+    rows = _weekly_completion(assignments, submissions, {1, 2})
+
+    assert [row["week"] for row in rows] == ["05/10", "12/10"]
+    assert [row["rate"] for row in rows] == [0.5, 0.5]
+
+
+def test_assessment_version_changes_only_when_rubric_content_changes():
+    entity_id = "Q-version-test"
+    with SessionLocal() as db:
+        db.query(InstructorAction).filter(InstructorAction.entity_id == entity_id).delete()
+        first = _versioned_assessment_payload(
+            db,
+            7,
+            entity_id,
+            {"status": "review", "rubric": ["Reasoning"]},
+        )
+        db.add(InstructorAction(
+            id="version-action-1",
+            course_id=7,
+            actor_user_id=1,
+            action_type="assessment",
+            entity_id=entity_id,
+            payload_json=json.dumps(first),
+        ))
+        db.commit()
+        approved = _versioned_assessment_payload(db, 7, entity_id, {"status": "approved"})
+        changed = _versioned_assessment_payload(
+            db,
+            7,
+            entity_id,
+            {"status": "approved", "rubric": ["Reasoning", "Application"]},
+        )
+
+    assert first["version"] == 1
+    assert approved["version"] == 1
+    assert approved["rubric"] == ["Reasoning"]
+    assert changed["version"] == 2
 
 
 def test_settings_can_read_mounted_secret_files(tmp_path):
