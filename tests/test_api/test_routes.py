@@ -10,7 +10,7 @@ from src.api.routes import _learning_thread_id, _load_lms_agent_context
 from src.config import get_settings
 from src.db import SessionLocal
 from src.main import app
-from src.persistence_models import InstructorAction
+from src.persistence_models import InstructorAction, LmsCourseContextProjection
 from src.security import SessionContext, require_csrf
 
 
@@ -27,6 +27,11 @@ def authenticated_student():
         sid="server-side-session",
         exp=4_102_444_800,
     )
+    with SessionLocal() as db:
+        db.query(LmsCourseContextProjection).filter(
+            LmsCourseContextProjection.course_id == session.course_id
+        ).delete()
+        db.commit()
     app.dependency_overrides[require_csrf] = lambda: session
     yield session
     app.dependency_overrides.pop(require_csrf, None)
@@ -41,7 +46,7 @@ def _lms_response(path: str, _params=None):
                 "id": 21,
                 "title": "Bài giữa kỳ",
                 "description": "Giải thích overfitting",
-                "due_at": "2026-10-01T10:00:00Z",
+                "due_at": "2099-10-01T10:00:00Z",
                 "points_possible": 10,
             }
         ]
@@ -264,6 +269,7 @@ async def test_understanding_uses_only_server_approved_rubric(
     assert state["approved_rubric"][0]["description"] == "Rubric do giảng viên duyệt"
     assert state["request"]["correct_answer"] == "Học quá sát dữ liệu huấn luyện"
     assert all(item["criterion_id"] != "attacker" for item in state["approved_rubric"])
+    assert response.json()["assessment_result"]["rubric_version"] == 1
 
 
 @pytest.mark.asyncio

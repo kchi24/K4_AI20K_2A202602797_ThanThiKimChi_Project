@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { StatTile } from '../../components/domain/StatTile';
 import { Button } from '../../components/ui/Button';
 import { Card, CardHeader } from '../../components/ui/Card';
@@ -18,13 +18,21 @@ const MAX = 500;
 export function ReflectPage() {
   useDocumentTitle('Tổng kết tuần');
   const { state, dispatch } = useAppStore();
-  const { stats } = useDerived();
+  const { activeCourse, activeStats: stats } = useDerived();
   const toast = useToast();
-  const [answers, setAnswers] = useState<[string, string, string]>(state.reflection?.answers ?? ['', '', '']);
+  const courseId = activeCourse?.id ?? state.user?.courseId ?? '';
+  const currentReflection = state.reflections[courseId];
+  const [answers, setAnswers] = useState<[string, string, string]>(currentReflection?.answers ?? ['', '', '']);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [draft, setDraft] = useState<AgentResponse | null>(null);
-  const dirty = JSON.stringify(answers) !== JSON.stringify(state.reflection?.answers ?? ['', '', '']);
+  const dirty = JSON.stringify(answers) !== JSON.stringify(currentReflection?.answers ?? ['', '', '']);
+
+  useEffect(() => {
+    setAnswers(currentReflection?.answers ?? ['', '', '']);
+    setDraft(null);
+    setError('');
+  }, [courseId, currentReflection?.savedAt]);
 
   const save = async () => {
     if (answers.every((a) => !a.trim())) {
@@ -50,6 +58,7 @@ export function ReflectPage() {
       await confirmReflection();
       dispatch({
         type: 'SAVE_REFLECTION',
+        courseId,
         answers: answers.map((a) => a.trim()) as [string, string, string],
         aiDraft: draft.reflection_draft ?? undefined,
         aiSummary: draft.response,
@@ -67,7 +76,7 @@ export function ReflectPage() {
     <div className="page max-w-4xl">
       <PageHeader
         title="Tuần này của bạn"
-        description={`Nhìn lại tuần ${formatDM(WEEK_START)} – ${formatDM(addDays(WEEK_START, 6))} bằng dữ kiện. Đây không phải đánh giá về tính cách hay năng lực.`}
+        description={`Nhìn lại ${activeCourse?.code ?? 'môn đang chọn'} trong tuần ${formatDM(WEEK_START)} – ${formatDM(addDays(WEEK_START, 6))} bằng dữ kiện. Đây không phải đánh giá về tính cách hay năng lực.`}
       />
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatTile icon="checkCircle" label="Nhiệm vụ hoàn thành" value={`${stats.done} / ${stats.total}`} />
@@ -78,10 +87,10 @@ export function ReflectPage() {
 
       <Card className="mt-5" aria-labelledby="q">
         <CardHeader id="q" title="Ba câu hỏi" subtitle="Viết ngắn thôi — vài câu là đủ." />
-        {state.reflection && !dirty && (
+        {currentReflection && !dirty && (
           <div className="mb-4">
             <Banner tone="success" icon="checkCircle">
-              Đã lưu lúc {new Date(state.reflection.savedAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}. Bạn vẫn có thể chỉnh sửa.
+              Đã lưu lúc {new Date(currentReflection.savedAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}. Bạn vẫn có thể chỉnh sửa.
             </Banner>
           </div>
         )}
@@ -117,7 +126,7 @@ export function ReflectPage() {
           </div>
         )}
         <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
-          <Button icon="check" onClick={save} loading={loading} disabled={!!state.reflection && !dirty}>
+          <Button icon="check" onClick={save} loading={loading} disabled={!!currentReflection && !dirty}>
             Tạo bản phản tư
           </Button>
           {dirty && <span className="caption">Có thay đổi chưa lưu</span>}

@@ -46,7 +46,7 @@ function StaleBanner() {
 
 export function StudentLayout() {
   const { state } = useAppStore();
-  const { drifts } = useDerived();
+  const { activeDrifts: drifts } = useDerived();
   const items: NavItem[] = [
     { to: '/dashboard', label: 'Tổng quan', icon: 'home', primary: true },
     { to: '/plan', label: 'Kế hoạch', icon: 'calendar', primary: true },

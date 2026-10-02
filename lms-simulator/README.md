@@ -103,8 +103,16 @@ curl.exe -H "X-PaceWise-Key: $key" "http://localhost:8010/api/pacewise/v1/events
 
 ## Launch từ Canvas sang PaceWise
 
-Trong Course Navigation có tab **PaceWise**. Người dùng nhấn **Open PaceWise**;
-simulator tạo launch token chứa đúng `user`, `course` và `role`, rồi chuyển đến:
+Simulator có hai điểm vào dùng cùng một secure launch flow:
+
+- **Global Navigation → PaceWise** mở dashboard đa môn. Một course enrollment được
+  dùng làm ngữ cảnh ban đầu; backend PaceWise sau đó xác minh và nạp toàn bộ course
+  mà người dùng được phép truy cập.
+- **Course Navigation → PaceWise** mở ứng dụng với course hiện tại được chọn sẵn,
+  phù hợp cho hỏi đáp và đánh giá hiểu bài theo môn.
+
+Người dùng nhấn **PaceWise** hoặc **Open PaceWise**; simulator tạo launch token chứa
+đúng `user`, course khởi đầu và `role`, rồi chuyển đến:
 
 ```text
 <PACEWISE_URL>/launch?token=<signed-token>

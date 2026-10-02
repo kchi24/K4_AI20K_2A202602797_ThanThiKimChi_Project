@@ -71,6 +71,31 @@ function formatLongDate(value) {
   }).format(new Date(value));
 }
 
+function formatTime(value) {
+  if (!value) return "";
+  return new Intl.DateTimeFormat(localeCode(), {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(value));
+}
+
+function calendarTimeLabel(item) {
+  const startsAt = formatTime(item.starts_at);
+  if (item.type === "assignment") {
+    return localeCode() === "vi-VN" ? `${startsAt} · Hạn nộp` : `${startsAt} · Due`;
+  }
+  return item.ends_at ? `${startsAt}–${formatTime(item.ends_at)}` : startsAt;
+}
+
+function eventTimeline(item) {
+  const range = calendarTimeLabel(item);
+  const duration = item.duration_minutes
+    ? ` · ${item.duration_minutes} ${localeCode() === "vi-VN" ? "phút" : "min"}`
+    : "";
+  return `${formatLongDate(item.starts_at)} · ${range}${duration}`;
+}
+
 function setActiveNav(target) {
   document.querySelectorAll("[data-nav]").forEach((button) => {
     button.classList.toggle("active", button.dataset.nav === target);
@@ -443,7 +468,24 @@ function openHelpTray() {
 function openCourseCreator() {
   openDialog("Start a New Course", '<form id="course-creator"><label class="ic-Label" for="new-course-name">Course Name</label><input class="ic-Input" id="new-course-name" required><label class="ic-Label" for="new-course-code">Course Code</label><input class="ic-Input" id="new-course-code" required><label class="ic-Label" for="new-course-term">Term</label><input class="ic-Input" id="new-course-term" value="2026–2027" required><label class="ic-Label" for="new-course-color">Color</label><input class="ic-Input color-input" id="new-course-color" type="color" value="#0374b5"><div class="dialog-actions"><button class="Button" type="button" data-cancel-course>Cancel</button><button class="Button Button--primary">Create Course</button></div></form>');
   document.querySelector("[data-cancel-course]").addEventListener("click", closeDialog);
-  document.querySelector("#course-creator").addEventListener("submit", async (event) => { event.preventDefault(); await request("/api/courses", { method: "POST", body: JSON.stringify({ user_id: state.user.id, name: document.querySelector("#new-course-name").value, code: document.querySelector("#new-course-code").value, term: document.querySelector("#new-course-term").value, color: document.querySelector("#new-course-color").value, published: true }) }); closeDialog(); showFlash("Course created"); await loadDashboard(); });
+  document.querySelector("#course-creator").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const course = await request("/api/courses", {
+      method: "POST",
+      body: JSON.stringify({
+        user_id: state.user.id,
+        name: document.querySelector("#new-course-name").value,
+        code: document.querySelector("#new-course-code").value,
+        term: document.querySelector("#new-course-term").value,
+        color: document.querySelector("#new-course-color").value,
+        published: true,
+      }),
+    });
+    closeDialog();
+    showFlash("Course created");
+    await loadDashboard();
+    openCourseActivityEditor(course.id);
+  });
 }
 
 function openGlobalSearch() {
@@ -581,6 +623,30 @@ function renderPacewiseTab(root) {
       showFlash(error.message);
     }
   });
+}
+
+async function launchGlobalPaceWise() {
+  closeTray();
+  setActiveNav("pacewise");
+  showLoading();
+  try {
+    if (!state.dashboard) {
+      state.dashboard = await request(`/api/dashboard/${state.user.id}`);
+    }
+    const courses = state.dashboard.courses || [];
+    if (!courses.length) {
+      throw new Error("You need at least one course enrollment to open PaceWise.");
+    }
+
+    // This course is only the initial context. PaceWise verifies the launch and
+    // expands the authenticated session to every course enrolled by this user.
+    const initialCourse = courses[0];
+    const launch = await request(`/api/pacewise/launch/${initialCourse.id}`, { method: "POST" });
+    window.location.assign(launch.launch_url);
+  } catch (error) {
+    mainContent.innerHTML = `${courseHeader("PaceWise")}<div class="error-state"><h2>Could not open PaceWise</h2><p>${escapeHtml(error.message)}</p><button class="Button" data-retry-pacewise>Retry</button></div>`;
+    document.querySelector("[data-retry-pacewise]")?.addEventListener("click", launchGlobalPaceWise);
+  }
 }
 
 async function renderPlannerTab(root) {
@@ -1117,17 +1183,21 @@ function paintCalendar() {
       return visible && due.getFullYear() === day.getFullYear() && due.getMonth() === day.getMonth() && due.getDate() === day.getDate();
     });
     const dateKey = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 12).toISOString();
-    return `<div class="calendar-cell ${day.getMonth() !== month ? "outside" : ""}" data-calendar-date="${dateKey}"><span class="calendar-day">${day.getDate()}</span>${events.map((item) => `<button class="calendar-event" style="--event-color:${item.color}" data-calendar-item="${item.id}" draggable="${item.editable}">${escapeHtml(item.title)}</button>`).join("")}</div>`;
+    return `<div class="calendar-cell ${day.getMonth() !== month ? "outside" : ""}" data-calendar-date="${dateKey}"><span class="calendar-day">${day.getDate()}</span>${events.map((item) => `<button class="calendar-event" style="--event-color:${item.color}" data-calendar-item="${item.id}" draggable="${item.editable}"><span class="calendar-event-time">${escapeHtml(calendarTimeLabel(item))}</span><span>${escapeHtml(item.title)}</span></button>`).join("")}</div>`;
   }).join("");
   const filter = `<select class="Button" data-calendar-filter><option value="all">All Calendars</option><option value="personal" ${state.calendarFilter === "personal" ? "selected" : ""}>${escapeHtml(state.user.name)}</option>${state.dashboard.courses.map((course) => `<option value="${course.id}" ${state.calendarFilter === String(course.id) ? "selected" : ""}>${escapeHtml(course.name)}</option>`).join("")}</select>`;
   const weekdays = localeCode() === "vi-VN"
     ? ["CN", "T2", "T3", "T4", "T5", "T6", "T7"]
     : ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  mainContent.innerHTML = `${courseHeader("Calendar", `${filter}<button class="Button" data-calendar-today>Today</button><button class="Button Button--primary" data-new-event>+ Event</button>`)}<div class="calendar-toolbar"><button class="Button" data-calendar-prev>‹</button><h2>${new Intl.DateTimeFormat(localeCode(), { month: "long", year: "numeric" }).format(current)}</h2><button class="Button" data-calendar-next>›</button></div><p class="muted calendar-hint">Drag a personal event to another day to reschedule it.</p><div class="calendar-grid">${weekdays.map((day) => `<div class="calendar-cell calendar-weekday">${day}</div>`).join("")}${cells}</div>`;
+  const activityButton = state.user.role === "instructor"
+    ? '<button class="Button Button--primary" data-new-course-activity>+ Course activity</button>'
+    : "";
+  mainContent.innerHTML = `${courseHeader("Calendar", `${filter}<button class="Button" data-calendar-today>Today</button><button class="Button" data-new-event>+ Personal event</button>${activityButton}`)}<div class="calendar-toolbar"><button class="Button" data-calendar-prev>‹</button><h2>${new Intl.DateTimeFormat(localeCode(), { month: "long", year: "numeric" }).format(current)}</h2><button class="Button" data-calendar-next>›</button></div><p class="muted calendar-hint">Drag a personal event to another day to reschedule it.</p><div class="calendar-grid">${weekdays.map((day) => `<div class="calendar-cell calendar-weekday">${day}</div>`).join("")}${cells}</div>`;
   document.querySelector("[data-calendar-prev]").addEventListener("click", () => { state.calendarDate = new Date(year, month - 1, 1); paintCalendar(); });
   document.querySelector("[data-calendar-next]").addEventListener("click", () => { state.calendarDate = new Date(year, month + 1, 1); paintCalendar(); });
   document.querySelector("[data-calendar-today]").addEventListener("click", () => { state.calendarDate = new Date(); paintCalendar(); });
   document.querySelector("[data-new-event]").addEventListener("click", () => openCalendarEditor());
+  document.querySelector("[data-new-course-activity]")?.addEventListener("click", () => openCourseActivityEditor());
   document.querySelector("[data-calendar-filter]").addEventListener("change", (event) => { state.calendarFilter = event.target.value; paintCalendar(); });
   document.querySelectorAll("[data-calendar-item]").forEach((button) => {
     button.addEventListener("click", () => openCalendarItem(state.calendarItems.find((item) => item.id === button.dataset.calendarItem)));
@@ -1146,12 +1216,136 @@ function paintCalendar() {
   });
 }
 
+function openCourseActivityEditor(preselectedCourseId = null) {
+  const instructorCourses = state.dashboard.courses.filter((course) => course.enrollment_role === "instructor");
+  if (!instructorCourses.length) {
+    showFlash("Create a course before adding course activities");
+    return;
+  }
+  const start = new Date(state.calendarDate);
+  start.setHours(9, 0, 0, 0);
+  const end = new Date(start.getTime() + 90 * 60 * 1000);
+  const courseOptions = instructorCourses.map((course) => (
+    `<option value="${course.id}" ${Number(preselectedCourseId) === course.id ? "selected" : ""}>${escapeHtml(course.code)} · ${escapeHtml(course.name)}</option>`
+  )).join("");
+  openDialog("Add Course Activity", `
+    <form id="course-activity-editor">
+      <label class="ic-Label" for="activity-course">Course</label>
+      <select class="ic-Input" id="activity-course">${courseOptions}</select>
+      <label class="ic-Label" for="activity-type">Activity type</label>
+      <select class="ic-Input" id="activity-type">
+        <option value="class_session">Online class</option>
+        <option value="lecture_video">Lecture video</option>
+        <option value="quiz">Quiz</option>
+        <option value="assignment">Homework assignment</option>
+        <option value="midterm">Midterm exam</option>
+        <option value="final_exam">Final exam</option>
+      </select>
+      <label class="ic-Label" for="activity-title">Title</label>
+      <input class="ic-Input" id="activity-title" required>
+      <label class="ic-Label" for="activity-description">Description</label>
+      <textarea class="ic-Input text-area" id="activity-description" rows="3"></textarea>
+      <label class="ic-Label" for="activity-start" id="activity-start-label">Starts</label>
+      <input class="ic-Input" id="activity-start" type="datetime-local" value="${inputDateTime(start)}" required>
+      <div data-activity-end-row>
+        <label class="ic-Label" for="activity-end">Ends</label>
+        <input class="ic-Input" id="activity-end" type="datetime-local" value="${inputDateTime(end)}" required>
+      </div>
+      <div data-activity-repeat-row>
+        <label class="ic-Label" for="activity-repeat">Repeat weekly</label>
+        <input class="ic-Input" id="activity-repeat" type="number" min="1" max="52" value="1">
+      </div>
+      <div class="hidden" data-activity-source-row>
+        <label class="ic-Label" for="activity-source">Video URL (optional)</label>
+        <input class="ic-Input" id="activity-source" type="url" placeholder="https://...">
+      </div>
+      <div class="hidden" data-activity-points-row>
+        <label class="ic-Label" for="activity-points">Points</label>
+        <input class="ic-Input" id="activity-points" type="number" min="0" step="0.5" value="10">
+      </div>
+      <div class="dialog-actions">
+        <button class="Button" type="button" data-cancel-course-activity>Cancel</button>
+        <button class="Button Button--primary" type="submit">Add activity</button>
+      </div>
+    </form>`);
+
+  const typeInput = document.querySelector("#activity-type");
+  const updateFields = () => {
+    const type = typeInput.value;
+    const isAssignment = type === "assignment";
+    document.querySelector("#activity-start-label").textContent = isAssignment ? "Due date" : "Starts";
+    document.querySelector("[data-activity-end-row]").classList.toggle("hidden", isAssignment);
+    document.querySelector("#activity-end").required = !isAssignment;
+    document.querySelector("[data-activity-repeat-row]").classList.toggle("hidden", type !== "class_session");
+    document.querySelector("[data-activity-source-row]").classList.toggle("hidden", type !== "lecture_video");
+    document.querySelector("[data-activity-points-row]").classList.toggle("hidden", !["quiz", "assignment", "midterm", "final_exam"].includes(type));
+  };
+  typeInput.addEventListener("change", updateFields);
+  updateFields();
+  document.querySelector("[data-cancel-course-activity]").addEventListener("click", closeDialog);
+  document.querySelector("#course-activity-editor").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const activityType = typeInput.value;
+    const courseId = Number(document.querySelector("#activity-course").value);
+    await request(`/api/courses/${courseId}/activities`, {
+      method: "POST",
+      body: JSON.stringify({
+        user_id: state.user.id,
+        activity_type: activityType,
+        title: document.querySelector("#activity-title").value,
+        description: document.querySelector("#activity-description").value,
+        starts_at: new Date(document.querySelector("#activity-start").value).toISOString(),
+        ends_at: activityType === "assignment" ? null : new Date(document.querySelector("#activity-end").value).toISOString(),
+        repeat_count: activityType === "class_session" ? Number(document.querySelector("#activity-repeat").value) : 1,
+        source_url: document.querySelector("#activity-source").value,
+        points_possible: Number(document.querySelector("#activity-points").value || 0),
+      }),
+    });
+    closeDialog();
+    showFlash("Course activity added for all enrolled users");
+    await renderCalendar();
+  });
+}
+
 function openCalendarItem(item) {
   if (item.type === "assignment") {
     loadCourse(item.course_id, "assignments");
     return;
   }
-  openDialog(item.title, `<p>${escapeHtml(item.description || "No details")}</p><p class="muted">${formatLongDate(item.starts_at)} · ${formatDate(item.starts_at)}</p><div class="dialog-actions"><button class="Button" data-edit-event>Edit</button><button class="Button" data-delete-event>Delete</button></div>`);
+  const isOnlineClass = item.event_kind === "class_session";
+  const attendanceLabels = localeCode() === "vi-VN"
+    ? { scheduled: "Chưa ghi nhận", attended: "Đã tham gia", absent: "Vắng" }
+    : { scheduled: "Not recorded", attended: "Attended", absent: "Absent" };
+  const attendanceStatus = attendanceLabels[item.attendance_status] || attendanceLabels.scheduled;
+  const safeJoinUrl = typeof item.join_url === "string" && item.join_url.startsWith("/api/calendar/events/")
+    ? item.join_url
+    : null;
+  const onlineClassPanel = isOnlineClass ? `
+    <section class="online-class-panel">
+      <p><strong>${localeCode() === "vi-VN" ? "Trạng thái tham dự" : "Attendance"}:</strong> ${escapeHtml(attendanceStatus)}</p>
+      ${safeJoinUrl ? `<a class="Button Button--primary" href="${escapeHtml(safeJoinUrl)}" target="_blank" rel="noopener">${localeCode() === "vi-VN" ? "Vào phòng học online" : "Join online class"}</a>` : ""}
+      <div class="dialog-actions attendance-actions">
+        <button class="Button" data-attendance-status="attended">${localeCode() === "vi-VN" ? "Đã tham gia" : "Attended"}</button>
+        <button class="Button" data-attendance-status="absent">${localeCode() === "vi-VN" ? "Đánh dấu vắng" : "Mark absent"}</button>
+        <button class="Button" data-attendance-status="scheduled">${localeCode() === "vi-VN" ? "Đặt lại" : "Reset"}</button>
+      </div>
+    </section>` : "";
+  const actions = item.editable
+    ? '<div class="dialog-actions"><button class="Button" data-edit-event>Edit</button><button class="Button" data-delete-event>Delete</button></div>'
+    : '<p class="muted">Lịch học do nhà trường cung cấp và không thể chỉnh sửa.</p>';
+  openDialog(item.title, `<p>${escapeHtml(item.description || "No details")}</p><p class="event-timeline"><strong>${localeCode() === "vi-VN" ? "Thời gian" : "Time"}:</strong> ${escapeHtml(eventTimeline(item))}</p>${onlineClassPanel}${actions}`);
+  document.querySelectorAll("[data-attendance-status]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await request(`/api/calendar/events/${item.source_id}/attendance`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: button.dataset.attendanceStatus }),
+      });
+      closeDialog();
+      showFlash(localeCode() === "vi-VN" ? "Đã cập nhật trạng thái tham dự" : "Attendance updated");
+      await renderCalendar();
+    });
+  });
+  if (!item.editable) return;
   document.querySelector("[data-edit-event]").addEventListener("click", () => openCalendarEditor(item));
   document.querySelector("[data-delete-event]").addEventListener("click", async () => {
     if (!window.confirm(`Delete "${item.title}"?`)) return;
@@ -1296,6 +1490,7 @@ document.querySelectorAll("[data-nav]").forEach((button) => {
     else if (target === "courses") openCoursesTray();
     else if (target === "calendar") renderCalendar();
     else if (target === "inbox") renderInbox();
+    else if (target === "pacewise") launchGlobalPaceWise();
     else if (target === "history") renderHistory();
     else if (target === "help") openHelpTray();
   });

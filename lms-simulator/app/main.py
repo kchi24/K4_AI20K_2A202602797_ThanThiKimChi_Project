@@ -1,14 +1,16 @@
+import html
 import os
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.account_api import router as account_router
@@ -96,6 +98,10 @@ class CalendarEventRequest(BaseModel):
     starts_at: datetime
     ends_at: datetime | None = None
     repeat_count: int = 1
+
+
+class AttendanceRequest(BaseModel):
+    status: Literal["scheduled", "attended", "absent"]
 
 
 class ConversationRequest(BaseModel):
@@ -614,6 +620,9 @@ def delete_course_content(
 @app.get("/api/calendar/{user_id}")
 def calendar_items(user_id: int, db: Session = Depends(get_db)) -> list[dict]:
     user = get_user(db, user_id)
+    enrolled_course_ids = set(
+        db.scalars(select(Enrollment.course_id).where(Enrollment.user_id == user.id)).all()
+    )
     assignments = db.execute(
         select(Assignment, Course)
         .join(Course, Course.id == Assignment.course_id)
@@ -622,8 +631,21 @@ def calendar_items(user_id: int, db: Session = Depends(get_db)) -> list[dict]:
         .order_by(Assignment.due_at)
     ).all()
     events = db.scalars(
-        select(CalendarEvent).where(CalendarEvent.user_id == user.id).order_by(CalendarEvent.starts_at)
+        select(CalendarEvent)
+        .where(
+            CalendarEvent.user_id == user.id,
+            or_(
+                CalendarEvent.course_id.is_(None),
+                CalendarEvent.course_id.in_(enrolled_course_ids),
+            ),
+        )
+        .order_by(CalendarEvent.starts_at)
     ).all()
+    event_course_ids = {event.course_id for event in events if event.course_id is not None}
+    event_courses = {
+        course.id: course
+        for course in db.scalars(select(Course).where(Course.id.in_(event_course_ids))).all()
+    }
     assignment_items = [
         {
             "id": f"assignment-{assignment.id}",
@@ -635,27 +657,49 @@ def calendar_items(user_id: int, db: Session = Depends(get_db)) -> list[dict]:
             "title": assignment.title,
             "starts_at": assignment.due_at.isoformat(),
             "ends_at": None,
+            "duration_minutes": None,
             "description": assignment.description,
+            "event_kind": "assignment",
+            "join_url": None,
+            "attendance_status": None,
             "editable": False,
         }
         for assignment, course in assignments
     ]
-    event_items = [
-        {
-            "id": f"event-{event.id}",
-            "source_id": event.id,
-            "type": "event",
-            "course_id": event.course_id,
-            "course_code": None,
-            "color": "#0374b5",
-            "title": event.title,
-            "starts_at": event.starts_at.isoformat(),
-            "ends_at": event.ends_at.isoformat() if event.ends_at else None,
-            "description": event.description,
-            "editable": True,
-        }
-        for event in events
-    ]
+    event_items = []
+    for event in events:
+        course = event_courses.get(event.course_id)
+        seeded = event.description.startswith("pacewise-2026-v1;")
+        course_activity = event.description.startswith("course-activity-v1;")
+        institutional = seeded or course_activity
+        public_description = (
+            event.description.split(";", 1)[1].strip()
+            if course_activity and ";" in event.description
+            else "" if seeded else event.description
+        )
+        event_items.append(
+            {
+                "id": f"event-{event.id}",
+                "source_id": event.id,
+                "type": "event",
+                "course_id": event.course_id,
+                "course_code": course.code if course else None,
+                "color": course.color if course else "#0374b5",
+                "title": event.title,
+                "starts_at": event.starts_at.isoformat(),
+                "ends_at": event.ends_at.isoformat() if event.ends_at else None,
+                "duration_minutes": (
+                    max(0, int((event.ends_at - event.starts_at).total_seconds() // 60))
+                    if event.ends_at
+                    else None
+                ),
+                "description": public_description,
+                "event_kind": event.event_kind,
+                "join_url": event.join_url,
+                "attendance_status": event.attendance_status,
+                "editable": not institutional,
+            }
+        )
     return sorted(assignment_items + event_items, key=lambda item: item["starts_at"])
 
 
@@ -679,6 +723,7 @@ def create_calendar_event(payload: CalendarEventRequest, db: Session = Depends(g
             description=payload.description.strip(),
             starts_at=payload.starts_at + timedelta(days=7 * index),
             ends_at=payload.ends_at + timedelta(days=7 * index) if payload.ends_at else None,
+            event_kind="personal",
         )
         db.add(event)
         events.append(event)
@@ -720,6 +765,84 @@ def delete_calendar_event(
     db.delete(event)
     db.commit()
     return {"status": "deleted", "id": event_id}
+
+
+@app.patch("/api/calendar/events/{event_id}/attendance")
+def update_calendar_attendance(
+    event_id: int,
+    payload: AttendanceRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    event = db.get(CalendarEvent, event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail="Calendar event not found")
+    current_user_id = getattr(request.state, "current_user_id", None)
+    if event.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="You cannot update this attendance")
+    if event.event_kind != "class_session":
+        raise HTTPException(status_code=422, detail="Attendance applies only to online classes")
+    event.attendance_status = payload.status
+    record_change(
+        db,
+        actor_user_id=current_user_id,
+        action="calendar.attendance.updated",
+        entity_type="calendar_event",
+        entity_id=event.id,
+        course_id=event.course_id,
+        metadata={"attendance_status": payload.status},
+        emit_event=False,
+    )
+    db.commit()
+    return {"status": "updated", "id": event.id, "attendance_status": payload.status}
+
+
+@app.get("/api/calendar/events/{event_id}/join", response_class=HTMLResponse)
+def join_mock_classroom(
+    event_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    event = db.get(CalendarEvent, event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail="Online class not found")
+    current_user_id = getattr(request.state, "current_user_id", None)
+    if event.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="You cannot join this online class")
+    if event.event_kind != "class_session":
+        raise HTTPException(status_code=422, detail="This event is not an online class")
+
+    title = html.escape(event.title)
+    starts_at = html.escape(event.starts_at.isoformat())
+    content = f"""<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>{title}</title>
+    <style>
+      body {{ margin:0; font-family:Arial,sans-serif; background:#f5f7fa; color:#2d3b45; }}
+      main {{ max-width:720px; margin:10vh auto; padding:36px; background:white;
+              border:1px solid #c7cdd1; border-radius:10px; text-align:center; }}
+      .room {{ margin:24px 0; padding:48px 20px; background:#1f2937; color:white;
+               border-radius:8px; }}
+      button {{ padding:10px 18px; border:0; border-radius:4px; background:#0374b5;
+                color:white; cursor:pointer; }}
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>{title}</h1>
+      <p>Bắt đầu: {starts_at}</p>
+      <div class="room">
+        <h2>Phòng học online mô phỏng</h2>
+        <p>Không truyền âm thanh hoặc video thật. Trang này chỉ mô phỏng thao tác tham gia lớp.</p>
+      </div>
+      <button onclick="window.close()">Rời phòng học</button>
+    </main>
+  </body>
+</html>"""
+    return HTMLResponse(content=content)
 
 
 def serialize_conversation(db: Session, conversation: Conversation, current_user_id: int) -> dict:

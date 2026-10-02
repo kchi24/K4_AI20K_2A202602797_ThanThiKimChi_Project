@@ -166,6 +166,9 @@ Mở các địa chỉ sau:
 - LMS PostgreSQL: `localhost:5434`
 - Qdrant API/dashboard: <http://localhost:6333/dashboard>
 
+Trong PaceWise, nút **Quay lại LMS** giữ nguyên phiên LMS và trở về URL cấu hình
+bởi `VITE_LMS_URL`; **Đăng xuất PaceWise** chỉ thu hồi session PaceWise hiện tại.
+
 Frontend production build được phục vụ bởi Nginx. Request `/api/*` được reverse proxy nội bộ tới
 FastAPI; FastAPI gọi LMS qua `http://lms-simulator:8010`. Vì vậy service key LMS không xuất hiện
 trong JavaScript hoặc trình duyệt.
@@ -180,7 +183,9 @@ docker compose down
 
 Tài khoản simulator dùng mật khẩu `demo123`: `student@canvas.local` và
 `teacher@canvas.local`. Đăng nhập thủ công chỉ phục vụ local; luồng tích hợp chuẩn là
-Canvas tạo one-time launch URL tới `/#/launch?token=...`.
+Canvas tạo one-time launch URL tới `/#/launch?token=...`. Nút **PaceWise** ở Global
+Navigation mở dashboard tổng hợp mọi môn; tab **PaceWise** trong Course Navigation
+mở cùng ứng dụng với môn hiện tại được chọn làm ngữ cảnh ban đầu.
 
 Mô hình bảo mật:
 

@@ -1,9 +1,14 @@
+import asyncio
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 from fastapi import HTTPException
 
 from src.config import Settings
+
+# Keep aggregate backend traffic below the lightweight simulator's database
+# connection budget. This limiter is shared by every LMSClient in one process.
+_LMS_REQUEST_LIMITER = asyncio.Semaphore(8)
 
 
 class LMSClient:
@@ -19,16 +24,17 @@ class LMSClient:
         return {"X-PaceWise-Key": self.settings.pacewise_api_key}
 
     async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
-        try:
-            if self._client:
-                response = await self._client.request(method, path, timeout=self.timeout, **kwargs)
-            else:
-                async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout) as client:
-                    response = await client.request(method, path, **kwargs)
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            raise HTTPException(status_code=503, detail="LMS simulator is unavailable") from exc
-        except httpx.TimeoutException as exc:
-            raise HTTPException(status_code=504, detail="LMS simulator timed out") from exc
+        async with _LMS_REQUEST_LIMITER:
+            try:
+                if self._client:
+                    response = await self._client.request(method, path, timeout=self.timeout, **kwargs)
+                else:
+                    async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout) as client:
+                        response = await client.request(method, path, **kwargs)
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                raise HTTPException(status_code=503, detail="LMS simulator is unavailable") from exc
+            except httpx.TimeoutException as exc:
+                raise HTTPException(status_code=504, detail="LMS simulator timed out") from exc
         if response.status_code in {401, 403}:
             detail = response.json().get("detail", "LMS authorization failed") if response.content else "LMS authorization failed"
             raise HTTPException(status_code=response.status_code, detail=detail)

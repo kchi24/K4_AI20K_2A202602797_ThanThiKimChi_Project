@@ -19,7 +19,17 @@ export function DashboardPage() {
   useDocumentTitle('Tổng quan');
   const { state, dispatch } = useAppStore();
   const toast = useToast();
-  const { next, drifts, stats, taskById, courseById, courseOf } = useDerived();
+  const {
+    activeCourse,
+    activeDrifts: drifts,
+    activeNext: next,
+    activePlan,
+    activeStats: stats,
+    activeTasks: courseTasks,
+    taskById,
+    courseById,
+    courseOf,
+  } = useDerived();
   const firstName = state.user?.name.split(' ').slice(-1)[0] ?? 'bạn';
   const [syncing, setSyncing] = useState(false);
   const activeCourseData = state.user?.courseId ? state.courseData[state.user.courseId] : undefined;
@@ -35,7 +45,7 @@ export function DashboardPage() {
     }
   };
 
-  const weekTasks = state.tasks
+  const weekTasks = courseTasks
     .filter((t) => t.status !== 'done')
     .sort((a, b) => diffDays(b.deadline, a.deadline))
     .slice(0, 4);
@@ -54,7 +64,7 @@ export function DashboardPage() {
         <div className="min-w-0 space-y-5 lg:space-y-6">
           {next ? (
             <NextActionCard next={next} course={courseOf(next.task.id)} sessionRunning={state.activeSession?.taskId === next.task.id} />
-          ) : state.tasks.length === 0 ? (
+          ) : courseTasks.length === 0 ? (
             <EmptyState
               icon="book"
               title="Tuần này chưa có môn học & deadline"
@@ -85,7 +95,12 @@ export function DashboardPage() {
           {topDrift && taskById.get(topDrift.taskId) && <WarningCard drift={topDrift} task={taskById.get(topDrift.taskId)!} compact />}
 
           <Card aria-labelledby="week-title">
-            <CardHeader id="week-title" title="Tuần này" subtitle="Những việc gần deadline nhất" action={state.tasks.length > 0 ? <ButtonLink to="/progress" variant="ghost" size="sm">Xem tất cả</ButtonLink> : undefined} />
+            <CardHeader
+              id="week-title"
+              title={`Tuần này · ${activeCourse?.code ?? 'Môn đang chọn'}`}
+              subtitle="Những việc gần deadline nhất của môn đang chọn"
+              action={courseTasks.length > 0 ? <ButtonLink to="/progress" variant="ghost" size="sm">Xem tất cả</ButtonLink> : undefined}
+            />
             {weekTasks.length ? (
               <div className="space-y-2.5">
                 {weekTasks.map((t) => (
@@ -101,7 +116,7 @@ export function DashboardPage() {
         <div className="min-w-0 space-y-5 lg:space-y-6">
           <Card aria-labelledby="progress-title">
             <CardHeader id="progress-title" title="Tiến độ" />
-            {state.tasks.length === 0 ? (
+            {courseTasks.length === 0 ? (
               <div className="py-1">
                 <p className="text-xl font-bold text-muted">Chưa có dữ liệu</p>
                 <p className="caption mt-1">Tiến độ sẽ hiển thị sau khi đồng bộ môn học từ Canvas.</p>
@@ -129,9 +144,9 @@ export function DashboardPage() {
 
           <Card aria-labelledby="attention-title">
             <CardHeader id="attention-title" title="Cần chú ý" />
-            {state.tasks.length === 0 ? (
+            {courseTasks.length === 0 ? (
               <p className="text-muted">Tài khoản mới chưa có dữ liệu. Vui lòng bấm <strong>“Đồng bộ dữ liệu từ Canvas”</strong> để bắt đầu.</p>
-            ) : !state.plan ? (
+            ) : !activePlan?.blocks.length ? (
               <div className="space-y-3">
                 <p className="text-muted">Chưa có kế hoạch tuần. Hãy tạo kế hoạch để PaceWise theo dõi tiến độ và hỗ trợ điều chỉnh khi cần.</p>
                 <ButtonLink to="/plan/new" variant="soft" block icon="plus">
@@ -154,9 +169,9 @@ export function DashboardPage() {
 
           <LMSLearningSnapshot data={activeCourseData} />
 
-          {state.plan && (
+          {activePlan && activePlan.blocks.length > 0 && (
             <Card aria-labelledby="plan-title">
-              <CardHeader id="plan-title" title="Kế hoạch đã lưu" subtitle={`Phiên bản ${state.plan.version} · ${state.plan.blocks.length} buổi học`} />
+              <CardHeader id="plan-title" title="Kế hoạch đã lưu" subtitle={`Phiên bản ${activePlan.version} · ${activePlan.blocks.length} buổi học cho ${activeCourse?.code ?? 'môn đang chọn'}`} />
               <ButtonLink to="/plan" variant="secondary" block>
                 Mở kế hoạch tuần
               </ButtonLink>

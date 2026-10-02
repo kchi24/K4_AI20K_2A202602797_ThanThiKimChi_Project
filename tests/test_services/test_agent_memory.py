@@ -6,7 +6,11 @@ from src.config import get_settings
 from src.db import SessionLocal
 from src.persistence_models import AgentReviewCase, LearnerMemory
 from src.security import SessionContext
-from src.services.agent_memory import load_learner_memory, persist_agent_outcome
+from src.services.agent_memory import (
+    load_learner_memory,
+    persist_agent_outcome,
+    resolve_review_case,
+)
 
 
 def _session() -> SessionContext:
@@ -23,7 +27,7 @@ def _session() -> SessionContext:
     )
 
 
-def test_persist_agent_outcome_updates_long_term_memory_and_review_queue():
+def test_low_confidence_outcome_waits_for_teacher_before_updating_mastery():
     session = _session()
     settings = get_settings()
     result = {
@@ -48,12 +52,30 @@ def test_persist_agent_outcome_updates_long_term_memory_and_review_queue():
             select(AgentReviewCase).where(AgentReviewCase.student_user_id == session.user_id)
         ).all()
 
-    assert memory["mastery"]["Kiểm định giả thuyết"]["assessment_id"] == "Q-42"
-    assert memory["misconceptions"][0]["assessment_id"] == "Q-42"
-    assert memory["misconceptions"][0]["topic"] == "Kiểm định giả thuyết"
+    assert memory["mastery"] == {}
+    assert memory["misconceptions"] == []
     assert len(cases) == 1
     assert cases[0].case_type == "understanding_review"
     assert json.loads(cases[0].payload_json)["assessment_result"]["confidence"] == "Thấp"
+
+    with SessionLocal() as db:
+        review_case = db.get(AgentReviewCase, cases[0].id)
+        resolve_review_case(
+            db,
+            review_case,
+            {
+                "status": "edited",
+                "edited_result": {"status": "còn nhầm lẫn"},
+            },
+            settings,
+        )
+        review_case.status = "edited"
+        db.commit()
+        memory = load_learner_memory(db, session, settings)
+
+    assert memory["mastery"]["Kiểm định giả thuyết"]["assessment_id"] == "Q-42"
+    assert memory["mastery"]["Kiểm định giả thuyết"]["confidence"] == "teacher_confirmed"
+    assert memory["misconceptions"][0]["assessment_id"] == "Q-42"
 
 
 def test_persist_agent_outcome_deduplicates_pending_citation_case():

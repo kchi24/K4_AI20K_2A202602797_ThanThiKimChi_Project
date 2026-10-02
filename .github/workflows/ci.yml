@@ -25,7 +25,7 @@ jobs:
         run: python -m ruff check src/ evals/ tests/ lms-simulator/app/ lms-simulator/tests/
 
       - name: Run backend tests
-        run: python -m pytest tests/ -v --tb=short --cov=src --cov-report=term-missing --cov-fail-under=80
+        run: python -m pytest tests/ -v --tb=short --cov=src --cov-report=term-missing --cov-fail-under=90
         env:
           APP_ENV: test
           OPENAI_API_KEY: test-key

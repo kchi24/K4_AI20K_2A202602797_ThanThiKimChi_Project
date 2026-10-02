@@ -6,6 +6,8 @@ import { useAppStore } from '../store/AppStore';
 import { logout as logoutApi } from '../services/api';
 import { cx } from '../utils/cx';
 
+const LMS_URL = (import.meta.env.VITE_LMS_URL || 'http://localhost:8010').replace(/\/$/, '');
+
 export interface NavItem {
   to: string;
   label: string;
@@ -43,6 +45,10 @@ export function AppShell({ items, roleLabel, roleTone, banner }: { items: NavIte
       dispatch({ type: 'LOGOUT' });
       navigate('/login', { replace: true });
     }
+  };
+
+  const returnToLms = () => {
+    window.location.assign(LMS_URL);
   };
   const primary = items.filter((i) => i.primary).slice(0, 4);
   const rest = items.filter((i) => !primary.includes(i));
@@ -84,10 +90,14 @@ export function AppShell({ items, roleLabel, roleTone, banner }: { items: NavIte
             </NavLink>
           ))}
         </nav>
-        <div className="mt-auto">
+        <div className="mt-auto flex flex-col gap-1 border-t border-line pt-3">
+          <button onClick={returnToLms} className="flex min-h-[44px] w-full items-center gap-3 rounded-xl px-3 text-[15px] font-medium text-primary-ink hover:bg-primary-light">
+            <Icon name="arrowLeft" size={20} />
+            Quay lại LMS
+          </button>
           <button onClick={() => void logout()} className="flex min-h-[44px] w-full items-center gap-3 rounded-xl px-3 text-[15px] font-medium text-slate-600 hover:bg-slate-50 hover:text-ink">
             <Icon name="logout" size={20} />
-            Đăng xuất
+            Đăng xuất PaceWise
           </button>
         </div>
       </aside>
@@ -144,9 +154,13 @@ export function AppShell({ items, roleLabel, roleTone, banner }: { items: NavIte
                   {!!i.badge && <Badge tone="warning">{i.badge}</Badge>}
                 </NavLink>
               ))}
+              <button onClick={returnToLms} className="flex min-h-[44px] items-center gap-3 rounded-xl px-3 text-[15px] font-medium text-primary-ink hover:bg-primary-light">
+                <Icon name="arrowLeft" size={20} />
+                Quay lại LMS
+              </button>
               <button onClick={() => void logout()} className="flex min-h-[44px] items-center gap-3 rounded-xl px-3 text-[15px] font-medium text-slate-600 hover:bg-slate-50">
                 <Icon name="logout" size={20} />
-                Đăng xuất
+                Đăng xuất PaceWise
               </button>
             </nav>
           </div>

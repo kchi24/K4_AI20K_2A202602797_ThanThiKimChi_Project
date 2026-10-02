@@ -7,5 +7,8 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./tests/setup.ts'],
     exclude: ['e2e/**', 'node_modules/**', 'dist/**'],
+    pool: 'threads',
+    minWorkers: 1,
+    maxWorkers: 1,
   },
 });

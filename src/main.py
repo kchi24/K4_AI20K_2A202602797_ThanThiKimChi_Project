@@ -8,6 +8,8 @@ from src.agents.graph import runtime_agent
 from src.api.calendar_export import router as calendar_export_router
 from src.api.google_calendar import router as google_calendar_router
 from src.api.lms_integration import router as lms_router
+from src.api.realtime import LmsEventBroker
+from src.api.realtime import router as realtime_router
 from src.api.routes import router
 from src.api.workspace import router as workspace_router
 from src.config import get_settings
@@ -21,11 +23,15 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     initialize_database()
     print(f"Starting {settings.app_name} in {settings.app_env} mode")
+    event_broker = LmsEventBroker(settings)
+    await event_broker.start()
+    app.state.lms_event_broker = event_broker
     try:
         async with runtime_agent(settings) as durable_agent:
             app.state.agent = durable_agent
             yield
     finally:
+        await event_broker.stop()
         print("Shutting down...")
 
 
@@ -51,6 +57,7 @@ app.include_router(lms_router, prefix="/api/v1")
 app.include_router(workspace_router, prefix="/api/v1")
 app.include_router(google_calendar_router, prefix="/api/v1")
 app.include_router(calendar_export_router, prefix="/api/v1")
+app.include_router(realtime_router, prefix="/api/v1")
 
 
 @app.get("/health")

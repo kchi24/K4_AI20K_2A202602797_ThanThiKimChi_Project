@@ -10,9 +10,10 @@ import { PageHeader } from '../../components/ui/PageHeader';
 import { Banner, EmptyState, ErrorState } from '../../components/ui/States';
 import { useToast } from '../../components/ui/Toast';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
+import { useDerived } from '../../hooks/useDerived';
 import { ApiError, askHint, askQuestion, assessUnderstanding } from '../../services/api';
 import { useAppStore } from '../../store/AppStore';
-import type { QAMessage, QuickCheckResult, ReviewItem, Source, Tone } from '../../types';
+import type { QAMessage, QuickCheckResult, Source, Tone } from '../../types';
 import type { QAResult } from '../../utils/qa';
 import { cx } from '../../utils/cx';
 import { uid } from '../../utils/time';
@@ -103,6 +104,7 @@ export function LearnPage() {
   const [tab, setTab] = useState<'qa' | 'check'>(initialTab);
   useDocumentTitle(tab === 'check' ? 'Kiểm tra nhanh' : 'Học tập & Hỏi đáp');
   const { state, dispatch } = useAppStore();
+  const { activeCourse, activeTasks } = useDerived();
   const toast = useToast();
 
   // Q&A state
@@ -119,7 +121,7 @@ export function LearnPage() {
   const initialAssessmentId = approvedAssessments[0]?.id ?? '';
   const [selectedAssessmentId, setSelectedAssessmentId] = useState(initialAssessmentId);
   const selectedAssessment = approvedAssessments.find((a) => a.id === selectedAssessmentId) ?? approvedAssessments[0];
-  const suggestedQuestions = state.tasks.slice(0, 3).map(
+  const suggestedQuestions = activeTasks.slice(0, 3).map(
     (task) => `Giải thích kiến thức cần để thực hiện “${task.title}”.`,
   );
   const [checkAnswer, setCheckAnswer] = useState('');
@@ -130,6 +132,12 @@ export function LearnPage() {
       endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }
   }, [state.qaMessages.length, loading, tab]);
+
+  useEffect(() => {
+    setSelectedAssessmentId(approvedAssessments[0]?.id ?? '');
+    setCheckAnswer('');
+    setError(null);
+  }, [state.user?.courseId, state.assessments]);
 
   const switchTab = (nextTab: 'qa' | 'check') => {
     setTab(nextTab);
@@ -180,7 +188,7 @@ export function LearnPage() {
     const resultId = uid('qc');
     try {
       const assessment = await assessUnderstanding(selectedAssessment, text);
-      const reviewId = assessment.requiresInstructorReview ? `PW-${crypto.randomUUID().slice(0, 8)}` : undefined;
+      const reviewId = assessment.requiresInstructorReview ? assessment.reviewCaseId : undefined;
       const result: QuickCheckResult = {
         id: resultId,
         topic: selectedAssessment.topic,
@@ -191,22 +199,13 @@ export function LearnPage() {
         feedback: assessment.feedback,
         submittedAt: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
         reviewItemId: reviewId,
+        rubricVersion: assessment.rubricVersion,
       };
-      const reviewItem: ReviewItem | undefined = reviewId ? {
-        id: reviewId,
-        topic: selectedAssessment.topic,
-        question: selectedAssessment.question,
-        responseExcerpt: `“${text}”`,
-        confidence: assessment.confidence === 'medium' ? 'medium' : 'low',
-        reason: assessment.feedback,
-        status: 'pending',
-        submittedAt: new Date().toLocaleString('vi-VN'),
-      } : undefined;
-      dispatch({ type: 'SUBMIT_QUICK_CHECK', result, reviewItem });
+      dispatch({ type: 'SUBMIT_QUICK_CHECK', result });
       setCheckAnswer('');
       toast({
-        tone: reviewItem ? 'warning' : 'success',
-        title: reviewItem ? 'Đã chuyển giảng viên xem xét' : 'Đã đánh giá theo rubric',
+        tone: reviewId ? 'warning' : 'success',
+        title: reviewId ? 'Đã chuyển giảng viên xem xét' : 'Đã đánh giá theo rubric',
         description: assessment.feedback,
       });
     } catch (error) {
@@ -220,7 +219,7 @@ export function LearnPage() {
     <div className="page max-w-3xl">
       <PageHeader
         title="Học tập & Kiểm tra"
-        description="Hỏi đáp có trích dẫn từ tài liệu môn học và kiểm tra nhanh mức độ hiểu bài theo Rubric."
+        description={`Hỏi đáp có trích dẫn và kiểm tra nhanh theo Rubric của ${activeCourse?.code ?? 'môn đang chọn'}.`}
         actions={
           tab === 'qa' && state.qaMessages.length > 0 ? (
             <Button variant="ghost" size="sm" icon="trash" onClick={() => dispatch({ type: 'CLEAR_QA' })}>
@@ -449,6 +448,7 @@ export function LearnPage() {
                       <Badge tone={qc.confidence === 'low' ? 'danger' : 'success'}>
                         Độ tin cậy: {qc.confidence === 'low' ? 'thấp' : 'cao'}
                       </Badge>
+                      {qc.rubricVersion && <Badge tone="neutral">Rubric v{qc.rubricVersion}</Badge>}
                       <span className="caption ml-auto">{qc.submittedAt}</span>
                     </div>
 
@@ -464,6 +464,9 @@ export function LearnPage() {
                         <p className="text-xs font-semibold text-primary-ink">Phản hồi từ Giảng viên (Hàng chờ duyệt):</p>
                         <p className="mt-0.5 text-sm text-primary-ink">{qc.instructorNote}</p>
                       </div>
+                    )}
+                    {qc.reviewItemId && !qc.instructorNote && (
+                      <Banner tone="warning" icon="clock">Đang chờ giảng viên xem xét; hệ thống chưa ghi nhận kết luận mastery.</Banner>
                     )}
 
                     <p className="caption text-xs text-muted">

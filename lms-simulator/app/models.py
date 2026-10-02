@@ -215,6 +215,9 @@ class CalendarEvent(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    event_kind: Mapped[str] = mapped_column(String(50), default="personal")
+    join_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    attendance_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
 
 class Conversation(Base):

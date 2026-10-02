@@ -144,8 +144,8 @@ export async function saveInstructorAction(
   actionType: 'review' | 'assessment' | 'guidance',
   entityId: string,
   payload: Record<string, unknown>,
-): Promise<void> {
-  await request('/instructor/actions', {
+): Promise<{ id: string; createdAt: string; payload: Record<string, unknown> }> {
+  return request('/instructor/actions', {
     method: 'POST',
     body: JSON.stringify({ actionType, entityId, payload }),
   });
@@ -221,10 +221,13 @@ export interface AgentResponse {
   progress_metrics?: Record<string, unknown>;
   risk_signals?: Array<Record<string, unknown>>;
   assessment_result?: {
+    assessment_id?: string;
     status?: string;
     confidence?: string;
     evidence_quotes?: string[];
+    rubric_version?: number;
   } | null;
+  review_case_id?: string | null;
   recovery_options?: Array<Record<string, unknown>>;
   reflection_draft?: Record<string, unknown> | null;
   source_refs: Array<{
@@ -270,6 +273,8 @@ export interface UnderstandingResult {
   feedback: string;
   requiresInstructorReview: boolean;
   evidenceQuotes: string[];
+  rubricVersion?: number;
+  reviewCaseId?: string;
 }
 
 export async function assessUnderstanding(assessment: AssessmentItem, answer: string): Promise<UnderstandingResult> {
@@ -279,8 +284,11 @@ export async function assessUnderstanding(assessment: AssessmentItem, answer: st
   const assessmentResult = result.assessment_result ?? {};
   const status = fold(assessmentResult.status ?? '');
   const confidence = fold(assessmentResult.confidence ?? '');
+  const requiresInstructorReview = result.status === 'awaiting_teacher';
   return {
-    evidenceState: status.includes('the hien')
+    evidenceState: requiresInstructorReview
+      ? 'abstained'
+      : status.includes('the hien')
       ? 'demonstrated'
       : status.includes('hinh thanh')
         ? 'developing'
@@ -293,8 +301,10 @@ export async function assessUnderstanding(assessment: AssessmentItem, answer: st
         ? 'medium'
         : 'low',
     feedback: result.response,
-    requiresInstructorReview: result.status === 'awaiting_teacher',
+    requiresInstructorReview,
     evidenceQuotes: assessmentResult.evidence_quotes ?? [],
+    rubricVersion: assessmentResult.rubric_version,
+    reviewCaseId: result.review_case_id ?? undefined,
   };
 }
 
@@ -439,6 +449,10 @@ export async function confirmPlan(): Promise<void> {
 
 export async function syncCanvas(): Promise<CanvasSyncResult> {
   return request<CanvasSyncResult>('/lms/sync');
+}
+
+export function lmsEventStreamUrl(): string {
+  return `${API_BASE}/lms/events/stream`;
 }
 
 export async function reportCitation(sourceId: string): Promise<{ disputeId: string }> {

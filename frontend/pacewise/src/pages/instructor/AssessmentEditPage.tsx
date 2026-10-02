@@ -43,6 +43,8 @@ export function AssessmentEditPage() {
   const [rubric, setRubric] = useState<string[]>(item?.rubric ?? ['']);
   const [note, setNote] = useState('');
   const [errors, setErrors] = useState<Errors>({});
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   if (!item) {
     return (
@@ -73,24 +75,46 @@ export function AssessmentEditPage() {
     return Object.keys(next).length === 0;
   };
 
-  const approve = () => {
+  const persist = async (
+    status: AssessmentStatus | undefined,
+    historyText: string,
+    extra: Record<string, unknown> = {},
+  ) => {
+    setSaving(true);
+    setSaveError('');
+    try {
+      const saved = await saveInstructorAction('assessment', payload.id, { ...payload, ...extra, ...(status ? { status } : {}) });
+      dispatch({
+        type: 'UPDATE_ASSESSMENT',
+        item: { ...payload, version: Number(saved.payload.version ?? item.version ?? 1) },
+        status,
+        note: typeof extra.note === 'string' ? extra.note : undefined,
+        historyText,
+      });
+      return true;
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Chưa lưu được thay đổi.');
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const approve = async () => {
     if (!validate()) return;
-    dispatch({ type: 'UPDATE_ASSESSMENT', item: payload, status: 'approved', historyText: 'Duyệt và xuất bản' });
-    void saveInstructorAction('assessment', payload.id, { ...payload, status: 'approved' });
+    if (!await persist('approved', 'Duyệt và xuất bản')) return;
     toast({ tone: 'success', title: 'Đã duyệt và xuất bản' });
     navigate('/instructor/assessment');
   };
-  const saveDraft = () => {
+  const saveDraft = async () => {
     if (!validate()) return;
-    dispatch({ type: 'UPDATE_ASSESSMENT', item: payload, historyText: 'Lưu thay đổi' });
-    void saveInstructorAction('assessment', payload.id, payload);
+    if (!await persist(item.status, 'Lưu thay đổi')) return;
     toast({ tone: 'info', title: 'Đã lưu nháp' });
     navigate('/instructor/assessment');
   };
-  const sendBack = () => {
+  const sendBack = async () => {
     if (!validate(true)) return;
-    dispatch({ type: 'UPDATE_ASSESSMENT', item: payload, status: 'rejected', note: note.trim(), historyText: 'Trả lại kèm ghi chú' });
-    void saveInstructorAction('assessment', payload.id, { ...payload, status: 'rejected', note: note.trim() });
+    if (!await persist('rejected', 'Trả lại kèm ghi chú', { note: note.trim() })) return;
     toast({ tone: 'info', title: 'Đã trả lại kèm ghi chú' });
     navigate('/instructor/assessment');
   };
@@ -104,7 +128,7 @@ export function AssessmentEditPage() {
         eyebrow={
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone={meta.tone}>{meta.label}</Badge>
-            <span className="caption">{item.topic}</span>
+            <span className="caption">{item.topic} · v{item.version ?? 0}</span>
           </div>
         }
         title="Sửa câu hỏi & rubric"
@@ -168,13 +192,14 @@ export function AssessmentEditPage() {
           </div>
 
           <div className="mt-6 flex flex-col gap-3 border-t border-line pt-5 sm:flex-row">
-            <Button icon="check" onClick={approve}>
+            {saveError && <p role="alert" className="w-full text-sm font-medium text-danger-ink">{saveError}</p>}
+            <Button icon="check" onClick={() => void approve()} loading={saving}>
               Duyệt và xuất bản
             </Button>
-            <Button variant="secondary" onClick={saveDraft}>
+            <Button variant="secondary" onClick={() => void saveDraft()} loading={saving}>
               Lưu nháp
             </Button>
-            <Button variant="ghost" className="sm:ml-auto" onClick={sendBack}>
+            <Button variant="ghost" className="sm:ml-auto" onClick={() => void sendBack()} loading={saving}>
               Trả lại kèm ghi chú
             </Button>
           </div>

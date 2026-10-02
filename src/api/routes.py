@@ -271,6 +271,9 @@ async def chat(
             },
             config=config,
         )
+        if trusted_assessment and isinstance(result.get("assessment_result"), dict):
+            result["assessment_result"]["rubric_version"] = trusted_assessment["rubric_version"]
+            result["assessment_result"]["assessment_id"] = assessment_id
     except HTTPException:
         raise
     except Exception as exc:
@@ -314,7 +317,7 @@ async def chat(
         }
         output["plan_draft"] = draft
 
-    persist_agent_outcome(db, session, settings, result, assessment_id)
+    review_case_id = persist_agent_outcome(db, session, settings, result, assessment_id)
 
     safe_response, output_policy = enforce_output_policy(
         str(result.get("response") or ""),
@@ -342,6 +345,7 @@ async def chat(
         assessment_result=result.get("assessment_result")
         if result_workflow == "understanding"
         else None,
+        review_case_id=review_case_id,
         progress_metrics=result.get("progress_metrics") or {},
         risk_signals=(result.get("risk_signals") or [])
         if result_workflow == "tracking"

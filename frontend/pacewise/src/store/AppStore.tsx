@@ -1,12 +1,13 @@
 import React, { createContext, useContext, useEffect, useMemo, useReducer } from 'react';
 import { defaultAvailability, defaultUnavailable } from '../data/plan';
-import { getCurrentSession, loadWorkspace, saveWorkspace, syncCanvas } from '../services/api';
+import { getCurrentSession, lmsEventStreamUrl, loadWorkspace, saveWorkspace, syncCanvas } from '../services/api';
 import type {
   ActiveSession,
   AssessmentItem,
   AssessmentStatus,
   AuditEntry,
   AvailabilityDay,
+  CanvasSyncResult,
   ClassGuidance,
   ClassGroup,
   Course,
@@ -24,6 +25,7 @@ import type {
   ReviewStatus,
   StudySession,
   Task,
+  TaskProgress,
   TimeBlock,
   UnavailableSlot,
   User,
@@ -41,6 +43,7 @@ export interface AppState {
   workspaceReady: boolean;
   courses: Course[];
   tasks: Task[];
+  taskProgress: Record<string, TaskProgress>;
   courseData: Record<string, LMSCourseData>;
   plan: Plan | null;
   planHistory: Plan[];
@@ -53,7 +56,7 @@ export interface AppState {
   qaMessages: QAMessage[];
   quickChecks: QuickCheckResult[];
   guidance: ClassGuidance[];
-  reflection: Reflection | null;
+  reflections: Record<string, Reflection>;
   recoveryOptions: RecoveryOption[];
   settings: Settings;
   reviewQueue: ReviewItem[];
@@ -62,6 +65,8 @@ export interface AppState {
   classGroups: ClassGroup[];
   groupStats: Record<string, GroupStats>;
   lmsInstructorSummary: LMSInstructorSummary | null;
+  /** Monotonic UI signal used to revalidate course-derived views after LMS events. */
+  lmsRevision: number;
   /** Tasks whose drift warning the student chose to keep as-is (plan unchanged). */
   dismissedDrifts: string[];
 }
@@ -72,6 +77,7 @@ export const initialState: AppState = {
   workspaceReady: false,
   courses: [],
   tasks: [],
+  taskProgress: {},
   courseData: {},
   plan: null,
   planHistory: [],
@@ -84,7 +90,7 @@ export const initialState: AppState = {
   qaMessages: [],
   quickChecks: [],
   guidance: [],
-  reflection: null,
+  reflections: {},
   recoveryOptions: [],
   settings: { staleData: false, lastSync: '' },
   reviewQueue: [],
@@ -93,6 +99,7 @@ export const initialState: AppState = {
   classGroups: [],
   groupStats: {},
   lmsInstructorSummary: null,
+  lmsRevision: 0,
   dismissedDrifts: [],
 };
 
@@ -121,15 +128,16 @@ export type Action =
   | { type: 'SUBMIT_QUICK_CHECK'; result: QuickCheckResult; reviewItem?: ReviewItem }
   | { type: 'ADD_CLASS_GUIDANCE'; topic: string; message: string }
   | { type: 'APPLY_RECOVERY'; blocks: TimeBlock[] }
-  | { type: 'SAVE_REFLECTION'; answers: [string, string, string]; aiDraft?: Record<string, unknown>; aiSummary?: string }
+  | { type: 'SAVE_REFLECTION'; courseId: string; answers: [string, string, string]; aiDraft?: Record<string, unknown>; aiSummary?: string }
   | { type: 'SET_RECOVERY_OPTIONS'; options: RecoveryOption[] }
   | { type: 'SAVE_AVAILABILITY'; availability: AvailabilityDay[]; unavailable: UnavailableSlot[] }
   | { type: 'UPDATE_SETTINGS'; patch: Partial<Settings> }
   | { type: 'SET_REVIEW_STATUS'; id: string; status: ReviewStatus; note?: string }
   | { type: 'SET_ASSESSMENT_STATUS'; id: string; status: AssessmentStatus; note?: string }
-  | { type: 'UPDATE_ASSESSMENT'; item: Pick<AssessmentItem, 'id' | 'question' | 'rubric' | 'level' | 'source'>; status?: AssessmentStatus; note?: string; historyText: string }
+  | { type: 'UPDATE_ASSESSMENT'; item: Pick<AssessmentItem, 'id' | 'question' | 'rubric' | 'level' | 'source' | 'version'>; status?: AssessmentStatus; note?: string; historyText: string }
   | { type: 'DISMISS_DRIFT'; taskId: string }
-  | { type: 'SYNC_CANVAS'; tasks: Task[]; courses?: Course[]; guidance?: ClassGuidance[]; assessments?: AssessmentItem[]; courseData?: Record<string, LMSCourseData> }
+  | { type: 'SYNC_CANVAS'; tasks: Task[]; courses?: Course[]; guidance?: ClassGuidance[]; assessments?: AssessmentItem[]; courseData?: Record<string, LMSCourseData>; reviewResolutions?: CanvasSyncResult['reviewResolutions'] }
+  | { type: 'LMS_EVENT_RECEIVED' }
   | { type: 'SET_INSTRUCTOR_DATA'; classGroups: ClassGroup[]; groupStats: Record<string, GroupStats>; reviewQueue: ReviewItem[]; assessments: AssessmentItem[]; audit: AuditEntry[]; guidance: ClassGuidance[]; lmsSummary: LMSInstructorSummary | null }
   ;
 
@@ -139,6 +147,37 @@ function audit(state: AppState, action: string): AuditEntry[] {
     d.getMinutes(),
   ).padStart(2, '0')}`;
   return [{ id: uid('au'), at, actor: state.user?.name ?? 'Hệ thống', action }, ...state.audit];
+}
+
+function progressOf(task: Task): TaskProgress {
+  return {
+    estimateMin: task.estimateMin,
+    loggedMin: task.loggedMin,
+    status: task.status,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function withTaskProgress(state: AppState, tasks: Task[]): Pick<AppState, 'tasks' | 'taskProgress'> {
+  return {
+    tasks,
+    taskProgress: {
+      ...state.taskProgress,
+      ...Object.fromEntries(tasks.map((task) => [task.id, progressOf(task)])),
+    },
+  };
+}
+
+function resolvedEvidenceState(
+  status: string | undefined,
+  fallback: QuickCheckResult['evidenceState'],
+): QuickCheckResult['evidenceState'] {
+  const normalized = (status ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (normalized.includes('the hien')) return 'demonstrated';
+  if (normalized.includes('hinh thanh')) return 'developing';
+  if (normalized.includes('nham lan')) return 'misconception';
+  if (normalized.includes('chua du')) return 'abstained';
+  return fallback;
 }
 
 export function reducer(state: AppState, action: Action): AppState {
@@ -153,29 +192,87 @@ export function reducer(state: AppState, action: Action): AppState {
           workspaceReady: false,
           courses: [],
           tasks: [], // Sinh viên mới: hoàn toàn chưa có bài tập hay deadline nào
+          taskProgress: {},
           plan: null,
           sessions: [],
           dismissedDrifts: [],
-          reflection: null,
+          reflections: {},
         };
       }
       return { ...state, user: action.user, authReady: true, workspaceReady: false };
     case 'AUTH_READY':
       return { ...state, authReady: true };
-    case 'HYDRATE_WORKSPACE':
-      return { ...state, ...action.state, user: state.user, authReady: true, workspaceReady: true };
+    case 'HYDRATE_WORKSPACE': {
+      const legacy = action.state as Partial<AppState> & { reflection?: Omit<Reflection, 'courseId'> };
+      const courseId = state.user?.courseId;
+      const reflections = legacy.reflections ?? (
+        legacy.reflection && courseId
+          ? { [courseId]: { ...legacy.reflection, courseId } }
+          : state.reflections
+      );
+      const { reflection: _legacyReflection, ...workspace } = legacy;
+      void _legacyReflection;
+      return {
+        ...state,
+        ...workspace,
+        reflections,
+        taskProgress: legacy.taskProgress ?? state.taskProgress,
+        user: state.user,
+        authReady: true,
+        workspaceReady: true,
+      };
+    }
     case 'SET_ACTIVE_COURSE':
-      return { ...state, user: state.user ? { ...state.user, courseId: action.courseId } : null };
+      return {
+        ...state,
+        user: state.user ? { ...state.user, courseId: action.courseId } : null,
+        qaMessages: [],
+        assessments: [],
+        classGroups: [],
+        groupStats: {},
+        reviewQueue: [],
+        audit: [],
+        guidance: [],
+        lmsInstructorSummary: null,
+      };
     case 'SYNC_CANVAS': {
       const incomingTasks = action.tasks.map((task) => {
         const current = state.tasks.find((item) => item.id === task.id);
-        return current
-          ? { ...task, loggedMin: current.loggedMin, status: task.status === 'done' ? 'done' as const : current.status }
-          : task;
+        const saved = state.taskProgress[task.id];
+        const progress = saved ?? (current ? progressOf(current) : undefined);
+        if (!progress) return task;
+        return {
+          ...task,
+          estimateMin: progress.estimateMin,
+          loggedMin: progress.loggedMin,
+          status: task.status === 'done' ? 'done' as const : progress.status,
+        };
+      });
+      const quickChecks = state.quickChecks.map((result) => {
+        const resolution = result.reviewItemId
+          ? action.reviewResolutions?.[result.reviewItemId]
+          : undefined;
+        if (!resolution || !['approved', 'edited', 'rejected', 'needs_evidence'].includes(resolution.status)) {
+          return result;
+        }
+        return {
+          ...result,
+          evidenceState: resolution.status === 'approved' || resolution.status === 'edited'
+            ? resolvedEvidenceState(resolution.resolvedStatus, result.evidenceState)
+            : 'abstained' as const,
+          instructorNote: resolution.note ?? (
+            resolution.status === 'rejected'
+              ? 'Giảng viên chưa chấp nhận kết luận tự động.'
+              : resolution.status === 'needs_evidence'
+                ? 'Giảng viên yêu cầu thêm bằng chứng trước khi kết luận.'
+                : 'Giảng viên đã xác nhận kết luận.'
+          ),
+        };
       });
       return {
         ...state,
-        tasks: incomingTasks,
+        ...withTaskProgress(state, incomingTasks),
+        quickChecks,
         courses: action.courses ?? state.courses,
         courseData: action.courseData ?? state.courseData,
         guidance: action.guidance ?? state.guidance,
@@ -183,6 +280,8 @@ export function reducer(state: AppState, action: Action): AppState {
         settings: { ...state.settings, staleData: false, lastSync: new Date().toISOString() },
       };
     }
+    case 'LMS_EVENT_RECEIVED':
+      return { ...state, lmsRevision: state.lmsRevision + 1 };
     case 'LOGOUT':
       return { ...state, user: null, authReady: true, workspaceReady: false, activeSession: null };
     case 'SET_INSTRUCTOR_DATA':
@@ -252,37 +351,51 @@ export function reducer(state: AppState, action: Action): AppState {
       const s = state.activeSession;
       if (!s) return state;
       const session: StudySession = { id: uid('ses'), taskId: s.taskId, date: DEMO_TODAY, minutes: action.minutes, note: action.note, source: 'timer' };
+      const tasks = state.tasks.map((task) =>
+        task.id === s.taskId
+          ? { ...task, loggedMin: task.loggedMin + action.minutes, status: task.status === 'done' ? 'done' as const : 'in_progress' as const }
+          : task,
+      );
       return {
         ...state,
         activeSession: null,
         sessions: [session, ...state.sessions],
-        tasks: state.tasks.map((t) =>
-          t.id === s.taskId ? { ...t, loggedMin: t.loggedMin + action.minutes, status: t.status === 'done' ? 'done' : 'in_progress' } : t,
-        ),
+        ...withTaskProgress(state, tasks),
       };
     }
     case 'ADD_MANUAL_SESSION': {
       const session: StudySession = { ...action.session, id: uid('ses'), source: 'manual' };
+      const tasks = state.tasks.map((task) =>
+        task.id === session.taskId
+          ? { ...task, loggedMin: task.loggedMin + session.minutes, status: task.status === 'done' ? 'done' as const : 'in_progress' as const }
+          : task,
+      );
       return {
         ...state,
         sessions: [session, ...state.sessions],
-        tasks: state.tasks.map((t) =>
-          t.id === session.taskId ? { ...t, loggedMin: t.loggedMin + session.minutes, status: t.status === 'done' ? 'done' : 'in_progress' } : t,
-        ),
+        ...withTaskProgress(state, tasks),
       };
     }
-    case 'UPDATE_TASK_ESTIMATE':
+    case 'UPDATE_TASK_ESTIMATE': {
+      const tasks = state.tasks.map((task) => (
+        task.id === action.taskId ? { ...task, estimateMin: action.estimateMin } : task
+      ));
       return {
         ...state,
-        tasks: state.tasks.map((t) => (t.id === action.taskId ? { ...t, estimateMin: action.estimateMin } : t)),
+        ...withTaskProgress(state, tasks),
       };
-    case 'SET_TASK_DONE':
+    }
+    case 'SET_TASK_DONE': {
+      const tasks = state.tasks.map((task) =>
+        task.id === action.taskId
+          ? { ...task, status: action.done ? 'done' as const : task.loggedMin > 0 ? 'in_progress' as const : 'todo' as const }
+          : task,
+      );
       return {
         ...state,
-        tasks: state.tasks.map((t) =>
-          t.id === action.taskId ? { ...t, status: action.done ? 'done' : t.loggedMin > 0 ? 'in_progress' : 'todo' } : t,
-        ),
+        ...withTaskProgress(state, tasks),
       };
+    }
     case 'ADD_QA':
       return { ...state, qaMessages: [...state.qaMessages, action.message] };
     case 'CLEAR_QA':
@@ -320,14 +433,34 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'SET_RECOVERY_OPTIONS':
       return { ...state, recoveryOptions: action.options };
     case 'SAVE_REFLECTION':
-      return { ...state, reflection: { weekStart: WEEK_START, answers: action.answers, savedAt: new Date().toISOString(), aiDraft: action.aiDraft, aiSummary: action.aiSummary } };
+      return {
+        ...state,
+        reflections: {
+          ...state.reflections,
+          [action.courseId]: {
+            courseId: action.courseId,
+            weekStart: WEEK_START,
+            answers: action.answers,
+            savedAt: new Date().toISOString(),
+            aiDraft: action.aiDraft,
+            aiSummary: action.aiSummary,
+          },
+        },
+      };
     case 'SAVE_AVAILABILITY':
       return { ...state, availability: action.availability, unavailable: action.unavailable };
     case 'UPDATE_SETTINGS':
       return { ...state, settings: { ...state.settings, ...action.patch } };
     case 'SET_REVIEW_STATUS': {
       const item = state.reviewQueue.find((r) => r.id === action.id);
-      const label = { approved: 'Duyệt kết luận', needs_review: 'Yêu cầu xem lại', in_review: 'Bắt đầu xem', pending: 'Đưa về chờ' }[action.status];
+      const label = {
+        approved: 'Duyệt kết luận',
+        edited: 'Sửa và duyệt kết luận',
+        rejected: 'Từ chối kết luận',
+        needs_evidence: 'Yêu cầu thêm bằng chứng',
+        in_review: 'Bắt đầu xem',
+        pending: 'Đưa về chờ',
+      }[action.status];
       return {
         ...state,
         reviewQueue: state.reviewQueue.map((r) => (r.id === action.id ? { ...r, status: action.status, note: action.note ?? r.note } : r)),
@@ -335,8 +468,11 @@ export function reducer(state: AppState, action: Action): AppState {
           qc.reviewItemId === action.id
             ? {
                 ...qc,
-                evidenceState: action.status === 'approved' ? 'misconception' : qc.evidenceState,
-                instructorNote: action.note ?? (action.status === 'approved' ? 'Giảng viên đã xem và xác nhận phân tích.' : undefined),
+                instructorNote: action.note ?? (
+                  action.status === 'approved' || action.status === 'edited'
+                    ? 'Giảng viên đã xem và xác nhận phân tích.'
+                    : undefined
+                ),
               }
             : qc,
         ),
@@ -405,26 +541,64 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!state.user) return;
     let active = true;
+    let refreshInFlight = false;
+    let refreshQueued = false;
     loadWorkspace()
       .then((workspace) => active && dispatch({ type: 'HYDRATE_WORKSPACE', state: workspace.state as Partial<AppState> }))
       .catch(() => active && dispatch({ type: 'HYDRATE_WORKSPACE', state: {} }));
-    const refresh = () => {
-      void syncCanvas()
-        .then((result) => active && dispatch({
+    const refresh = async () => {
+      if (refreshInFlight) {
+        refreshQueued = true;
+        return;
+      }
+      refreshInFlight = true;
+      try {
+        const result = await syncCanvas();
+        if (active) dispatch({
           type: 'SYNC_CANVAS',
           courses: result.courses,
           tasks: result.tasks,
           guidance: result.guidance,
           assessments: result.assessments,
           courseData: result.courseData,
-        }))
-        .catch(() => active && dispatch({ type: 'UPDATE_SETTINGS', patch: { staleData: true } }));
+          reviewResolutions: result.reviewResolutions,
+        });
+      } catch {
+        if (active) dispatch({ type: 'UPDATE_SETTINGS', patch: { staleData: true } });
+      } finally {
+        refreshInFlight = false;
+        if (active && refreshQueued) {
+          refreshQueued = false;
+          void refresh();
+        }
+      }
     };
-    refresh();
-    const timer = window.setInterval(refresh, 30_000);
+    void refresh();
+
+    const stream = typeof EventSource === 'undefined'
+      ? null
+      : new EventSource(lmsEventStreamUrl(), { withCredentials: true });
+    const handleLmsChange = () => {
+      if (!active) return;
+      dispatch({ type: 'LMS_EVENT_RECEIVED' });
+      void refresh();
+    };
+    stream?.addEventListener('lms.changed', handleLmsChange);
+
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    window.addEventListener('online', refreshWhenVisible);
+    // Safety net only. Normal updates arrive through the event stream.
+    const fallbackTimer = window.setInterval(() => void refresh(), 5 * 60_000);
     return () => {
       active = false;
-      window.clearInterval(timer);
+      stream?.removeEventListener('lms.changed', handleLmsChange);
+      stream?.close();
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+      window.removeEventListener('online', refreshWhenVisible);
+      window.clearInterval(fallbackTimer);
     };
   }, [state.user?.id]);
   useEffect(() => {

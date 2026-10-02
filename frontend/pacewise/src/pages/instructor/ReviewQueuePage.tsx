@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Card, CardHeader } from '../../components/ui/Card';
-import { Textarea } from '../../components/ui/Field';
+import { Select, Textarea } from '../../components/ui/Field';
 import { Modal } from '../../components/ui/Modal';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { EmptyState } from '../../components/ui/States';
@@ -17,7 +17,9 @@ const statusMeta: Record<ReviewStatus, { label: string; tone: Tone }> = {
   pending: { label: 'Chờ xem', tone: 'warning' },
   in_review: { label: 'Đang xem', tone: 'primary' },
   approved: { label: 'Đã duyệt', tone: 'success' },
-  needs_review: { label: 'Cần xem lại', tone: 'accent' },
+  edited: { label: 'Đã sửa & duyệt', tone: 'success' },
+  rejected: { label: 'Đã từ chối', tone: 'danger' },
+  needs_evidence: { label: 'Chờ thêm bằng chứng', tone: 'accent' },
 };
 
 export function EvidenceCard({ item, onReview }: { item: ReviewItem; onReview: () => void }) {
@@ -41,8 +43,8 @@ export function EvidenceCard({ item, onReview }: { item: ReviewItem; onReview: (
       </p>
       {item.note && <p className="caption mt-2">Ghi chú: {item.note}</p>}
       <div className="mt-4">
-        <Button variant={item.status === 'approved' ? 'secondary' : 'primary'} size="sm" onClick={onReview}>
-          {item.status === 'approved' ? 'Xem lại quyết định' : 'Xem xét & Duyệt'}
+        <Button variant={['approved', 'edited', 'rejected'].includes(item.status) ? 'secondary' : 'primary'} size="sm" onClick={onReview}>
+          {['approved', 'edited', 'rejected'].includes(item.status) ? 'Xem lại quyết định' : 'Xem xét & Duyệt'}
         </Button>
       </div>
     </Card>
@@ -57,20 +59,61 @@ export function ReviewQueuePage() {
   const [active, setActive] = useState<ReviewItem | null>(null);
   const [note, setNote] = useState('');
   const [noteError, setNoteError] = useState('');
+  const [correctedStatus, setCorrectedStatus] = useState('đang hình thành');
+  const [saving, setSaving] = useState(false);
 
   const items = state.reviewQueue.filter((r) => filter === 'all' || r.status === 'pending' || r.status === 'in_review');
 
   const decide = async (status: ReviewStatus) => {
     if (!active) return;
-    if (status === 'needs_review' && !note.trim()) {
+    if (['edited', 'rejected', 'needs_evidence'].includes(status) && !note.trim()) {
       setNoteError('Thêm ghi chú để người xem tiếp theo biết cần kiểm tra gì.');
       return;
     }
-    const payload = { status, note: note.trim() || undefined };
-    await saveInstructorAction('review', active.id, payload);
-    dispatch({ type: 'SET_REVIEW_STATUS', id: active.id, ...payload });
-    toast({ tone: 'success', title: status === 'approved' ? `Đã duyệt ca #${active.id}` : `Đã yêu cầu xem lại ca #${active.id}`, description: 'Quyết định đã được ghi vào audit.' });
-    setActive(null);
+    const payload = {
+      status,
+      note: note.trim() || undefined,
+      ...(status === 'edited'
+        ? { edited_result: { status: correctedStatus, confidence: 'teacher_confirmed' } }
+        : {}),
+    };
+    setSaving(true);
+    try {
+      await saveInstructorAction('review', active.id, payload);
+      dispatch({ type: 'SET_REVIEW_STATUS', id: active.id, status, note: payload.note });
+      const title = {
+        approved: `Đã duyệt ca #${active.id}`,
+        edited: `Đã sửa và duyệt ca #${active.id}`,
+        rejected: `Đã từ chối ca #${active.id}`,
+        needs_evidence: `Đã yêu cầu thêm bằng chứng cho ca #${active.id}`,
+        pending: `Đã đưa ca #${active.id} về chờ`,
+        in_review: `Đang xem ca #${active.id}`,
+      }[status];
+      toast({ tone: 'success', title, description: 'Quyết định đã được ghi vào audit.' });
+      setActive(null);
+    } catch (error) {
+      setNoteError(error instanceof Error ? error.message : 'Chưa lưu được quyết định.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openReview = async (item: ReviewItem) => {
+    setActive(item);
+    setNote(item.note ?? '');
+    setCorrectedStatus(item.suggestedStatus ?? 'đang hình thành');
+    setNoteError('');
+    if (item.status !== 'pending') return;
+    setSaving(true);
+    try {
+      await saveInstructorAction('review', item.id, { status: 'in_review' });
+      dispatch({ type: 'SET_REVIEW_STATUS', id: item.id, status: 'in_review' });
+      setActive({ ...item, status: 'in_review' });
+    } catch (error) {
+      setNoteError(error instanceof Error ? error.message : 'Chưa thể nhận xử lý ca này.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -102,15 +145,7 @@ export function ReviewQueuePage() {
             <EvidenceCard
               key={r.id}
               item={r}
-              onReview={() => {
-                setActive(r);
-                setNote(r.note ?? '');
-                setNoteError('');
-                if (r.status === 'pending') {
-                  dispatch({ type: 'SET_REVIEW_STATUS', id: r.id, status: 'in_review' });
-                  void saveInstructorAction('review', r.id, { status: 'in_review' });
-                }
-              }}
+              onReview={() => void openReview(r)}
             />
           ))}
         </div>
@@ -141,10 +176,16 @@ export function ReviewQueuePage() {
             <Button variant="secondary" onClick={() => setActive(null)}>
               Để sau
             </Button>
-            <Button variant="soft" icon="refresh" onClick={() => void decide('needs_review')}>
-              Yêu cầu xem lại
+            <Button variant="ghost" onClick={() => void decide('rejected')} loading={saving}>
+              Từ chối
             </Button>
-            <Button icon="check" onClick={() => void decide('approved')}>
+            <Button variant="soft" icon="refresh" onClick={() => void decide('needs_evidence')} loading={saving}>
+              Yêu cầu thêm bằng chứng
+            </Button>
+            <Button variant="secondary" icon="edit" onClick={() => void decide('edited')} loading={saving}>
+              Sửa & duyệt
+            </Button>
+            <Button icon="check" onClick={() => void decide('approved')} loading={saving}>
               Phê duyệt
             </Button>
           </>
@@ -170,7 +211,21 @@ export function ReviewQueuePage() {
                 <p className="text-[15px]">{active.reason}</p>
               </div>
             </div>
-            <Textarea label="Ghi chú" value={note} onChange={(e) => setNote(e.target.value)} error={noteError} hint="Bắt buộc khi yêu cầu xem lại." rows={3} />
+            {active.rubricVersion && (
+              <p className="caption">Rubric version đã dùng: v{active.rubricVersion}</p>
+            )}
+            <Select
+              label="Kết luận hiệu chỉnh"
+              value={correctedStatus}
+              onChange={(event) => setCorrectedStatus(event.target.value)}
+              options={[
+                { value: 'thể hiện hiểu biết', label: 'Thể hiện hiểu biết' },
+                { value: 'đang hình thành', label: 'Đang hình thành' },
+                { value: 'còn nhầm lẫn', label: 'Còn nhầm lẫn' },
+                { value: 'chưa đủ bằng chứng', label: 'Chưa đủ bằng chứng' },
+              ]}
+            />
+            <Textarea label="Ghi chú quyết định" value={note} onChange={(e) => setNote(e.target.value)} error={noteError} hint="Bắt buộc khi sửa, từ chối hoặc yêu cầu thêm bằng chứng." rows={3} />
           </div>
         )}
       </Modal>

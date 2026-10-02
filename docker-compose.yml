@@ -125,6 +125,7 @@ services:
       LMS_BASE_URL: http://lms-simulator:8010
       PACEWISE_API_KEY: ${PACEWISE_API_KEY:-development-only-service-key-change-me}
       INSTITUTION_ID: ${INSTITUTION_ID:-university-x}
+      LMS_SYNC_INTERVAL_SECONDS: ${LMS_SYNC_INTERVAL_SECONDS:-5}
       QDRANT_URL: http://qdrant:6333
       EMBEDDING_CACHE_DIR: /app/data/models/fastembed
       RERANKER_CACHE_DIR: /app/data/models/flashrank
@@ -147,6 +148,7 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_URL: /api/v1
+        VITE_LMS_URL: ${VITE_LMS_URL:-http://localhost:8010}
     ports:
       - "5173:80"
     depends_on:
