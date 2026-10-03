@@ -4,25 +4,33 @@ import { useToast } from '../ui/Toast';
 import { switchCourse, syncCanvas } from '../../services/api';
 import { useAppStore } from '../../store/AppStore';
 
-export function CourseSwitcher() {
+export function CourseSwitcher({ allowAll = false }: { allowAll?: boolean }) {
   const { state, dispatch } = useAppStore();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
-  const [displayCourseId, setDisplayCourseId] = useState(state.user?.courseId ?? '');
+  const selectedScope = allowAll ? state.courseScope : state.user?.courseId ?? '';
+  const [displayCourseId, setDisplayCourseId] = useState(selectedScope);
   const activeCourseRef = useRef(state.user?.courseId);
 
   useEffect(() => {
     if (!busy) {
-      setDisplayCourseId(state.user?.courseId ?? state.courses[0]?.id ?? '');
+      setDisplayCourseId(allowAll ? state.courseScope : state.user?.courseId ?? state.courses[0]?.id ?? '');
       activeCourseRef.current = state.user?.courseId;
     }
-  }, [busy, state.courses, state.user?.courseId]);
+  }, [allowAll, busy, state.courseScope, state.courses, state.user?.courseId]);
 
   if (!state.user || state.courses.length < 2) return null;
 
   const selectCourse = async (courseId: string) => {
-    if (busy || courseId === state.user?.courseId) return;
+    if (busy || courseId === displayCourseId) return;
+    if (courseId === 'all') {
+      setDisplayCourseId('all');
+      dispatch({ type: 'SET_COURSE_SCOPE', courseScope: 'all' });
+      toast({ tone: 'success', title: 'Đang xem tổng quan tất cả môn' });
+      return;
+    }
     const previousCourseId = state.user?.courseId;
+    const previousScope = state.courseScope;
     setDisplayCourseId(courseId);
     activeCourseRef.current = courseId;
     setBusy(true);
@@ -30,10 +38,11 @@ export function CourseSwitcher() {
       await switchCourse(courseId);
       activeCourseRef.current = courseId;
       dispatch({ type: 'SET_ACTIVE_COURSE', courseId });
+      if (allowAll) dispatch({ type: 'SET_COURSE_SCOPE', courseScope: courseId });
       toast({ tone: 'success', title: 'Đã chuyển môn học' });
     } catch (error) {
       activeCourseRef.current = previousCourseId;
-      setDisplayCourseId(previousCourseId ?? state.courses[0]?.id ?? '');
+      setDisplayCourseId(allowAll ? previousScope : previousCourseId ?? state.courses[0]?.id ?? '');
       toast({
         tone: 'danger',
         title: 'Chưa chuyển được môn học',
@@ -69,14 +78,21 @@ export function CourseSwitcher() {
     <div className="border-b border-line bg-white px-4 py-3 sm:px-6 lg:px-10" aria-busy={busy}>
       <Select
         className="max-w-md"
-        label="Môn học đang thao tác"
-        value={displayCourseId || state.user.courseId || state.courses[0]?.id}
+        label={allowAll ? 'Phạm vi hiển thị' : 'Môn học đang thao tác'}
+        value={displayCourseId || (allowAll ? 'all' : state.user.courseId || state.courses[0]?.id)}
         disabled={busy}
-        options={state.courses.map((course) => ({ value: course.id, label: `${course.code} — ${course.name}` }))}
+        options={[
+          ...(allowAll ? [{ value: 'all', label: 'Tất cả môn học' }] : []),
+          ...state.courses.map((course) => ({ value: course.id, label: `${course.code} — ${course.name}` })),
+        ]}
         onChange={(event) => void selectCourse(event.target.value)}
       />
       <p className="caption mt-1">
-        {busy ? 'Đang xác nhận môn học...' : 'Các chỉ số và học liệu bên dưới được lọc theo môn đang chọn.'}
+        {busy
+          ? 'Đang xác nhận môn học...'
+          : allowAll
+            ? 'Tổng quan mặc định so sánh deadline và tiến độ giữa tất cả môn; chọn một môn khi cần xem chi tiết.'
+            : 'Học liệu và hoạt động bên dưới thuộc môn đang chọn.'}
       </p>
     </div>
   );

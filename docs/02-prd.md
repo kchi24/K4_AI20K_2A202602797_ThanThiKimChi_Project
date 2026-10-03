@@ -111,11 +111,13 @@ P0 có hai bề mặt:
 
 ### 5.2 Plan — lập kế hoạch tuần
 
+Tab Kế hoạch là nơi tạo, xem trước, xác nhận và theo dõi plan đã lưu. Màn hình hiển thị timeline hợp nhất trong cửa sổ 7 ngày: lịch học, quiz, kỳ thi và deadline từ LMS là các mốc **chỉ đọc**; study block do PaceWise tạo có thể đưa vào Recover; khoảng không thể học là hard constraint. Sinh viên có thể lọc `Tất cả`, `Lịch LMS`, `Kế hoạch học` hoặc `Lịch bận`; việc hiển thị chung không làm thay đổi quyền sở hữu dữ liệu của từng nguồn.
+
 1. Sinh viên chọn tuần, mục tiêu, quỹ thời gian từng ngày và khung giờ không thể dùng.
 2. Bộ lập lịch xác định trước kiểm tra deadline, thời lượng và phụ thuộc.
 3. LLM đề xuất cách chia assignment thành milestone có đầu ra kiểm chứng được.
 4. Bộ kiểm tra schema và lịch loại phương án vượt quỹ thời gian, đặt sau deadline hoặc thiếu phụ thuộc.
-5. Hệ thống xếp ưu tiên theo deadline, trọng số do người dùng cung cấp, tiến độ và mức rủi ro.
+5. Hệ thống xếp ưu tiên theo deadline, trọng số assignment group do giảng viên cấu hình trong LMS, mức ưu tiên cá nhân, tiến độ và mức rủi ro.
 6. Sinh viên thấy bản xem trước gồm lý do ưu tiên, slot học, phần chưa chắc chắn và cảnh báo quá tải.
 7. Sinh viên sửa hoặc xác nhận. Chỉ sau xác nhận, kế hoạch mới được lưu.
 
@@ -133,6 +135,15 @@ P0 có hai bề mặt:
    - trạng thái bằng chứng học tập liên quan.
 4. Nếu vượt ngưỡng, hệ thống tạo tín hiệu nguy cơ và giải thích dữ liệu đã dùng.
 5. Sinh viên có thể tiếp tục, mở Recover hoặc đánh dấu dữ liệu chưa đúng.
+
+#### Chính sách nhắc việc
+
+- Nhắc study block trước 15 phút; buổi học online trước 10 phút; quiz trước 30 phút.
+- Ở mốc 72 giờ trước deadline, chỉ nhắc khi sinh viên chưa bắt đầu hoặc tổng study block còn lại không đủ thời lượng ước tính.
+- Ở mốc 24 giờ, nhắc nếu nhiệm vụ chưa hoàn thành; ở mốc 2 giờ, cảnh báo khẩn nếu LMS chưa ghi nhận bài nộp.
+- Thi giữa kỳ/cuối kỳ được nhắc trước 24 giờ và 60 phút. Study block bị lỡ hoặc lịch LMS thay đổi gây xung đột sẽ cảnh báo ngay và dẫn tới Recover.
+- Giới hạn tối đa ba thông báo trình duyệt chủ động mỗi ngày. Nhắc thông thường còn lại được giữ trong trung tâm thông báo và gộp thành tóm tắt lúc 20:00; cảnh báo vẫn luôn hiển thị trong ứng dụng.
+- Quyền thông báo trình duyệt chỉ được xin sau thao tác chủ động của người dùng; trạng thái đã gửi/đã đọc được lưu để không gửi trùng sau khi tải lại hoặc đổi thiết bị.
 
 ### 5.4 Do — hỏi đáp có nguồn và liêm chính
 
@@ -168,7 +179,9 @@ Recover được kích hoạt khi có ít nhất một điều kiện:
 - một milestone vượt thời gian dự kiến;
 - nhiệm vụ phụ thuộc bị chậm;
 - bằng chứng học tập cho thấy cần thêm một phiên ôn;
-- sinh viên chủ động yêu cầu.
+- sinh viên chủ động yêu cầu;
+- sinh viên thêm, kéo dài, rút ngắn hoặc xóa một khoảng không thể học;
+- lịch LMS mới tạo xung đột với study block đã xác nhận.
 
 Luồng:
 
@@ -180,13 +193,39 @@ Luồng:
 6. Màn hình xác nhận hiển thị diff trước–sau.
 7. Chỉ sau xác nhận, lịch mới được cập nhật; snapshot cũ vẫn nằm trong audit log.
 
+#### Thay đổi quỹ thời gian của sinh viên
+
+1. Sinh viên chỉ nhập khoảng thời gian không thể học; không cần khai báo hoặc chứng minh lý do.
+2. Khoảng bận mới/kéo dài trở thành hard constraint. Study block bị trùng không bị sửa âm thầm mà tạo `schedule_conflict`.
+3. Khoảng bận bị xóa/rút ngắn tạo `capacity_released`; hệ thống không tự nhồi thêm việc vào thời gian mới trống.
+4. Deadline, điểm, trạng thái nộp và lịch thi từ LMS không thay đổi vì thao tác này.
+5. Nếu còn nghiệm, hệ thống tạo bản diff đa môn để sinh viên xác nhận. Nếu vô nghiệm, hệ thống nêu số phút thiếu và khuyến nghị chủ động trao đổi với giảng viên.
+6. PaceWise không xác minh sinh viên nói thật hay nói dối vì thay đổi lịch cá nhân không tạo ngoại lệ học vụ.
+
+#### Thay đổi động từ LMS
+
+Lịch học, quiz, kỳ thi và deadline là **constraint có phiên bản**, không phải dữ liệu được sao chép một lần:
+
+1. LMS event chỉ đóng vai trò kích hoạt; PaceWise đọc lại trạng thái mới nhất qua REST.
+2. Snapshot mới được so với snapshot gần nhất theo `course`, `assignment` và `calendar event`.
+3. Nếu sự kiện được thêm/kéo dài và trùng study block, hệ thống tạo `schedule_conflict` và mở Recover.
+4. Nếu sự kiện bị xóa/rút ngắn, hệ thống tạo `capacity_released`; khoảng trống chỉ được đề xuất, không tự nhồi thêm việc.
+5. Nếu deadline dời sớm, toàn bộ task đa môn được xếp lại theo deadline và capacity; nếu dời muộn, hệ thống báo phần dự phòng vừa được giải phóng.
+6. Nếu assignment bị xóa, các block liên quan chỉ được gỡ sau khi sinh viên xác nhận.
+7. Thay đổi không ảnh hưởng plan được cập nhật im lặng; thay đổi có ảnh hưởng hiển thị impact summary, còn phương án Recover luôn có diff trước–sau.
+
+`Look-ahead horizon` là 14 ngày để phát hiện xung đột sớm. Sinh viên chọn `planning week` là tuần hiện tại hoặc tuần tiếp theo, mỗi tuần cố định từ Thứ Hai đến Chủ Nhật. Khi lập tuần hiện tại, hệ thống không xếp block vào ngày đã qua; task hạn ở tuần sau chỉ nhận một milestone tỷ lệ phù hợp, không bị ép hoàn thành toàn bộ ngay trong tuần hiện tại.
+
 ### 5.7 Reflect — cuối tuần
 
-1. Hệ thống tổng hợp kế hoạch, thời gian thực tế, milestone, tín hiệu nguy cơ và bằng chứng học tập.
-2. Sinh viên trả lời tối đa ba câu: điều gì hiệu quả, điều gì gây lệch, tuần sau đổi gì.
-3. AI tóm tắt nhưng không phán xét tính cách/năng lực.
-4. Sinh viên chọn một điều chỉnh: hệ số ước lượng, khung giờ, cách chia việc hoặc đơn vị kiến thức cần ôn.
-5. Điều chỉnh chỉ ảnh hưởng kế hoạch tuần sau sau khi sinh viên xác nhận.
+1. Reflect dùng **tuần học cố định từ Thứ Hai 00:00 đến Chủ Nhật 23:59**, không dùng cửa sổ cuốn bảy ngày. Look-ahead deadline 14 ngày và planning window là các khái niệm riêng.
+2. Mặc định Weekly Reflect mở lúc **20:00 Chủ Nhật theo `Asia/Ho_Chi_Minh`**. Nếu còn study block vào tối Chủ Nhật, cửa sổ mở sau block cuối; nếu sinh viên bỏ qua, họ có thể hoàn thành bù đến 09:00 sáng Thứ Hai.
+3. Hệ thống chỉ tổng hợp kế hoạch, thời gian thực tế, milestone, task hoàn thành và block bị lệch nằm trong đúng tuần được phản tư.
+4. Sinh viên trả lời ba câu: việc nào hoàn thành/chưa hoàn thành; nguyên nhân khiến kế hoạch đúng hoặc lệch; tuần sau cần đổi thời lượng, khung giờ hay cách chia task nào.
+5. AI tóm tắt nhưng không phán xét tính cách/năng lực.
+6. Sinh viên chọn một điều chỉnh: hệ số ước lượng, khung giờ, cách chia việc hoặc đơn vị kiến thức cần ôn.
+7. Điều chỉnh được gắn với `effective_week_start` của Thứ Hai kế tiếp và làm đầu vào cho bản nháp kế hoạch tuần sau. Hệ thống không tự áp dụng kế hoạch nếu sinh viên chưa xác nhận.
+8. Ghi chú ngắn sau phiên học là `session note`, không thay thế Weekly Reflect.
 
 ### 5.8 Giảng viên/cố vấn
 
@@ -287,6 +326,18 @@ RAGAS đo faithfulness và answer relevance; metric xác định trước kiểm
 - ≥60% bằng chứng học tập dẫn tới hành động tiếp theo.
 
 Baseline, cohort, kỳ quan sát và công thức phải được lưu cùng báo cáo; không suy diễn quan hệ nhân quả nếu không có thiết kế thử nghiệm phù hợp.
+
+Dashboard Progress lưu tối đa một snapshot mỗi ngày cho các chỉ số vận hành pilot:
+
+| Metric | Công thức | Ý nghĩa |
+|---|---|---|
+| Plan coverage | deadline đang mở có ≥1 study block / tổng deadline đang mở | Sinh viên đã biến deadline thành hành động hay chưa |
+| At-risk deadline | số task có `capacity_gap` hoặc `missed_progress` | Rủi ro được phát hiện trước hạn |
+| On-time submission | submission không late / submission đã chấm | KPI kết quả chính |
+| Estimate MAE | trung bình `abs(actual-estimate)/estimate` | Khả năng ước lượng được cải thiện hay không |
+| Recovery count | số phương án được sinh viên xác nhận | Mức sử dụng Recover |
+
+Các snapshot trên là telemetry sản phẩm, không thay thế thiết kế pilot ≥100 mẫu và không tự chứng minh quan hệ nhân quả.
 
 ### 9.4 Hiệu năng và chi phí
 

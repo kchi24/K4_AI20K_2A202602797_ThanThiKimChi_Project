@@ -60,3 +60,12 @@ def test_cheating_is_guided(query):
 )
 def test_legitimate_learning_is_allowed(query):
     assert evaluate_guardrails(query)["action"] == "allow"
+
+
+def test_explicit_refusal_of_homework_help_is_allowed():
+    result = evaluate_guardrails(
+        "Lập kế hoạch học cho ba deadline gần nhất, không làm hộ bài tập."
+    )
+
+    assert result["action"] == "allow"
+    assert result["is_homework_cheat_attempt"] is False

@@ -43,6 +43,7 @@ const paths = {
   history: 'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2',
   move: 'M5 9l-3 3 3 3M19 9l3 3-3 3M2 12h20',
   cloudOff: 'M3 3l18 18M7 18h10a4 4 0 0 0 1.2-7.8A6 6 0 0 0 8.6 7M5.3 9.6A4.5 4.5 0 0 0 7 18',
+  bell: 'M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4',
 } as const;
 
 export type IconName = keyof typeof paths;

@@ -41,9 +41,19 @@ def quality_gate_node(state: LearningGraphState) -> dict[str, Any]:
         if not citation_validation.get("valid"):
             reasons.append("invalid_citation_contract")
     if workflow == "plan":
-        plan_validation = output.get("plan_validation") or {}
-        if not plan_validation.get("valid"):
-            reasons.append("invalid_plan")
+        decision = state.get("student_decision") or {}
+        is_terminal_decision = (
+            decision.get("workflow") == "plan"
+            and decision.get("action") in {"confirmed", "cancelled"}
+        )
+        # Confirmation/cancellation turns do not create a new draft. The draft
+        # was validated before the pending action was offered, so requiring a
+        # second plan_validation object here incorrectly turns a successful
+        # confirmation into invalid_plan.
+        if not is_terminal_decision:
+            plan_validation = output.get("plan_validation") or {}
+            if not plan_validation.get("valid"):
+                reasons.append("invalid_plan")
     if workflow == "understanding":
         assessment_validation = output.get("assessment_validation") or {}
         reasons.extend(str(item) for item in assessment_validation.get("reasons") or [])

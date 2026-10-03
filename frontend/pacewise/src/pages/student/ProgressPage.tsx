@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { StatTile } from '../../components/domain/StatTile';
 import { LMSLearningSnapshot } from '../../components/domain/LMSLearningSnapshot';
@@ -16,45 +16,72 @@ import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useAppStore } from '../../store/AppStore';
 import { trackProgress, type AgentResponse } from '../../services/api';
 import { DEMO_TODAY, formatDay, formatDuration, formatHours, weekDates } from '../../utils/time';
+import { calculatePilotMetrics } from '../../utils/pilotMetrics';
 
 export function ProgressPage() {
   useDocumentTitle('Tiến độ');
   const { state, dispatch } = useAppStore();
   const {
-    activeCourse,
-    activeDrifts: drifts,
-    activePlan,
-    activeSessions,
-    activeStats: stats,
-    activeTasks: courseTasks,
+    scopeCourse,
+    scopeLabel,
+    scopedDrifts: drifts,
+    scopedPlan,
+    scopedSessions: visibleSessions,
+    scopedStats: stats,
+    scopedTasks: visibleTasks,
     taskById,
     courseById,
+    unavailable,
   } = useDerived();
   const navigate = useNavigate();
   const toast = useToast();
-  const open = courseTasks.filter((t) => t.status !== 'done');
-  const done = courseTasks.filter((t) => t.status === 'done');
+  const open = visibleTasks.filter((t) => t.status !== 'done');
+  const done = visibleTasks.filter((t) => t.status === 'done');
+  const openTaskKey = open.map((task) => task.id).join('|');
 
   const [studyTask, setStudyTask] = useState(open[0]?.id ?? '');
   const [form, setForm] = useState({ taskId: open[0]?.id ?? '', minutes: '', date: DEMO_TODAY, note: '' });
   const [errors, setErrors] = useState<{ minutes?: string; taskId?: string }>({});
   const [tracking, setTracking] = useState<AgentResponse | null>(null);
-  const activeCourseData = state.user?.courseId ? state.courseData[state.user.courseId] : undefined;
+  const scopedCourseData = scopeCourse ? state.courseData[scopeCourse.id] : undefined;
+  const pilot = useMemo(
+    () => calculatePilotMetrics(
+      visibleTasks,
+      scopedPlan,
+      visibleSessions,
+      state.recoveryCount,
+      state.availability,
+      unavailable,
+    ),
+    [visibleTasks, scopedPlan, visibleSessions, state.recoveryCount, state.availability, unavailable],
+  );
+  const pilotBaseline = state.courseScope === 'all'
+    ? state.pilotMetricsHistory[state.pilotMetricsHistory.length - 1]
+    : undefined;
+  const onTimeDelta = pilot?.onTimeSubmissionRate != null && pilotBaseline?.onTimeSubmissionRate != null
+    ? pilot.onTimeSubmissionRate - pilotBaseline.onTimeSubmissionRate
+    : null;
+  const unplannedDeadlineCount = pilot
+    ? Math.max(0, pilot.openDeadlineCount - pilot.plannedDeadlineCount)
+    : 0;
+  const estimateMessage = pilot?.estimateMaePercent == null
+    ? 'Chưa đủ phiên học để cá nhân hoá thời lượng dự kiến.'
+    : `Thời lượng thực tế thường lệch khoảng ${Math.round(pilot.estimateMaePercent * 100)}% so với dự kiến.`;
 
   useEffect(() => {
     let active = true;
-    void trackProgress(activePlan, state.availability, state.unavailable)
+    void trackProgress(scopedPlan, state.availability, unavailable, visibleTasks, visibleSessions)
       .then((result) => active && setTracking(result))
       .catch(() => active && setTracking(null));
     return () => { active = false; };
-  }, [activePlan, state.settings.lastSync, state.user?.courseId, state.availability, state.unavailable]);
+  }, [scopedPlan, state.settings.lastSync, state.courseScope, state.availability, unavailable, visibleTasks, visibleSessions]);
 
   useEffect(() => {
     const nextTaskId = open[0]?.id ?? '';
     setStudyTask(nextTaskId);
     setForm((current) => ({ ...current, taskId: nextTaskId }));
     setTracking(null);
-  }, [state.user?.courseId]);
+  }, [state.courseScope, openTaskKey]);
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -74,7 +101,7 @@ export function ProgressPage() {
     <div className="page">
       <PageHeader
         title="Tiến độ"
-        description={`Thời gian thực tế so với kế hoạch của ${activeCourse?.code ?? 'môn đang chọn'}.`}
+        description={`Thời gian thực tế so với kế hoạch của ${scopeLabel}.`}
       />
 
       {tracking && (
@@ -86,7 +113,7 @@ export function ProgressPage() {
       )}
 
       <div className="mb-5">
-        <LMSLearningSnapshot data={activeCourseData} />
+        {scopedCourseData && <LMSLearningSnapshot data={scopedCourseData} />}
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -95,6 +122,22 @@ export function ProgressPage() {
         <StatTile icon="clock" label="Phiên học" value={stats.sessionCount} hint="trong tuần" />
         <StatTile icon="chart" label="Đã học" value={formatHours(stats.studiedMin)} hint={`dự kiến tới giờ: ${formatHours(stats.plannedUntilNow)}`} />
       </div>
+
+      {pilot && (
+        <Card className="mt-5" tone={pilot.atRiskDeadlineCount > 0 ? 'warning' : 'default'} aria-labelledby="actionable-progress">
+          <CardHeader
+            id="actionable-progress"
+            title={pilot.atRiskDeadlineCount > 0 ? `${pilot.atRiskDeadlineCount} deadline đang có rủi ro` : 'Kế hoạch đang trong tầm kiểm soát'}
+            subtitle={unplannedDeadlineCount > 0 ? `${unplannedDeadlineCount} deadline chưa được bảo vệ đủ bằng study block.` : estimateMessage}
+          />
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-muted">{estimateMessage}</p>
+            {pilot.atRiskDeadlineCount > 0 && (
+              <Button icon="refresh" onClick={() => navigate('/recover')}>Phục hồi ngay</Button>
+            )}
+          </div>
+        </Card>
+      )}
 
       {drifts[0] && taskById.get(drifts[0].taskId) && (
         <div className="mt-5">
@@ -121,7 +164,7 @@ export function ProgressPage() {
         <Card aria-labelledby="manual-title" id="manual">
           <CardHeader id="manual-title" title="Nhập thủ công" subtitle="Dùng khi bạn học mà quên bật hẹn giờ, hoặc để sửa dữ liệu." />
           <form className="space-y-4" onSubmit={submit} noValidate>
-            <Select label="Nhiệm vụ" value={form.taskId} onChange={(e) => setForm({ ...form, taskId: e.target.value })} options={courseTasks.map((t) => ({ value: t.id, label: t.title }))} error={errors.taskId} />
+            <Select label="Nhiệm vụ" value={form.taskId} onChange={(e) => setForm({ ...form, taskId: e.target.value })} options={visibleTasks.map((t) => ({ value: t.id, label: `${courseById.get(t.courseId)?.code ?? ''} · ${t.title}` }))} error={errors.taskId} />
             <div className="grid grid-cols-2 gap-3">
               <Input label="Thời lượng (phút)" inputMode="numeric" value={form.minutes} onChange={(e) => setForm({ ...form, minutes: e.target.value.replace(/[^\d]/g, '') })} error={errors.minutes} placeholder="45" />
               <Select label="Ngày" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} options={weekDates().filter((d) => d <= DEMO_TODAY).map((d) => ({ value: d, label: formatDay(d, { relative: true }) }))} />
@@ -155,9 +198,9 @@ export function ProgressPage() {
         </Card>
         <Card aria-labelledby="sessions">
           <CardHeader id="sessions" title="Lịch sử phiên học" subtitle="Mới nhất trước" />
-          {activeSessions.length ? (
+          {visibleSessions.length ? (
             <ul className="divide-y divide-line">
-              {activeSessions.slice(0, 10).map((s) => (
+              {visibleSessions.slice(0, 10).map((s) => (
                 <li key={s.id} className="flex items-center gap-3 py-3">
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-medium">{taskById.get(s.taskId)?.title}</p>
@@ -175,10 +218,29 @@ export function ProgressPage() {
           )}
           <div className="mt-4">
             <p className="mb-2 text-sm text-muted">Thời gian đã học so với kế hoạch cả tuần</p>
-            <ProgressBar value={stats.studiedMin} max={Math.max(stats.plannedMin, 1)} label="Đã học so với kế hoạch tuần" />
+            <ProgressBar value={stats.studiedMin} max={Math.max(stats.plannedMin, 1)} label="Đã học so với kế hoạch 7 ngày" />
           </div>
         </Card>
       </div>
+
+      {pilot && (
+        <details className="mt-5 rounded-2xl border border-line bg-white px-5 py-3">
+          <summary className="min-h-[44px] cursor-pointer py-2 font-semibold text-primary-ink">Dữ liệu đánh giá pilot</summary>
+          <p className="mb-4 text-sm text-muted">Dùng cho đánh giá sản phẩm; không phải mục tiêu học tập hằng ngày.</p>
+          <dl className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+            <div><dt className="caption">Deadline có kế hoạch</dt><dd className="font-semibold">{Math.round(pilot.planCoverageRate * 100)}%</dd></div>
+            <div><dt className="caption">Deadline có rủi ro</dt><dd className="font-semibold">{pilot.atRiskDeadlineCount}</dd></div>
+            <div>
+              <dt className="caption">Nộp đúng hạn</dt>
+              <dd className="font-semibold">{pilot.onTimeSubmissionRate === null ? 'Chưa đủ mẫu' : `${pilot.onTimeSubmissionCount}/${pilot.submittedAssignmentCount ?? 0} bài · ${Math.round(pilot.onTimeSubmissionRate * 100)}%`}</dd>
+              {onTimeDelta !== null && state.pilotMetricsHistory.length > 1 && (
+                <span className={onTimeDelta >= 0 ? 'caption text-success-ink' : 'caption text-danger-ink'}>{onTimeDelta >= 0 ? '+' : ''}{Math.round(onTimeDelta * 100)} điểm % so với baseline</span>
+              )}
+            </div>
+            <div><dt className="caption">Sai số estimate</dt><dd className="font-semibold">{pilot.estimateMaePercent === null ? 'Chưa đủ mẫu' : `${Math.round(pilot.estimateMaePercent * 100)}%`}</dd></div>
+          </dl>
+        </details>
+      )}
     </div>
   );
 }

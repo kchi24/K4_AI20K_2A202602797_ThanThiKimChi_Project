@@ -19,7 +19,7 @@ import { addDays, formatDuration, toMin, weekdayName } from '../../utils/time';
 
 export function SettingsPage() {
   useDocumentTitle('Cài đặt');
-  const { state, dispatch } = useAppStore();
+  const { state, dispatch, persistence } = useAppStore();
   const toast = useToast();
   const [calendar, setCalendar] = useState<GoogleCalendarStatus | null>(null);
   const [calendarLoaded, setCalendarLoaded] = useState(false);
@@ -178,6 +178,21 @@ export function SettingsPage() {
           </ul>
         </Card>
 
+        <Card aria-labelledby="workspace-sync">
+          <CardHeader id="workspace-sync" title="Đồng bộ dữ liệu PaceWise" subtitle="Kế hoạch và tiến độ được lưu trên máy chủ để dùng tiếp ở thiết bị khác." />
+          <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+            <span className={persistence.status === 'error' || persistence.status === 'conflict' ? 'font-medium text-danger-ink' : 'text-muted'}>
+              {persistence.status === 'saving' && 'Đang lưu thay đổi…'}
+              {persistence.status === 'saved' && 'Đã lưu an toàn'}
+              {persistence.status === 'idle' && 'Chưa có thay đổi mới'}
+              {persistence.status === 'error' && 'Lưu dữ liệu thất bại'}
+              {persistence.status === 'conflict' && 'Dữ liệu đã đổi ở thiết bị khác; hãy tải lại trang trước khi sửa tiếp.'}
+            </span>
+            {persistence.savedAt && <span className="caption">Lần lưu gần nhất: {new Date(persistence.savedAt).toLocaleString('vi-VN')}</span>}
+          </div>
+          {persistence.message && <p className="mt-2 text-sm text-danger-ink">{persistence.message}</p>}
+        </Card>
+
         <Card aria-labelledby="google-calendar">
           <CardHeader
             id="google-calendar"
@@ -204,7 +219,7 @@ export function SettingsPage() {
                     Đã kết nối{calendar.accountEmail ? <> với <strong>{calendar.accountEmail}</strong></> : ''}. PaceWise không sửa hoặc xóa sự kiện khác của bạn.
                   </div>
                   <div className="flex flex-wrap gap-3">
-                    <Button variant="secondary" icon="refresh" loading={calendarBusy} onClick={importBusyTime}>Đọc lịch bận tuần này</Button>
+                    <Button variant="secondary" icon="refresh" loading={calendarBusy} onClick={importBusyTime}>Đọc lịch bận 7 ngày tới</Button>
                     <Button icon="calendar" disabled={!calendarBlocks.length} onClick={() => setConfirmExport(true)}>
                       Đưa kế hoạch lên Google
                     </Button>

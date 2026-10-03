@@ -72,6 +72,7 @@ export interface Task {
 /** User-owned fields layered on top of the latest LMS task snapshot. */
 export interface TaskProgress {
   estimateMin: number;
+  estimateIsAssumption?: boolean;
   loggedMin: number;
   status: TaskStatus;
   updatedAt: string;
@@ -108,6 +109,7 @@ export interface LMSRubric {
 export interface LMSSubmissionSummary {
   state: string;
   attempts: number;
+  submittedAt?: string | null;
   late: boolean;
   score: number | null;
   feedback: string;
@@ -157,6 +159,20 @@ export interface LMSPlannerItem {
   completed: boolean;
 }
 
+export interface LMSCalendarItem {
+  id: string;
+  source_id: number;
+  type: 'assignment' | 'event';
+  course_id: number | null;
+  course_code: string | null;
+  title: string;
+  starts_at: string;
+  ends_at: string | null;
+  duration_minutes: number | null;
+  event_kind: string;
+  editable: boolean;
+}
+
 export interface LMSAppointmentGroup {
   id: number;
   title: string;
@@ -180,6 +196,7 @@ export interface LMSCourseData {
   resources: LMSResource[];
   plannerItems: LMSPlannerItem[];
   appointmentGroups: LMSAppointmentGroup[];
+  calendarItems?: LMSCalendarItem[];
   sections?: Array<{ id: number; name: string; member_ids: number[] }>;
   groups?: Array<{
     id: number;
@@ -196,6 +213,9 @@ export type Clock = string;
 export interface TimeBlock {
   id: string;
   taskId: string;
+  /** Optional AI decomposition; calendar placement remains deterministic. */
+  milestoneId?: string | null;
+  milestoneTitle?: string | null;
   /** Local date `YYYY-MM-DD`. */
   date: string;
   start: Clock;
@@ -226,16 +246,23 @@ export interface UnavailableSlot {
   weekday: Weekday;
   start: Clock;
   end: Clock;
+  /** Exact local date for LMS/Google constraints; manual recurring slots omit it. */
+  date?: string;
+  source?: 'manual' | 'google' | 'lms';
+  readOnly?: boolean;
 }
 
 export type PreferredTime = 'morning' | 'afternoon' | 'evening';
 
 export interface PlanInput {
   goal: string;
+  /** Monday of the selected calendar week. Optional for legacy saved drafts. */
+  weekStart?: string;
   tasks: { taskId: string; remainingMin: number }[];
   availability: AvailabilityDay[];
   unavailable: UnavailableSlot[];
-  preferred: PreferredTime;
+  /** One or more preferred study periods. A scalar is accepted for old workspaces. */
+  preferred: PreferredTime | PreferredTime[];
 }
 
 export interface Feasibility {
@@ -246,15 +273,41 @@ export interface Feasibility {
   deficitMin: number;
   /** Tasks that could not be fully placed before their deadline. */
   shortfalls: { taskId: string; missingMin: number }[];
+  /** Open 14-day deadlines intentionally left outside this draft. */
+  uncoveredTasks?: { taskId: string; title: string; deadline: string }[];
 }
 
 export interface PlanDraft {
   input: PlanInput;
+  weekStart?: string;
+  weekEnd?: string;
   blocks: TimeBlock[];
   feasibility: Feasibility;
   reasons: string[];
   assumptions: string[];
   createdAt: string;
+  /** Work that must be completed inside this 7-day window, not the whole assignment. */
+  planningTargets?: Array<{ taskId: string; targetMin: number; remainingMin: number }>;
+  /** Canonical task priority: deadline, priority, group weight, then points. */
+  priorityOrder?: Array<{
+    rank: number;
+    taskId: string;
+    title: string;
+    deadline: string;
+    priority: Priority;
+    assignmentGroupWeight: number;
+    pointsPossible: number;
+  }>;
+  milestones?: Array<{
+    milestoneId: string;
+    taskId: string;
+    title: string;
+    deliverable: string;
+    estimatedMin: number;
+    targetMin: number;
+    dependsOn: string[];
+    deadline: string;
+  }>;
 }
 
 export interface StudySession {
@@ -305,10 +358,102 @@ export interface DiffItem {
 
 export interface Drift {
   taskId: string;
+  courseId: string;
+  kind: 'missed_progress' | 'capacity_gap';
   expectedMin: number;
   loggedMin: number;
   deficitMin: number;
   deadline: string;
+}
+
+export type PlanImpactKind =
+  | 'schedule_conflict'
+  | 'capacity_released'
+  | 'deadline_earlier'
+  | 'deadline_later'
+  | 'assignment_removed'
+  | 'assignment_added';
+
+export interface PlanImpact {
+  id: string;
+  kind: PlanImpactKind;
+  /** Constraint that caused a conflict; used to retire stale impacts after replanning. */
+  constraintId?: string;
+  title: string;
+  message: string;
+  courseId?: string;
+  taskId?: string;
+  deadline?: string;
+  deficitMin: number;
+  affectedBlockIds: string[];
+  detectedAt: string;
+}
+
+export type ReminderKind =
+  | 'study_block'
+  | 'deadline_72h'
+  | 'deadline_24h'
+  | 'deadline_2h'
+  | 'missed_block'
+  | 'lms_change'
+  | 'online_class'
+  | 'quiz'
+  | 'exam_24h'
+  | 'exam_60m'
+  | 'evening_digest';
+
+export type ReminderUrgency = 'normal' | 'urgent' | 'critical';
+
+/** A deterministic reminder derived from the saved plan and the latest LMS projection. */
+export interface Reminder {
+  id: string;
+  kind: ReminderKind;
+  title: string;
+  message: string;
+  scheduledAt: string;
+  expiresAt: string;
+  urgency: ReminderUrgency;
+  courseId?: string;
+  taskId?: string;
+  href?: string;
+}
+
+export interface ReminderPreferences {
+  enabled: boolean;
+  browserEnabled: boolean;
+  dailyCap: number;
+  studyBlockLeadMinutes: number;
+  digestHour: number;
+}
+
+/** Delivery receipts are persisted to avoid duplicate notifications across reloads/devices. */
+export interface ReminderState {
+  preferences: ReminderPreferences;
+  deliveredAt: Record<string, string>;
+  readIds: string[];
+}
+
+export interface EstimateProfile {
+  courseId: string;
+  sampleCount: number;
+  /** Exponential moving average of actual / estimated duration. */
+  multiplier: number;
+  updatedAt: string;
+}
+
+export interface PilotMetrics {
+  measuredAt: string;
+  openDeadlineCount: number;
+  plannedDeadlineCount: number;
+  atRiskDeadlineCount: number;
+  onTimeSubmissionCount: number;
+  gradedSubmissionCount: number;
+  /** Submitted assignments used as the denominator, including ungraded work. */
+  submittedAssignmentCount?: number;
+  planCoverageRate: number;
+  onTimeSubmissionRate: number | null;
+  estimateMaePercent: number | null;
+  recoveryCount: number;
 }
 
 export interface RecoveryOption {
@@ -323,11 +468,17 @@ export interface RecoveryOption {
   /** Availability assumptions the option relies on, always shown to the user. */
   assumptions: string[];
   fullyRecovers: boolean;
+  /** Structured capacity evidence; optional for legacy persisted options. */
+  workloadMinutes?: number;
+  scheduledMinutes?: number;
+  missingMinutes?: number;
+  shortfalls?: Array<{ taskId: string; missingMin: number }>;
 }
 
 export interface Reflection {
   courseId: string;
   weekStart: string;
+  effectiveWeekStart?: string;
   answers: [string, string, string];
   savedAt: string;
   aiDraft?: Record<string, unknown>;
@@ -353,9 +504,20 @@ export interface GroupStats {
   groupId: string;
   onTimeRate: number; // 0..1
   onTimeCount: number;
+  onTimeTotal: number;
   weeklyCompletion: { week: string; rate: number; count: number; total: number }[];
   topics: { topic: string; needsSupport: number; n: number }[];
   atRisk: number;
+  riskWindowDays: number;
+  progressImprovement: number | null;
+  assignmentRisks: Array<{
+    assignmentId: string;
+    title: string;
+    dueAt: string;
+    atRiskCount: number;
+    totalStudents: number;
+    missingMinutes: number;
+  }>;
 }
 
 export interface LMSInstructorSummary {
@@ -387,6 +549,10 @@ export interface ReviewItem {
   note?: string;
   suggestedStatus?: string;
   rubricVersion?: number;
+  aiConclusion?: string;
+  rubricCriteria?: Array<{ name: string; score?: number | string; maxScore?: number }>;
+  evidenceQuotes?: string[];
+  sourceRefs?: Array<{ label: string; type: string; id: string; url?: string }>;
 }
 
 export type AssessmentStatus = 'draft' | 'review' | 'approved' | 'rejected';

@@ -12,7 +12,7 @@ import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { confirmPlan } from '../../services/api';
 import { useAppStore } from '../../store/AppStore';
 import type { TimeBlock } from '../../types';
-import { durationMin, formatDuration } from '../../utils/time';
+import { durationMin, formatDeadline, formatDuration } from '../../utils/time';
 
 export function PlanPreviewPage() {
   useDocumentTitle('Bản xem trước');
@@ -26,9 +26,11 @@ export function PlanPreviewPage() {
 
   const coverage = useMemo(() => {
     if (!draft) return [];
+    const targets = new Map((draft.planningTargets ?? []).map((target) => [target.taskId, target.targetMin]));
     return draft.input.tasks.map((t) => {
       const placed = draft.blocks.filter((b) => b.taskId === t.taskId).reduce((s, b) => s + durationMin(b.start, b.end), 0);
-      return { taskId: t.taskId, required: t.remainingMin, placed, missing: Math.max(0, t.remainingMin - placed) };
+      const required = targets.get(t.taskId) ?? t.remainingMin;
+      return { taskId: t.taskId, required, placed, missing: Math.max(0, required - placed) };
     });
   }, [draft]);
 
@@ -36,7 +38,11 @@ export function PlanPreviewPage() {
 
   const scheduled = draft.blocks.reduce((s, b) => s + durationMin(b.start, b.end), 0);
   const missing = coverage.filter((c) => c.missing > 0);
-  const canSave = draft.feasibility.feasible && missing.length === 0 && draft.blocks.length > 0;
+  const missingMinutes = missing.reduce((sum, item) => sum + item.missing, 0);
+  // A partial plan is still a valid baseline. Blocking confirmation when the
+  // learner has insufficient capacity makes Recover unavailable precisely
+  // when it is needed most.
+  const canSave = draft.blocks.length > 0;
 
   const save = async () => {
     setSaving(true);
@@ -91,11 +97,41 @@ export function PlanPreviewPage() {
             </dl>
             {missing.length > 0 && (
               <p className="mt-4 rounded-xl bg-danger-light px-3 py-2 text-sm text-danger-ink" role="alert">
-                Sau khi chỉnh sửa, còn thiếu thời gian cho {missing.map((m) => `${taskById.get(m.taskId)?.title} (${formatDuration(m.missing)})`).join(', ')}. Thêm buổi học
-                hoặc quay lại chỉnh sửa để lưu được.
+                Kế hoạch còn thiếu {formatDuration(missingMinutes)} cho {missing.map((m) => `${taskById.get(m.taskId)?.title ?? m.taskId} (${formatDuration(m.missing)})`).join(', ')}.
+                Bạn vẫn có thể lưu phần đã xếp; PaceWise sẽ đánh dấu rủi ro và đưa phần còn thiếu sang Tiến độ/Phục hồi.
+              </p>
+            )}
+            {(draft.feasibility.uncoveredTasks?.length ?? 0) > 0 && (
+              <p className="mt-4 rounded-xl bg-warning-light px-3 py-2 text-sm text-warning-ink" role="status">
+                {draft.feasibility.uncoveredTasks!.length} deadline trong 14 ngày tới chưa được đưa vào bản kế hoạch này. PaceWise không coi chúng là đã được bảo vệ.
               </p>
             )}
           </Card>
+
+          {(draft.priorityOrder?.length ?? 0) > 0 && (
+            <Card aria-labelledby="priority-order">
+              <CardHeader
+                id="priority-order"
+                title="Thứ tự ưu tiên theo deadline"
+                subtitle="Khung giờ trên lịch vẫn theo sở thích; danh sách này quyết định nhiệm vụ nào cần được bảo vệ trước."
+              />
+              <ol className="space-y-3">
+                {draft.priorityOrder!.map((item) => (
+                  <li key={item.taskId} className="flex items-start gap-3 rounded-xl bg-slate-50 px-3 py-3">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-bold text-white">
+                      {item.rank}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="font-semibold">{item.title}</p>
+                      <p className="caption">
+                        Hạn {formatDeadline(item.deadline)} · trọng số nhóm {item.assignmentGroupWeight}% · {item.pointsPossible} điểm
+                      </p>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </Card>
+          )}
 
           <Card aria-labelledby="why">
             <CardHeader id="why" title="Vì sao PaceWise đề xuất lịch này?" />
@@ -127,9 +163,13 @@ export function PlanPreviewPage() {
         <Button variant="secondary" icon="arrowLeft" onClick={() => navigate('/plan/new')}>
           Quay lại chỉnh sửa
         </Button>
-        <p className="caption flex-1 sm:text-right">Chỉ khi bấm “Xác nhận và lưu”, kế hoạch mới được áp dụng.</p>
+        <p className="caption flex-1 sm:text-right">
+          {missing.length > 0
+            ? `Lưu ${formatDuration(scheduled)} đã xếp; ${formatDuration(missingMinutes)} còn thiếu sẽ được theo dõi như rủi ro.`
+            : 'Chỉ khi bấm “Xác nhận và lưu”, kế hoạch mới được áp dụng.'}
+        </p>
         <Button icon="check" disabled={!canSave || saving} onClick={save}>
-          {saving ? 'Đang xác nhận...' : 'Xác nhận và lưu'}
+          {saving ? 'Đang xác nhận...' : missing.length > 0 ? 'Lưu kế hoạch và theo dõi rủi ro' : 'Xác nhận và lưu'}
         </Button>
       </div>
 

@@ -23,6 +23,7 @@ router = APIRouter()
 
 WORKSPACE_KEYS = {
     "plan",
+    "provisionalBlocks",
     "planHistory",
     "availability",
     "unavailable",
@@ -35,13 +36,21 @@ WORKSPACE_KEYS = {
     "settings",
     "dismissedDrifts",
     "recoveryOptions",
+    "recoveryOptionsKey",
     "taskProgress",
     "reflections",
+    "planImpacts",
+    "estimateProfiles",
+    "pilotMetricsHistory",
+    "recoveryCount",
+    "lmsBaseline",
+    "reminders",
 }
 
 
 class WorkspaceRequest(BaseModel):
     state: dict
+    expected_version: int | None = Field(default=None, alias="expectedVersion", ge=0)
 
 
 class InstructorActionRequest(BaseModel):
@@ -109,6 +118,12 @@ def save_workspace(
 ) -> dict:
     safe = _safe_workspace(payload.state)
     row = db.get(UserWorkspace, session.user_id)
+    current_version = row.version if row else 0
+    if payload.expected_version is not None and payload.expected_version != current_version:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Workspace version conflict: expected {payload.expected_version}, current {current_version}",
+        )
     if row:
         row.state_json = json.dumps(safe, ensure_ascii=False)
         row.version += 1
@@ -140,6 +155,13 @@ def create_instructor_action(
         status = str(action_payload.get("status") or "")
         if status not in REVIEW_STATUSES:
             raise HTTPException(status_code=422, detail="Unsupported review status")
+        if status in {"edited", "rejected", "needs_evidence"} and not str(
+            action_payload.get("note") or ""
+        ).strip():
+            raise HTTPException(
+                status_code=422,
+                detail="A decision note is required for this review status",
+            )
     action = InstructorAction(
         id=str(uuid.uuid4()),
         course_id=session.course_id,

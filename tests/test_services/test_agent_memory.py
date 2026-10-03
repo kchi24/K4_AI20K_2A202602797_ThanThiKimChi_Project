@@ -105,3 +105,41 @@ def test_persist_agent_outcome_deduplicates_pending_citation_case():
         ).all()
 
     assert len(cases) == 1
+
+
+def test_reflection_updates_next_week_memory_only_after_student_confirmation():
+    session = _session()
+    settings = get_settings()
+    draft = {
+        "week_start": "2026-09-28",
+        "week_end": "2026-10-04",
+        "effective_week_start": "2026-10-05",
+        "adjustment": "Tăng 15 phút cho mỗi study block.",
+    }
+
+    with SessionLocal() as db:
+        db.query(LearnerMemory).filter(LearnerMemory.user_id == session.user_id).delete()
+        db.commit()
+        persist_agent_outcome(
+            db,
+            session,
+            settings,
+            {"workflow": "reflect", "status": "awaiting_student", "reflection_draft": draft},
+            None,
+        )
+        pending_memory = load_learner_memory(db, session, settings)
+        persist_agent_outcome(
+            db,
+            session,
+            settings,
+            {"workflow": "reflect", "status": "completed", "reflection_draft": draft},
+            None,
+        )
+        confirmed_memory = load_learner_memory(db, session, settings)
+
+    assert "last_reflection" not in pending_memory["profile"]
+    assert confirmed_memory["profile"]["last_reflection"] == draft
+    next_adjustment = confirmed_memory["profile"]["next_week_adjustment"]
+    assert next_adjustment["effective_week_start"] == "2026-10-05"
+    assert next_adjustment["adjustment"] == "Tăng 15 phút cho mỗi study block."
+    assert next_adjustment["confirmed_at"]

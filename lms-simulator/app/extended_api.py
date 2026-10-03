@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
@@ -109,6 +109,12 @@ class SubmissionRequest(BaseModel):
     user_id: int
     text_entry: str = ""
     website_url: str = ""
+    demo_submission_offset_minutes: int | None = Field(
+        default=None,
+        ge=-10_080,
+        le=10_080,
+        description="Simulator-only offset from the effective deadline; negative is early.",
+    )
 
 
 class GradeRequest(BaseModel):
@@ -261,21 +267,31 @@ def ensure_submission(db: Session, assignment: Assignment, user_id: int) -> tupl
     return submission, detail
 
 
-def mark_submitted(db: Session, assignment: Assignment, submission: Submission) -> None:
-    now = datetime.now(UTC)
+def mark_submitted(
+    db: Session,
+    assignment: Assignment,
+    submission: Submission,
+    demo_submission_offset_minutes: int | None = None,
+) -> None:
+    access_time = datetime.now(UTC)
     due_at, unlock_at, lock_at, _ = effective_assignment_window(
         db, assignment, submission.user_id
     )
     due_at = as_utc(due_at)
     unlock_at = as_utc(unlock_at) if unlock_at else None
     lock_at = as_utc(lock_at) if lock_at else None
-    if unlock_at and now < unlock_at:
+    if unlock_at and access_time < unlock_at:
         raise HTTPException(status_code=409, detail="Assignment is not available yet")
-    if lock_at and now > lock_at:
+    if lock_at and access_time > lock_at:
         raise HTTPException(status_code=409, detail="Assignment is locked")
-    submission.submitted_at = now
+    submitted_at = (
+        due_at + timedelta(minutes=demo_submission_offset_minutes)
+        if demo_submission_offset_minutes is not None
+        else access_time
+    )
+    submission.submitted_at = submitted_at
     submission.workflow_state = "submitted"
-    submission.late = now > due_at
+    submission.late = submitted_at > due_at
 
 
 @router.post("/courses")
@@ -657,7 +673,12 @@ def submit_assignment_content(assignment_id: int, payload: SubmissionRequest, db
         raise HTTPException(status_code=422, detail="Enter text or a website URL")
     submission, detail = ensure_submission(db, assignment, payload.user_id)
     detail.text_entry, detail.website_url = payload.text_entry.strip(), payload.website_url.strip()
-    mark_submitted(db, assignment, submission)
+    mark_submitted(
+        db,
+        assignment,
+        submission,
+        payload.demo_submission_offset_minutes,
+    )
     record_submission_attempt(
         db,
         submission,
@@ -671,7 +692,12 @@ def submit_assignment_content(assignment_id: int, payload: SubmissionRequest, db
         entity_type="submission",
         entity_id=submission.id,
         course_id=assignment.course_id,
-        metadata={"assignment_id": assignment.id, "late": submission.late, "type": "text_or_url"},
+        metadata={
+            "assignment_id": assignment.id,
+            "late": submission.late,
+            "type": "text_or_url",
+            "demo_submission_offset_minutes": payload.demo_submission_offset_minutes,
+        },
     )
     db.commit()
     return submission_json(submission, detail)
@@ -742,6 +768,7 @@ def download_file(file_name: str, user_id: int = Query(...), db: Session = Depen
 def submit_assignment_file(
     assignment_id: int,
     user_id: int = Form(...),
+    demo_submission_offset_minutes: int | None = Form(None),
     upload: UploadFile = File(...),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -750,7 +777,7 @@ def submit_assignment_file(
         raise HTTPException(status_code=404, detail="Assignment not found")
     submission, detail = ensure_submission(db, assignment, user_id)
     detail.file_name, detail.file_url = save_upload(upload, f"submission-{assignment_id}-{user_id}")
-    mark_submitted(db, assignment, submission)
+    mark_submitted(db, assignment, submission, demo_submission_offset_minutes)
     record_submission_attempt(
         db,
         submission,
@@ -764,7 +791,12 @@ def submit_assignment_file(
         entity_type="submission",
         entity_id=submission.id,
         course_id=assignment.course_id,
-        metadata={"assignment_id": assignment.id, "late": submission.late, "type": "file"},
+        metadata={
+            "assignment_id": assignment.id,
+            "late": submission.late,
+            "type": "file",
+            "demo_submission_offset_minutes": demo_submission_offset_minutes,
+        },
     )
     db.commit()
     return submission_json(submission, detail)
@@ -774,6 +806,7 @@ def submit_assignment_file(
 def submit_assignment_files(
     assignment_id: int,
     user_id: int = Form(...),
+    demo_submission_offset_minutes: int | None = Form(None),
     uploads: list[UploadFile] = File(...),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -794,7 +827,7 @@ def submit_assignment_files(
         save_upload(upload, f"submission-{assignment_id}-{user_id}") for upload in uploads
     ]
     detail.file_name, detail.file_url = saved_files[0]
-    mark_submitted(db, assignment, submission)
+    mark_submitted(db, assignment, submission, demo_submission_offset_minutes)
     attempt = record_submission_attempt(db, submission)
     db.add_all(
         [
@@ -814,6 +847,7 @@ def submit_assignment_files(
             "late": submission.late,
             "type": "files",
             "file_count": len(saved_files),
+            "demo_submission_offset_minutes": demo_submission_offset_minutes,
         },
     )
     db.commit()

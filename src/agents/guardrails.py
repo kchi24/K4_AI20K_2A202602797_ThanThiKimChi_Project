@@ -95,7 +95,14 @@ def evaluate_guardrails(query: str) -> dict[str, Any]:
     explicit_no_answer = bool(
         re.search(r"\b(khong|dung|do not|without)\b.{0,20}\b(dua|cho|give|dap an|answer)\b", normalized)
     )
-    is_cheating = cheating_match and not explicit_no_answer and not (
+    explicit_no_cheating = bool(
+        re.search(
+            r"\b(khong|dung|do not|without)\b.{0,20}"
+            r"\b(lam ho|viet ho|giai ho|nop ho|lam giup|complete for me|solve for me)\b",
+            normalized,
+        )
+    )
+    is_cheating = cheating_match and not explicit_no_answer and not explicit_no_cheating and not (
         safe_learning_match and not re.search(r"\b(dap an|hoan chinh|nop ho)\b", normalized)
     )
 

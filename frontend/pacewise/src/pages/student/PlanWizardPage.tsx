@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../../components/ui/Button';
 import { Card, CardHeader } from '../../components/ui/Card';
-import { Checkbox, Input, Select } from '../../components/ui/Field';
+import { Checkbox, Input, Select, TimeSelect } from '../../components/ui/Field';
 import { Icon } from '../../components/ui/Icon';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { Stepper } from '../../components/ui/Stepper';
@@ -12,12 +12,24 @@ import { useDerived } from '../../hooks/useDerived';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useAppStore } from '../../store/AppStore';
 import type { AvailabilityDay, PlanInput, PreferredTime, UnavailableSlot, Weekday } from '../../types';
-import { formatDeadline, formatDuration, toMin, uid, weekdayName } from '../../utils/time';
+import { NEXT_WEEK_START, TASK_SELECTION_HORIZON_DAYS, WEEK_START, daysUntil, formatDM, formatDeadline, formatDuration, toMin, uid, weekdayName } from '../../utils/time';
+import { lmsUnavailableSlots, mergeUnavailable } from '../../utils/lmsPlanning';
 
 interface Row {
   taskId: string;
   checked: boolean;
   hours: string;
+}
+
+const PREFERRED_TIME_OPTIONS: [PreferredTime, string][] = [
+  ['morning', 'Buổi sáng'],
+  ['afternoon', 'Buổi chiều'],
+  ['evening', 'Buổi tối'],
+];
+
+function normalizePreferredTimes(value: PlanInput['preferred'] | undefined): PreferredTime[] {
+  if (!value) return ['afternoon'];
+  return Array.isArray(value) ? value : [value];
 }
 
 const STEPS = ['Mục tiêu', 'Thời gian', 'Xác nhận'];
@@ -28,21 +40,35 @@ export function PlanWizardPage() {
   const { courseById } = useDerived();
   const navigate = useNavigate();
   const open = state.tasks.filter((t) => t.status !== 'done');
+  const priorityTasks = open.filter((task) => {
+    const days = daysUntil(task.deadline);
+    return days >= 0 && days <= TASK_SELECTION_HORIZON_DAYS;
+  });
+  const defaultTasks = priorityTasks.length
+    ? priorityTasks
+    : [...open].sort((a, b) => a.deadline.localeCompare(b.deadline)).slice(0, 3);
+  const priorityTaskIds = new Set(defaultTasks.map((task) => task.id));
   const prev = state.wizardInput;
 
   const [step, setStep] = useState(0);
+  const reflectedNextWeek = Object.values(state.reflections).some((item) => item.effectiveWeekStart === NEXT_WEEK_START);
+  const [planWeekStart, setPlanWeekStart] = useState(prev?.weekStart ?? (reflectedNextWeek ? NEXT_WEEK_START : WEEK_START));
   const defaultGoal = prev?.goal ?? (state.user?.isNew ? 'Hoàn thành các bài tập tuần đúng hạn' : 'Hoàn thành Project Draft và Reading 2 trước deadline');
   const [goal, setGoal] = useState(defaultGoal);
   const [rows, setRows] = useState<Row[]>(() =>
     open.map((t) => {
       const p = prev?.tasks.find((x) => x.taskId === t.id);
       const rem = p ? p.remainingMin : Math.max(0, t.estimateMin - t.loggedMin);
-      return { taskId: t.id, checked: prev ? !!p : true, hours: String(Math.round((rem / 60) * 10) / 10).replace('.', ',') };
+      return { taskId: t.id, checked: prev ? !!p : priorityTaskIds.has(t.id), hours: String(Math.round((rem / 60) * 10) / 10).replace('.', ',') };
     }),
   );
+  const [showLaterTasks, setShowLaterTasks] = useState(() => Boolean(prev?.tasks.some((task) => !priorityTaskIds.has(task.taskId))));
   const [availability, setAvailability] = useState<AvailabilityDay[]>(prev?.availability ?? state.availability);
-  const [unavailable, setUnavailable] = useState<UnavailableSlot[]>(prev?.unavailable ?? state.unavailable);
-  const [preferred, setPreferred] = useState<PreferredTime>(prev?.preferred ?? 'afternoon');
+  const [unavailable, setUnavailable] = useState<UnavailableSlot[]>(() => mergeUnavailable(
+    prev?.unavailable ?? state.unavailable,
+    lmsUnavailableSlots(state.courseData),
+  ));
+  const [preferred, setPreferred] = useState<PreferredTime[]>(() => normalizePreferredTimes(prev?.preferred));
   const [showErrors, setShowErrors] = useState(false);
 
   const hoursToMin = (h: string) => Math.round(parseFloat(h.replace(',', '.')) * 60);
@@ -50,13 +76,16 @@ export function PlanWizardPage() {
   const input: PlanInput = useMemo(
     () => ({
       goal,
+      weekStart: planWeekStart,
       tasks: rows.filter((r) => r.checked).map((r) => ({ taskId: r.taskId, remainingMin: hoursToMin(r.hours) || 0 })),
       availability,
       unavailable,
       preferred,
     }),
-    [goal, rows, availability, unavailable, preferred],
+    [goal, planWeekStart, rows, availability, unavailable, preferred],
   );
+  const initialInputRef = useRef(JSON.stringify(input));
+  const hasDraftChanges = initialInputRef.current !== JSON.stringify(input);
 
   // ---- validation per step ----
   const step1Errors: Record<string, string> = {};
@@ -67,6 +96,7 @@ export function PlanWizardPage() {
   });
   const step2Errors: Record<string, string> = {};
   if (!availability.some((a) => a.enabled)) step2Errors.days = 'Thêm ít nhất một khung giờ rảnh trong tuần.';
+  if (preferred.length === 0) step2Errors.preferred = 'Chọn ít nhất một buổi bạn thích học.';
   availability.forEach((a) => {
     if (a.enabled && toMin(a.end) <= toMin(a.start)) step2Errors[`d${a.weekday}`] = 'Giờ kết thúc phải sau giờ bắt đầu.';
   });
@@ -94,13 +124,34 @@ export function PlanWizardPage() {
 
   const updateDay = (w: Weekday, patch: Partial<AvailabilityDay>) => setAvailability((list) => list.map((a) => (a.weekday === w ? { ...a, ...patch } : a)));
 
+  const togglePreferred = (value: PreferredTime) => {
+    setPreferred((current) => (
+      current.includes(value)
+        ? current.filter((item) => item !== value)
+        : [...current, value]
+    ));
+  };
+
   const errorList = Object.values(errors);
 
   return (
     <div className="page max-w-4xl">
-      <PageHeader title="Tạo kế hoạch tuần" back={{ to: '/plan', label: 'Kế hoạch' }} description="PaceWise chỉ tạo bản nháp. Không có gì được lưu cho tới khi bạn xác nhận." />
+      <PageHeader title="Tạo kế hoạch 7 ngày" back={{ to: '/plan', label: 'Kế hoạch' }} description="Mọi chỉnh sửa được giữ trong bản nháp. Kế hoạch đang áp dụng chỉ thay đổi sau khi bạn xác nhận." />
       <div className="mb-6">
         <Stepper steps={STEPS} current={step} />
+      </div>
+
+      <div
+        role="status"
+        className={`mb-5 rounded-2xl border px-4 py-3 text-sm ${
+          hasDraftChanges
+            ? 'border-primary/30 bg-primary-light text-primary-ink'
+            : 'border-line bg-surface text-muted'
+        }`}
+      >
+        {hasDraftChanges
+          ? 'Đã ghi nhận các thay đổi trong bản nháp. Kế hoạch hiện tại của bạn chưa bị thay đổi.'
+          : 'Bạn chưa chỉnh sửa dữ liệu của bản nháp này.'}
       </div>
 
       {showErrors && errorList.length > 0 && (
@@ -117,16 +168,33 @@ export function PlanWizardPage() {
       {step === 0 && (
         <div className="space-y-5">
           <Card>
+            <fieldset>
+              <legend className="card-title">Lập kế hoạch cho tuần nào?</legend>
+              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {[
+                  [WEEK_START, `Tuần hiện tại · ${formatDM(WEEK_START)}`],
+                  [NEXT_WEEK_START, `Tuần tiếp theo · ${formatDM(NEXT_WEEK_START)}`],
+                ].map(([value, label]) => (
+                  <label key={value} className={`flex min-h-[48px] cursor-pointer items-center gap-3 rounded-xl border px-4 font-medium ${planWeekStart === value ? 'border-primary-dark bg-primary-light text-primary-ink' : 'border-line bg-white'}`}>
+                    <input type="radio" name="plan-week" value={value} checked={planWeekStart === value} onChange={() => setPlanWeekStart(value)} className="h-4 w-4 accent-[#3F6FE8]" />
+                    {label}
+                  </label>
+                ))}
+              </div>
+              {reflectedNextWeek && <p className="mt-2 text-sm text-muted">Đã chọn sẵn tuần tiếp theo vì bạn vừa xác nhận Weekly Reflect.</p>}
+            </fieldset>
+          </Card>
+          <Card>
             <Input label="Mục tiêu tuần" value={goal} onChange={(e) => setGoal(e.target.value)} hint="Không bắt buộc — giúp bạn nhớ vì sao lập kế hoạch này." maxLength={140} />
           </Card>
           <Card aria-labelledby="t-title">
-            <CardHeader id="t-title" title="Chọn nhiệm vụ" subtitle="Điều chỉnh số giờ còn cần nếu ước lượng chưa đúng." />
+            <CardHeader id="t-title" title="Chọn nhiệm vụ" subtitle={`PaceWise chọn sẵn deadline trong ${TASK_SELECTION_HORIZON_DAYS} ngày tới. Bạn vẫn có thể mở các nhiệm vụ xa hơn.`} />
             {showErrors && step1Errors.tasks && <p className="mb-3 text-sm font-medium text-danger-ink">{step1Errors.tasks}</p>}
             {rows.length === 0 ? (
               <p className="py-4 text-muted">Hiện chưa có bài tập mở nào từ Canvas cần lập kế hoạch.</p>
             ) : (
               <ul className="divide-y divide-line">
-                {rows.map((r) => {
+                {rows.filter((row) => showLaterTasks || priorityTaskIds.has(row.taskId)).map((r) => {
                   const t = state.tasks.find((x) => x.id === r.taskId)!;
                   return (
                     <li key={r.taskId} className="flex flex-col gap-3 py-4 sm:flex-row sm:items-start">
@@ -157,6 +225,11 @@ export function PlanWizardPage() {
                 })}
               </ul>
             )}
+            {open.length > priorityTaskIds.size && (
+              <Button className="mt-4" size="sm" variant="ghost" onClick={() => setShowLaterTasks((visible) => !visible)}>
+                {showLaterTasks ? 'Ẩn nhiệm vụ ngoài 14 ngày' : `Xem thêm ${open.length - priorityTaskIds.size} nhiệm vụ xa hơn`}
+              </Button>
+            )}
           </Card>
         </div>
       )}
@@ -164,7 +237,7 @@ export function PlanWizardPage() {
       {step === 1 && (
         <div className="space-y-5">
           <Card aria-labelledby="av-title">
-            <CardHeader id="av-title" title="Thời gian rảnh" subtitle="Khung giờ bạn có thể học mỗi ngày trong tuần này." />
+            <CardHeader id="av-title" title="Thời gian rảnh" subtitle="Khung giờ bạn có thể học trong 7 ngày lập kế hoạch." />
             {showErrors && step2Errors.days && <p className="mb-3 text-sm font-medium text-danger-ink">{step2Errors.days}</p>}
             <ul className="divide-y divide-line">
               {availability.map((a) => (
@@ -173,11 +246,11 @@ export function PlanWizardPage() {
                   <span className="text-right text-sm text-muted sm:hidden">{a.enabled ? formatDuration(Math.max(0, toMin(a.end) - toMin(a.start))) : 'Không rảnh'}</span>
                   {a.enabled ? (
                     <div className="col-span-2 grid grid-cols-2 gap-3 sm:col-span-2">
-                      <Input label={`Bắt đầu ${weekdayName(a.weekday)}`} hideLabel type="time" value={a.start} onChange={(e) => updateDay(a.weekday, { start: e.target.value })} />
-                      <Input
+                      <TimeSelect label={`Bắt đầu ${weekdayName(a.weekday)}`} hideLabel value={a.start} onChange={(e) => updateDay(a.weekday, { start: e.target.value })} />
+                      <TimeSelect
                         label={`Kết thúc ${weekdayName(a.weekday)}`}
                         hideLabel
-                        type="time"
+                        includeEndOfDay
                         value={a.end}
                         onChange={(e) => updateDay(a.weekday, { end: e.target.value })}
                         error={showErrors ? step2Errors[`d${a.weekday}`] : undefined}
@@ -195,7 +268,7 @@ export function PlanWizardPage() {
             <CardHeader
               id="un-title"
               title="Thời gian không thể học"
-              subtitle="Ví dụ: lịch làm thêm, họp nhóm. PaceWise sẽ tránh các khung này."
+              subtitle="Bao gồm lịch bận bạn nhập và lịch học/quiz/thi đồng bộ từ LMS."
               action={
                 <Button
                   size="sm"
@@ -214,20 +287,26 @@ export function PlanWizardPage() {
                   <Input
                     label="Tên"
                     value={u.label}
+                    disabled={u.readOnly}
                     onChange={(e) => setUnavailable((l) => l.map((x) => (x.id === u.id ? { ...x, label: e.target.value } : x)))}
                     error={showErrors ? step2Errors[`u${u.id}`] : undefined}
                   />
                   <Select
                     label="Ngày"
                     value={String(u.weekday)}
+                    disabled={u.readOnly}
                     onChange={(e) => setUnavailable((l) => l.map((x) => (x.id === u.id ? { ...x, weekday: Number(e.target.value) as Weekday } : x)))}
                     options={[0, 1, 2, 3, 4, 5, 6].map((w) => ({ value: String(w), label: weekdayName(w as Weekday) }))}
                   />
-                  <Input label="Từ" type="time" value={u.start} onChange={(e) => setUnavailable((l) => l.map((x) => (x.id === u.id ? { ...x, start: e.target.value } : x)))} />
-                  <Input label="Đến" type="time" value={u.end} onChange={(e) => setUnavailable((l) => l.map((x) => (x.id === u.id ? { ...x, end: e.target.value } : x)))} />
-                  <Button variant="danger" icon="trash" aria-label={`Xóa ${u.label || 'khoảng này'}`} onClick={() => setUnavailable((l) => l.filter((x) => x.id !== u.id))}>
-                    <span className="sm:sr-only">Xóa</span>
-                  </Button>
+                  <TimeSelect label="Từ" value={u.start} disabled={u.readOnly} onChange={(e) => setUnavailable((l) => l.map((x) => (x.id === u.id ? { ...x, start: e.target.value } : x)))} />
+                  <TimeSelect label="Đến" includeEndOfDay value={u.end} disabled={u.readOnly} onChange={(e) => setUnavailable((l) => l.map((x) => (x.id === u.id ? { ...x, end: e.target.value } : x)))} />
+                  {u.readOnly ? (
+                    <Badge tone="primary">LMS</Badge>
+                  ) : (
+                    <Button variant="danger" icon="trash" aria-label={`Xóa ${u.label || 'khoảng này'}`} onClick={() => setUnavailable((l) => l.filter((x) => x.id !== u.id))}>
+                      <span className="sm:sr-only">Xóa</span>
+                    </Button>
+                  )}
                 </li>
               ))}
             </ul>
@@ -236,19 +315,15 @@ export function PlanWizardPage() {
           <Card>
             <fieldset>
               <legend className="card-title">Bạn thích học vào lúc nào?</legend>
+              <p className="mt-1 text-sm text-muted">Có thể chọn một, hai hoặc cả ba buổi. PaceWise vẫn dùng buổi khác khi cần để tránh trễ deadline.</p>
+              {showErrors && step2Errors.preferred && <p className="mt-2 text-sm font-medium text-danger-ink">{step2Errors.preferred}</p>}
               <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                {(
-                  [
-                    ['morning', 'Buổi sáng'],
-                    ['afternoon', 'Buổi chiều'],
-                    ['evening', 'Buổi tối'],
-                  ] as [PreferredTime, string][]
-                ).map(([v, l]) => (
+                {PREFERRED_TIME_OPTIONS.map(([v, l]) => (
                   <label
                     key={v}
-                    className={`flex min-h-[48px] cursor-pointer items-center gap-3 rounded-xl border px-4 font-medium ${preferred === v ? 'border-primary-dark bg-primary-light text-primary-ink' : 'border-line bg-white'}`}
+                    className={`flex min-h-[48px] cursor-pointer items-center gap-3 rounded-xl border px-4 font-medium ${preferred.includes(v) ? 'border-primary-dark bg-primary-light text-primary-ink' : 'border-line bg-white'}`}
                   >
-                    <input type="radio" name="pref" value={v} checked={preferred === v} onChange={() => setPreferred(v)} className="h-4 w-4 accent-[#3F6FE8]" />
+                    <input type="checkbox" name="pref" value={v} checked={preferred.includes(v)} onChange={() => togglePreferred(v)} className="h-4 w-4 accent-[#3F6FE8]" />
                     {l}
                   </label>
                 ))}
@@ -271,7 +346,7 @@ export function PlanWizardPage() {
                   Bạn đã chọn {input.tasks.length} nhiệm vụ với tổng thời lượng {formatDuration(input.tasks.reduce((sum, task) => sum + task.remainingMin, 0))}.
                   Backend PaceWise sẽ xếp study block và kiểm tra deadline bằng cùng một bộ quy tắc duy nhất.
                 </p>
-                <p className="caption mt-3">Chưa có kế hoạch nào được lưu cho đến khi bạn xem và xác nhận bản nháp.</p>
+                <p className="caption mt-3">Các lựa chọn đã được ghi nhận trong bản nháp. Chưa có kế hoạch nào được áp dụng cho đến khi bạn xem và xác nhận.</p>
               </div>
             </div>
           </Card>

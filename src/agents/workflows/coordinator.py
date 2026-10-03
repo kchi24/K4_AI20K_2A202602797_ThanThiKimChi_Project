@@ -6,7 +6,7 @@ import json
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from src.agents.guardrails import classify_workflow
+from src.agents.guardrails import classify_workflow, evaluate_guardrails
 from src.agents.llm import get_agent_llm
 from src.agents.prompts.coordinator import COORDINATOR_SYSTEM_PROMPT
 from src.agents.safety import evaluate_input_policy
@@ -24,11 +24,29 @@ def coordinator_node(state: LearningGraphState) -> dict:
         last_msg = state["messages"][-1]
         query = last_msg.get("content", "") if isinstance(last_msg, dict) else getattr(last_msg, "content", "")
 
-    security_flags = evaluate_input_policy(query)
     workflow, route_confidence = classify_workflow(query, state.get("pending_action"))
     workflow_hint = str((state.get("request") or {}).get("workflow_hint") or "").lower()
     if workflow_hint in {"plan", "tracking", "qa", "understanding", "recover", "reflect"}:
         workflow, route_confidence = workflow_hint, 1.0
+    security_flags = evaluate_input_policy(query)
+    rule_decision = evaluate_guardrails(query)
+    if (
+        workflow in {"plan", "tracking", "recover", "reflect"}
+        and rule_decision["action"] == "allow"
+        and security_flags["action"] == "guided_help"
+    ):
+        # Operational workflows only schedule, measure or summarize learner
+        # data; they cannot produce a submission-ready academic answer. Avoid
+        # replacing valid workflow output when the optional semantic classifier
+        # is unavailable or over-cautious. Prompt injection remains blocked.
+        security_flags.update(
+            {
+                "action": "allow",
+                "reason": "non_answering_workflow",
+                "is_homework_cheat_attempt": False,
+            }
+        )
+        security_flags.setdefault("layers", []).append("workflow_scope")
     reasoning = "Định tuyến bằng quy tắc xác định trước."
     intent_summary = query[:160]
 

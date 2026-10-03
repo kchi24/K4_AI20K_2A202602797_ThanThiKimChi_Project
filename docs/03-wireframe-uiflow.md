@@ -76,6 +76,9 @@ flowchart LR
 ```mermaid
 flowchart LR
     A[S1 Tổng quan tuần] --> B[S5 Bắt đầu hoặc cập nhật phiên học]
+    A --> M[S2 Kế hoạch và lịch hợp nhất]
+    M --> N[Cập nhật quỹ thời gian hoặc lịch bận]
+    N --> C
     B --> C[Hệ thống tính sai lệch]
     C --> D{Có nguy cơ?}
     D -->|Không| A
@@ -90,6 +93,8 @@ flowchart LR
     K -->|Không| A
     K -->|Có| L[Lưu lịch mới và audit]
 ```
+
+`S2 Kế hoạch và lịch hợp nhất` hiển thị ca học/deadline LMS + study block PaceWise + khoảng không thể học. Sinh viên không cần nhập lý do. Thay đổi lịch bận chỉ tác động kế hoạch cá nhân và không làm thay đổi deadline LMS.
 
 ### 3.4 Hỏi đáp và liêm chính
 

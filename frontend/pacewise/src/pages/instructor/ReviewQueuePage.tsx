@@ -1,13 +1,15 @@
 import { useState } from 'react';
 import { Badge } from '../../components/ui/Badge';
+import { StatTile } from '../../components/domain/StatTile';
 import { Button } from '../../components/ui/Button';
 import { Card, CardHeader } from '../../components/ui/Card';
 import { Select, Textarea } from '../../components/ui/Field';
 import { Modal } from '../../components/ui/Modal';
 import { PageHeader } from '../../components/ui/PageHeader';
-import { EmptyState } from '../../components/ui/States';
+import { EmptyState, ErrorState } from '../../components/ui/States';
 import { useToast } from '../../components/ui/Toast';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
+import { useInstructorData } from '../../hooks/useInstructorData';
 import { useAppStore } from '../../store/AppStore';
 import { saveInstructorAction } from '../../services/api';
 import type { ReviewItem, ReviewStatus, Tone } from '../../types';
@@ -37,6 +39,12 @@ export function EvidenceCard({ item, onReview }: { item: ReviewItem; onReview: (
       <p className="caption mt-2">{item.topic}</p>
       <p className="mt-1 font-medium">{item.question}</p>
       <blockquote className="mt-3 rounded-xl bg-canvas px-4 py-3 italic text-slate-700">{item.responseExcerpt}</blockquote>
+      {item.aiConclusion && (
+        <p className="mt-3 text-[15px]"><strong>Kết luận AI: </strong>{item.aiConclusion}</p>
+      )}
+      {!!item.sourceRefs?.length && (
+        <p className="caption mt-2">Nguồn: {item.sourceRefs.map((source) => source.label).join(' · ')}</p>
+      )}
       <p className="mt-3 text-[15px]">
         <strong>Lý do chuyển: </strong>
         {item.reason}
@@ -61,8 +69,12 @@ export function ReviewQueuePage() {
   const [noteError, setNoteError] = useState('');
   const [correctedStatus, setCorrectedStatus] = useState('đang hình thành');
   const [saving, setSaving] = useState(false);
+  const { loading, error: loadError } = useInstructorData();
 
   const items = state.reviewQueue.filter((r) => filter === 'all' || r.status === 'pending' || r.status === 'in_review');
+  const openCount = state.reviewQueue.filter((item) => item.status === 'pending' || item.status === 'in_review').length;
+  const evidenceCount = state.reviewQueue.filter((item) => item.status === 'needs_evidence').length;
+  const resolvedCount = state.reviewQueue.filter((item) => ['approved', 'edited', 'rejected'].includes(item.status)).length;
 
   const decide = async (status: ReviewStatus) => {
     if (!active) return;
@@ -119,6 +131,12 @@ export function ReviewQueuePage() {
   return (
     <div className="page max-w-4xl">
       <PageHeader title="Hàng chờ duyệt" description="Các ca hệ thống không đủ tin cậy để tự kết luận. Chỉ hiển thị trích đoạn liên quan tới rubric." />
+      {loadError && state.reviewQueue.length === 0 && <ErrorState title="Không thể tải hàng chờ duyệt" description={loadError.message} requestId={loadError.requestId} />}
+      <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3" aria-busy={loading}>
+        <StatTile icon="inbox" label="Cần xử lý" value={openCount} hint="chưa có quyết định" />
+        <StatTile icon="eyeOff" label="Chờ bằng chứng" value={evidenceCount} hint="chưa đủ căn cứ" />
+        <StatTile icon="checkCircle" label="Đã xử lý" value={resolvedCount} hint="có audit" />
+      </div>
       <div className="mb-5 inline-flex rounded-xl border border-line bg-white p-1" role="tablist" aria-label="Lọc hàng chờ">
         {(
           [
@@ -211,6 +229,52 @@ export function ReviewQueuePage() {
                 <p className="text-[15px]">{active.reason}</p>
               </div>
             </div>
+            {active.aiConclusion && (
+              <div className="rounded-xl border border-line bg-canvas/50 p-3">
+                <p className="caption">AI kết luận dựa trên bằng chứng</p>
+                <p className="mt-1 text-[15px]">{active.aiConclusion}</p>
+              </div>
+            )}
+            {!!active.rubricCriteria?.length && (
+              <div>
+                <p className="text-sm font-semibold text-muted">Tiêu chí rubric liên quan</p>
+                <ul className="mt-2 divide-y divide-line rounded-xl border border-line px-3">
+                  {active.rubricCriteria.map((criterion, index) => (
+                    <li key={`${criterion.name}-${index}`} className="flex justify-between gap-3 py-2 text-[15px]">
+                      <span>{criterion.name}</span>
+                      {criterion.score != null && (
+                        <strong className="tabular-nums">
+                          {criterion.score}{criterion.maxScore != null ? `/${criterion.maxScore}` : ''}
+                        </strong>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {!!active.evidenceQuotes?.length && (
+              <div>
+                <p className="text-sm font-semibold text-muted">Bằng chứng được dùng</p>
+                <ul className="mt-2 space-y-2">
+                  {active.evidenceQuotes.map((quote, index) => (
+                    <li key={`${quote}-${index}`} className="rounded-xl bg-canvas px-4 py-3 text-[15px]">“{quote}”</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {!!active.sourceRefs?.length && (
+              <div>
+                <p className="text-sm font-semibold text-muted">Nguồn đối chiếu</p>
+                <ul className="mt-2 space-y-1 text-[15px]">
+                  {active.sourceRefs.map((source) => (
+                    <li key={`${source.type}-${source.id}`}>
+                      {source.label}
+                      <span className="caption"> · {source.type} #{source.id}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {active.rubricVersion && (
               <p className="caption">Rubric version đã dùng: v{active.rubricVersion}</p>
             )}

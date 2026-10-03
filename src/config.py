@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://openrouter.ai/api/v1"
     model_name: str = "openai/gpt-4o-mini"
     llm_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    llm_timeout_seconds: float = Field(default=45.0, ge=5.0, le=180.0)
+    llm_max_output_tokens: int = Field(default=800, ge=64, le=4096)
     semantic_safety_mode: Literal["signals", "all"] = "signals"
     llm_input_cost_per_million: float = Field(default=0.0, ge=0.0)
     llm_output_cost_per_million: float = Field(default=0.0, ge=0.0)

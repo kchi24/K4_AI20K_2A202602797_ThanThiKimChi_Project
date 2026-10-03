@@ -1,11 +1,12 @@
 import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
 
-from src.api.lms_integration import _task_payload, _weekly_completion
+from src.api.lms_integration import _assignment_risk_summary, _task_payload, _weekly_completion
 from src.api.workspace import (
     InstructorActionRequest,
     _safe_workspace,
@@ -146,6 +147,19 @@ async def test_switch_course_and_persist_workspace(client, monkeypatch, integrat
                     }
                 },
                 "reflections": {"8": {"courseId": "8", "answers": ["a", "b", "c"]}},
+                "recoveryOptions": [{"id": "A", "newBlocks": []}],
+                "recoveryOptionsKey": "drift:7:10:60:plan-1",
+                "reminders": {
+                    "preferences": {
+                        "enabled": True,
+                        "browserEnabled": True,
+                        "dailyCap": 3,
+                        "studyBlockLeadMinutes": 15,
+                        "digestHour": 20,
+                    },
+                    "deliveredAt": {"study-block:1": "2026-10-03T02:00:00Z"},
+                    "readIds": [],
+                },
                 "user": {"should": "not persist"},
             }
         },
@@ -158,6 +172,10 @@ async def test_switch_course_and_persist_workspace(client, monkeypatch, integrat
     assert loaded.json()["state"]["plan"]["id"] == "plan-1"
     assert loaded.json()["state"]["taskProgress"]["7:10"]["loggedMin"] == 45
     assert loaded.json()["state"]["reflections"]["8"]["courseId"] == "8"
+    assert loaded.json()["state"]["recoveryOptions"][0]["id"] == "A"
+    assert loaded.json()["state"]["recoveryOptionsKey"] == "drift:7:10:60:plan-1"
+    assert loaded.json()["state"]["reminders"]["preferences"]["dailyCap"] == 3
+    assert loaded.json()["state"]["reminders"]["deliveredAt"]["study-block:1"]
     assert "user" not in loaded.json()["state"]
 
     updated = await client.put(
@@ -166,6 +184,14 @@ async def test_switch_course_and_persist_workspace(client, monkeypatch, integrat
         headers={"X-CSRF-Token": csrf},
     )
     assert updated.json()["version"] == saved.json()["version"] + 1
+
+    conflicted = await client.put(
+        "/api/v1/workspace",
+        json={"state": {"plan": {"id": "stale-plan"}}, "expectedVersion": saved.json()["version"]},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert conflicted.status_code == 409
+    assert (await client.get("/api/v1/workspace")).json()["state"]["plan"]["id"] == "plan-2"
 
 
 def test_login_rate_limit_is_shared_in_database():
@@ -235,6 +261,19 @@ def test_instructor_actions_validate_and_persist_review_workflow(monkeypatch):
                     actionType="review",
                     entityId="review-action-case",
                     payload={"status": "unknown"},
+                ),
+                session,
+                session,
+                settings,
+                db,
+            )
+
+        with pytest.raises(HTTPException, match="decision note"):
+            create_instructor_action(
+                InstructorActionRequest(
+                    actionType="review",
+                    entityId="review-action-case",
+                    payload={"status": "needs_evidence"},
                 ),
                 session,
                 session,
@@ -316,10 +355,68 @@ def test_weekly_completion_uses_real_due_weeks_and_on_time_submissions():
         {"assignment_id": 11, "user_id": 1, "late": False, "workflow_state": "graded"},
     ]
 
-    rows = _weekly_completion(assignments, submissions, {1, 2})
+    rows = _weekly_completion(
+        assignments,
+        submissions,
+        {1, 2},
+        as_of=datetime(2026, 10, 20, tzinfo=UTC),
+    )
 
     assert [row["week"] for row in rows] == ["05/10", "12/10"]
     assert [row["rate"] for row in rows] == [0.5, 0.5]
+
+
+def test_weekly_completion_excludes_future_due_weeks():
+    assignments = [
+        {"id": 10, "due_at": "2026-10-01T23:59:00Z"},
+        {"id": 11, "due_at": "2026-11-01T23:59:00Z"},
+    ]
+    submissions = [
+        {"assignment_id": 10, "user_id": 1, "late": False, "workflow_state": "submitted"},
+        {"assignment_id": 11, "user_id": 1, "late": False, "workflow_state": "submitted"},
+    ]
+
+    rows = _weekly_completion(
+        assignments,
+        submissions,
+        {1},
+        as_of=datetime(2026, 10, 3, tzinfo=UTC),
+    )
+
+    assert [row["week"] for row in rows] == ["28/09"]
+
+
+def test_assignment_risk_uses_near_term_unsubmitted_work_not_all_year():
+    now = datetime(2026, 10, 3, 8, tzinfo=UTC)
+    assignments = [
+        {
+            "id": 10,
+            "title": "Near deadline",
+            "due_at": "2026-10-05T08:00:00Z",
+            "points_possible": 10,
+        },
+        {
+            "id": 11,
+            "title": "End of year",
+            "due_at": "2026-12-20T08:00:00Z",
+            "points_possible": 20,
+        },
+    ]
+    submissions = [
+        {"assignment_id": 10, "user_id": 1, "late": False, "workflow_state": "submitted"},
+    ]
+
+    rows, student_ids = _assignment_risk_summary(
+        assignments,
+        submissions,
+        {1, 2, 3},
+        as_of=now,
+    )
+
+    assert [row["assignmentId"] for row in rows] == ["10"]
+    assert rows[0]["atRiskCount"] == 2
+    assert rows[0]["missingMinutes"] == 240
+    assert student_ids == {2, 3}
 
 
 def test_assessment_version_changes_only_when_rubric_content_changes():

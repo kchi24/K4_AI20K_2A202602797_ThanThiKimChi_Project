@@ -38,6 +38,21 @@ def test_quality_gate_accepts_valid_plan():
     assert result["quality_review"]["passed"] is True
 
 
+def test_quality_gate_accepts_a_completed_plan_confirmation():
+    result = quality_gate_node(
+        {
+            "workflow": "plan",
+            "response": "Kế hoạch đã được xác nhận.",
+            "status": "completed",
+            "student_decision": {"workflow": "plan", "action": "confirmed"},
+            "output": {"confirmed_plan": {"milestones": []}},
+        }
+    )
+
+    assert result["quality_review"]["passed"] is True
+    assert "invalid_plan" not in result["quality_review"]["reasons"]
+
+
 def test_quality_gate_does_not_return_an_invalid_plan():
     review = quality_gate_node(
         {

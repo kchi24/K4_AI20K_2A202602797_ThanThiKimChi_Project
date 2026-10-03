@@ -6,22 +6,30 @@ import { Textarea } from '../../components/ui/Field';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { Banner } from '../../components/ui/States';
 import { useToast } from '../../components/ui/Toast';
-import { useDerived } from '../../hooks/useDerived';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useAppStore } from '../../store/AppStore';
 import { confirmReflection, createReflection, type AgentResponse } from '../../services/api';
-import { WEEK_START, addDays, formatDM, formatHours } from '../../utils/time';
+import { formatDM, formatHours } from '../../utils/time';
+import { weekStats } from '../../utils/progress';
+import { weeklyReflectionCycle } from '../../utils/weeklyReflection';
 
-const QUESTIONS = ['Điều gì giúp bạn học hiệu quả?', 'Điều gì khiến kế hoạch bị lệch?', 'Tuần sau bạn muốn thay đổi điều gì?'] as const;
+const QUESTIONS = [
+  'Tuần này việc gì đã hoàn thành hoặc chưa hoàn thành?',
+  'Nguyên nhân chính khiến kế hoạch đúng hoặc bị lệch?',
+  'Tuần sau cần thay đổi thời lượng, khung giờ hay cách chia task nào?',
+] as const;
 const MAX = 500;
 
 export function ReflectPage() {
   useDocumentTitle('Tổng kết tuần');
   const { state, dispatch } = useAppStore();
-  const { activeCourse, activeStats: stats } = useDerived();
   const toast = useToast();
-  const courseId = activeCourse?.id ?? state.user?.courseId ?? '';
-  const currentReflection = state.reflections[courseId];
+  const courseId = 'all';
+  const cycle = weeklyReflectionCycle(state.plan);
+  const reflectionKey = `${courseId}:${cycle.weekStart}`;
+  const currentReflection = state.reflections[reflectionKey]
+    ?? Object.values(state.reflections).find((item) => item.courseId === courseId && item.weekStart === cycle.weekStart);
+  const stats = weekStats(state.tasks, state.sessions, state.plan, cycle.weekStart);
   const [answers, setAnswers] = useState<[string, string, string]>(currentReflection?.answers ?? ['', '', '']);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -32,7 +40,7 @@ export function ReflectPage() {
     setAnswers(currentReflection?.answers ?? ['', '', '']);
     setDraft(null);
     setError('');
-  }, [courseId, currentReflection?.savedAt]);
+  }, [reflectionKey, currentReflection?.savedAt]);
 
   const save = async () => {
     if (answers.every((a) => !a.trim())) {
@@ -42,7 +50,16 @@ export function ReflectPage() {
     setError('');
     setLoading(true);
     try {
-      const result = await createReflection(answers.map((a) => a.trim()) as [string, string, string], stats as unknown as Record<string, unknown>);
+      const result = await createReflection(
+        answers.map((a) => a.trim()) as [string, string, string],
+        {
+          ...stats,
+          week_start: cycle.weekStart,
+          week_end: cycle.weekEnd,
+          effective_week_start: cycle.effectiveWeekStart,
+          timezone: 'Asia/Ho_Chi_Minh',
+        },
+      );
       setDraft(result);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Chưa tạo được bản phản tư.');
@@ -59,12 +76,14 @@ export function ReflectPage() {
       dispatch({
         type: 'SAVE_REFLECTION',
         courseId,
+        weekStart: cycle.weekStart,
+        effectiveWeekStart: cycle.effectiveWeekStart,
         answers: answers.map((a) => a.trim()) as [string, string, string],
         aiDraft: draft.reflection_draft ?? undefined,
         aiSummary: draft.response,
       });
       setDraft(null);
-      toast({ tone: 'success', title: 'Đã lưu tổng kết tuần', description: 'Điều chỉnh chỉ được lưu sau khi bạn xác nhận.' });
+      toast({ tone: 'success', title: 'Đã lưu tổng kết tuần', description: `Điều chỉnh sẽ là đầu vào cho bản nháp tuần ${formatDM(cycle.effectiveWeekStart)}; PaceWise không tự áp dụng kế hoạch.` });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Chưa xác nhận được bản phản tư.');
     } finally {
@@ -75,9 +94,24 @@ export function ReflectPage() {
   return (
     <div className="page max-w-4xl">
       <PageHeader
-        title="Tuần này của bạn"
-        description={`Nhìn lại ${activeCourse?.code ?? 'môn đang chọn'} trong tuần ${formatDM(WEEK_START)} – ${formatDM(addDays(WEEK_START, 6))} bằng dữ kiện. Đây không phải đánh giá về tính cách hay năng lực.`}
+        title="Tổng kết tuần học"
+        description={`Nhìn lại tất cả môn từ Thứ Hai ${formatDM(cycle.weekStart)} đến Chủ Nhật ${formatDM(cycle.weekEnd)}. Đây không phải đánh giá về tính cách hay năng lực.`}
       />
+      <div className="mb-5">
+        {cycle.isGracePeriod ? (
+          <Banner tone="warning" icon="clock">
+            Bạn đang dùng thời gian hoàn thành bù. Weekly Reflect đóng lúc 09:00 sáng nay.
+          </Banner>
+        ) : cycle.isOpen ? (
+          <Banner tone="info" icon="clock">
+            Weekly Reflect đã mở. Hoàn thành trong 5–10 phút để chuẩn bị bản nháp tuần sau.
+          </Banner>
+        ) : (
+          <Banner tone="neutral" icon="clock">
+            Weekly Reflect mở Chủ Nhật {formatDM(cycle.weekEnd)} lúc {cycle.opensAt}. Nếu có study block muộn, hệ thống mở sau block cuối cùng.
+          </Banner>
+        )}
+      </div>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatTile icon="checkCircle" label="Nhiệm vụ hoàn thành" value={`${stats.done} / ${stats.total}`} />
         <StatTile icon="clock" label="Phiên học" value={stats.sessionCount} />
@@ -126,9 +160,10 @@ export function ReflectPage() {
           </div>
         )}
         <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
-          <Button icon="check" onClick={save} loading={loading} disabled={!!currentReflection && !dirty}>
+          <Button icon="check" onClick={save} loading={loading} disabled={!cycle.isOpen || (!!currentReflection && !dirty)}>
             Tạo bản phản tư
           </Button>
+          {!cycle.isOpen && <span className="caption">Chưa đến cửa sổ tổng kết tuần</span>}
           {dirty && <span className="caption">Có thay đổi chưa lưu</span>}
         </div>
       </Card>

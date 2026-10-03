@@ -43,7 +43,8 @@ def get_agent_llm(model: str | None = None, temperature: float = 0.7) -> ChatOpe
         api_key=api_key,
         base_url=base_url,
         temperature=temperature,
-        timeout=90.0,
+        timeout=settings.llm_timeout_seconds,
+        max_tokens=settings.llm_max_output_tokens,
         max_retries=1,
         callbacks=[ModelUsageCallback()],
     )

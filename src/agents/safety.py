@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import json
 import re
+from collections import OrderedDict
 from collections.abc import Callable
+from hashlib import sha256
+from threading import Lock
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -19,6 +22,10 @@ from src.agents.llm import get_agent_llm
 from src.config import get_settings
 
 CLASSIFIER_VERSION = "academic_safety_classifier_v1"
+_CLASSIFIER_CACHE_MAX = 512
+_classifier_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
+_classifier_cache_lock = Lock()
+_classifier_key_locks: dict[str, Lock] = {}
 ALLOWED_ACTIONS = {"allow", "guided_help", "block"}
 ACADEMIC_REVIEW_SIGNALS = (
     "nop bai",
@@ -130,6 +137,44 @@ def _parse_classifier_response(content: str) -> dict[str, Any] | None:
     }
 
 
+def _classify_with_cache(query: str, classifier_factory: Callable[..., Any]) -> dict[str, Any] | None:
+    """Deduplicate identical classifier calls without retaining learner text."""
+    cache_key = sha256(f"{CLASSIFIER_VERSION}:{query}".encode()).hexdigest()
+    with _classifier_cache_lock:
+        cached = _classifier_cache.get(cache_key)
+        if cached is not None:
+            _classifier_cache.move_to_end(cache_key)
+            return dict(cached)
+        key_lock = _classifier_key_locks.setdefault(cache_key, Lock())
+
+    with key_lock:
+        with _classifier_cache_lock:
+            cached = _classifier_cache.get(cache_key)
+            if cached is not None:
+                _classifier_cache.move_to_end(cache_key)
+                return dict(cached)
+        try:
+            classifier = classifier_factory(temperature=0.0)
+            response = classifier.invoke(
+                [
+                    SystemMessage(content=CLASSIFIER_PROMPT),
+                    HumanMessage(content=query),
+                ]
+            )
+            classified = _parse_classifier_response(str(response.content))
+        except Exception:
+            classified = None
+        with _classifier_cache_lock:
+            if classified:
+                _classifier_cache[cache_key] = dict(classified)
+                _classifier_cache.move_to_end(cache_key)
+                while len(_classifier_cache) > _CLASSIFIER_CACHE_MAX:
+                    _classifier_cache.popitem(last=False)
+            if _classifier_key_locks.get(cache_key) is key_lock:
+                _classifier_key_locks.pop(cache_key, None)
+        return classified
+
+
 def evaluate_input_policy(
     query: str,
     *,
@@ -143,17 +188,7 @@ def evaluate_input_policy(
     semantic_required = mode == "all" or _needs_semantic_review(query)
     if decision["action"] != "allow" or not semantic_required:
         return decision
-    try:
-        classifier = classifier_factory(temperature=0.0)
-        response = classifier.invoke(
-            [
-                SystemMessage(content=CLASSIFIER_PROMPT),
-                HumanMessage(content=query),
-            ]
-        )
-        classified = _parse_classifier_response(str(response.content))
-    except Exception:
-        classified = None
+    classified = _classify_with_cache(query, classifier_factory)
     decision["layers"].append("semantic_classifier")
     decision["classifier_version"] = CLASSIFIER_VERSION
     if not classified:

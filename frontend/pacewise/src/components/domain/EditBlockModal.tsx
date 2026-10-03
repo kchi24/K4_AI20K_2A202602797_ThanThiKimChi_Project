@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import type { AvailabilityDay, Task, TimeBlock } from '../../types';
 import { validateBlockEdit } from '../../utils/scheduler';
-import { formatDay, weekDates } from '../../utils/time';
+import { calendarWeekStart, formatDay, weekDates } from '../../utils/time';
 import { Button } from '../ui/Button';
-import { Input, Select } from '../ui/Field';
+import { Select, TimeSelect } from '../ui/Field';
 import { Modal } from '../ui/Modal';
 
 export function EditBlockModal({
@@ -52,11 +52,11 @@ export function EditBlockModal({
             label="Ngày"
             value={draft.date}
             onChange={(e) => setDraft({ ...draft, date: e.target.value })}
-            options={weekDates().map((d) => ({ value: d, label: formatDay(d) }))}
+            options={weekDates(calendarWeekStart(draft.date)).map((d) => ({ value: d, label: formatDay(d) }))}
           />
           <div className="grid grid-cols-2 gap-3">
-            <Input label="Bắt đầu" type="time" value={draft.start} onChange={(e) => setDraft({ ...draft, start: e.target.value })} />
-            <Input label="Kết thúc" type="time" value={draft.end} onChange={(e) => setDraft({ ...draft, end: e.target.value })} error={check.error} />
+            <TimeSelect label="Bắt đầu" value={draft.start} onChange={(e) => setDraft({ ...draft, start: e.target.value })} />
+            <TimeSelect label="Kết thúc" includeEndOfDay value={draft.end} onChange={(e) => setDraft({ ...draft, end: e.target.value })} error={check.error} />
           </div>
           {check.warning && <p className="rounded-xl bg-warning-light px-3 py-2 text-sm text-warning-ink">{check.warning}</p>}
         </div>

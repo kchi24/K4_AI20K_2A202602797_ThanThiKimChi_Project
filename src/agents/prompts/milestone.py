@@ -66,6 +66,7 @@ BẮT BUỘC: Ở cuối phản hồi, hãy đính kèm một khối JSON theo �
   "milestones": [
     {
       "milestone_id": "M1",
+      "task_id": "course_id:assignment_id",
       "title": "Tên mốc ngắn gọn",
       "deliverable": "Đầu ra kiểm chứng được cụ thể",
       "estimated_minutes": 60,
@@ -74,5 +75,7 @@ BẮT BUỘC: Ở cuối phản hồi, hãy đính kèm một khối JSON theo �
   ]
 }
 ```
+
+`task_id` PHẢI giữ nguyên ID nhiệm vụ trong dữ liệu `goals`/`assignments`; không tự tạo ID mới. Khi có nhiều bài tập, mỗi milestone phải chỉ rõ nó thuộc bài nào.
 """
 

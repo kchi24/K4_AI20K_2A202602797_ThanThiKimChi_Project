@@ -1,57 +1,118 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Badge } from '../../components/ui/Badge';
 import { Button, ButtonLink } from '../../components/ui/Button';
+import { RecoveryCapacitySummary } from '../../components/domain/RecoveryCapacitySummary';
 import { Icon } from '../../components/ui/Icon';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { EmptyState, ErrorState, LoadingState } from '../../components/ui/States';
 import { useDerived } from '../../hooks/useDerived';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useAppStore } from '../../store/AppStore';
-import { generateRecoveryOptions } from '../../services/api';
+import { generateRecoveryOptions, switchCourse } from '../../services/api';
 import { cx } from '../../utils/cx';
 import { formatDay, formatHours } from '../../utils/time';
+import { lmsUnavailableSlots, mergeUnavailable } from '../../utils/lmsPlanning';
+import type { Drift } from '../../types';
 
 export function useRecoveryOptions() {
   const { state, dispatch } = useAppStore();
-  const { drifts } = useDerived();
-  const drift = drifts[0];
+  const { drifts, taskById } = useDerived();
+  const [searchParams] = useSearchParams();
+  const requestedTaskId = searchParams.get('taskId');
+  const requestedCourseId = searchParams.get('courseId');
+  const impactId = searchParams.get('impactId');
+  const impact = impactId ? state.planImpacts.find((item) => item.id === impactId) : undefined;
+  const impactTask = impact?.taskId ? taskById.get(impact.taskId) : undefined;
+  const syntheticDrift: Drift | undefined = impactTask && impact && impact.deficitMin > 0
+    ? {
+        taskId: impactTask.id,
+        courseId: impactTask.courseId,
+        kind: 'capacity_gap',
+        expectedMin: 0,
+        loggedMin: impactTask.loggedMin,
+        deficitMin: impact.deficitMin,
+        deadline: impact.deadline ?? impactTask.deadline,
+      }
+    : undefined;
+  const drift = syntheticDrift ?? drifts.find((item) => (
+    (!requestedTaskId || item.taskId === requestedTaskId)
+    && (!requestedCourseId || item.courseId === requestedCourseId)
+  )) ?? drifts[0];
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [retryKey, setRetryKey] = useState(0);
+  // Version the cache when the recovery contract changes so persisted legacy
+  // options are regenerated with the current structured capacity evidence.
+  const recoveryKey = drift && state.plan ? `capacity-v2:${impactId ?? 'drift'}:${drift.taskId}:${drift.deficitMin}:${state.plan.id}` : null;
   useEffect(() => {
-    if (!drift || !state.plan || state.recoveryOptions.length) return;
+    if (!drift || !state.plan || !recoveryKey || state.recoveryOptionsKey === recoveryKey) return;
     let active = true;
     setLoading(true);
     setError(null);
-    void generateRecoveryOptions(state.plan, state.tasks, drift, state.availability, state.unavailable)
-      .then((options) => active && dispatch({ type: 'SET_RECOVERY_OPTIONS', options }))
+    const task = taskById.get(drift.taskId);
+    const load = async () => {
+      if (task && state.user?.courseId !== task.courseId) {
+        await switchCourse(task.courseId);
+      }
+      return generateRecoveryOptions(
+        state.plan!,
+        state.tasks,
+        drift,
+        state.availability,
+        mergeUnavailable(state.unavailable, lmsUnavailableSlots(state.courseData)),
+        impact,
+      );
+    };
+    void load()
+      .then((options) => {
+        if (!active) return;
+        if (task && state.user?.courseId !== task.courseId) {
+          dispatch({ type: 'SET_ACTIVE_COURSE', courseId: task.courseId });
+        }
+        dispatch({ type: 'SET_RECOVERY_OPTIONS', options, key: recoveryKey });
+      })
       .catch((reason: Error) => active && setError(reason))
       .finally(() => active && setLoading(false));
     return () => { active = false; };
-  }, [drift?.taskId, drift?.deficitMin, state.plan?.id, state.recoveryOptions.length, retryKey]);
-  return { drift, options: state.recoveryOptions, loading, error, retry: () => setRetryKey((value) => value + 1) };
+  }, [drift?.taskId, drift?.deficitMin, impact?.id, state.plan?.id, state.recoveryOptionsKey, recoveryKey, retryKey]);
+  const options = state.recoveryOptionsKey === recoveryKey ? state.recoveryOptions : [];
+  return {
+    drift,
+    impact,
+    impactId,
+    options,
+    loading,
+    error,
+    retry: () => {
+      dispatch({ type: 'SET_RECOVERY_OPTIONS', options: [], key: null });
+      setRetryKey((value) => value + 1);
+    },
+  };
 }
 
 export function RecoverPage() {
   useDocumentTitle('Phục hồi kế hoạch');
   const { state } = useAppStore();
-  const { taskById } = useDerived();
-  const { drift, options, loading, error, retry } = useRecoveryOptions();
+  const { taskById, courseById } = useDerived();
+  const { drift, impactId, options, loading, error, retry } = useRecoveryOptions();
   const navigate = useNavigate();
   const [selected, setSelected] = useState<string | null>(null);
 
   if (!state.plan) {
+    const hasDraft = !!state.planDraft;
     return (
       <div className="page">
         <PageHeader title="Phục hồi kế hoạch" />
         <EmptyState
           icon="calendar"
-          title="Chưa có kế hoạch tuần"
-          description="Bạn cần tạo kế hoạch học tập trước để PaceWise có thể theo dõi và hỗ trợ phục hồi khi có lịch học bị lệch."
+          title={hasDraft ? 'Kế hoạch đang ở bản xem trước' : 'Chưa có kế hoạch 7 ngày'}
+          description={hasDraft
+            ? 'Lịch đã được tạo nhưng chưa được áp dụng. Hãy mở bản xem trước và bấm “Xác nhận và lưu”; sau đó PaceWise mới có thể theo dõi và phục hồi kế hoạch.'
+            : 'Bạn cần tạo và xác nhận kế hoạch học tập trước để PaceWise có thể theo dõi và hỗ trợ phục hồi khi lịch bị lệch.'}
           action={
-            <ButtonLink to="/plan/new" icon="plus" size="lg">
-              Tạo kế hoạch ngay
+            <ButtonLink to={hasDraft ? '/plan/preview' : '/plan/new'} icon={hasDraft ? 'check' : 'plus'} size="lg">
+              {hasDraft ? 'Mở bản xem trước' : 'Tạo kế hoạch ngay'}
             </ButtonLink>
           }
         />
@@ -79,6 +140,8 @@ export function RecoverPage() {
     return <div className="page"><ErrorState title="Chưa tạo được phương án" description={error.message} onRetry={retry} /></div>;
   }
   const task = taskById.get(drift.taskId)!;
+  const course = courseById.get(drift.courseId);
+  const selectedOption = options.find((option) => option.id === selected);
 
   return (
     <div className="page">
@@ -86,8 +149,11 @@ export function RecoverPage() {
         title="Phục hồi kế hoạch"
         description={
           <>
-            {task.title} đang trễ khoảng <strong className="text-ink">{formatHours(drift.deficitMin)}</strong> (dự kiến {formatHours(drift.expectedMin)}, đã học{' '}
-            {formatHours(drift.loggedMin)}). Deadline {formatDay(drift.deadline)}, 23:59.
+            <strong>{course?.code ? `${course.code} · ` : ''}{task.title}</strong> đang thiếu <strong className="text-ink">{formatHours(drift.deficitMin)}</strong>{' '}
+            {drift.kind === 'missed_progress'
+              ? <>(dự kiến đã học {formatHours(drift.expectedMin)}, thực tế {formatHours(drift.loggedMin)}).</>
+              : <>trong lịch còn lại trước deadline.</>}{' '}
+            Deadline {formatDay(drift.deadline)}, 23:59.
           </>
         }
       />
@@ -128,10 +194,10 @@ export function RecoverPage() {
                 </div>
                 <h2 className="mt-3 text-lg font-semibold">{o.title}</h2>
                 <p className="mt-1 text-muted">{o.summary}</p>
-                <dl className="mt-4 space-y-3 text-[15px]">
+                <div className="mt-4 space-y-3 text-[15px]">
                   <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-muted">Thay đổi</dt>
-                    <dd>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted">Thay đổi</p>
+                    <div>
                       <ul className="mt-1 space-y-1">
                         {o.changes.map((c) => (
                           <li key={c} className="flex gap-2">
@@ -140,21 +206,14 @@ export function RecoverPage() {
                           </li>
                         ))}
                       </ul>
-                    </dd>
+                    </div>
                   </div>
-                  <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-muted">Tác động</dt>
-                    <dd className="mt-1">{o.impact}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-muted">Thời gian</dt>
-                    <dd className="mt-1">{o.time}</dd>
-                  </div>
+                  <RecoveryCapacitySummary option={o} taskById={taskById} compact />
                   <div className="rounded-xl bg-warning-light px-3 py-2">
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-warning-ink">Đánh đổi</dt>
-                    <dd className="mt-1">{o.tradeoff}</dd>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-warning-ink">Đánh đổi</p>
+                    <p className="mt-1">{o.tradeoff}</p>
                   </div>
-                </dl>
+                </div>
               </label>
             );
           })}
@@ -162,15 +221,43 @@ export function RecoverPage() {
       </fieldset>
       {options.length < 3 && <p className="caption mt-3">Chỉ có {options.length} phương án thỏa ràng buộc về thời gian rảnh và deadline.</p>}
 
+      {selectedOption && !selectedOption.fullyRecovers && (
+        <section className="mt-5 rounded-2xl border border-danger/30 bg-danger-light px-5 py-4" role="alert" aria-labelledby="capacity-warning">
+          <h2 id="capacity-warning" className="text-lg font-semibold text-danger-ink">Kế hoạch chưa khả thi hoàn toàn</h2>
+          <p className="mt-1 text-danger-ink">
+            Không có phương án tự động nào được phép tự bỏ nhiệm vụ hoặc nhồi thêm thời gian ngoài lịch rảnh của bạn.
+            Phần chưa xếp cần bạn điều chỉnh hoặc chấp nhận đánh đổi.
+          </p>
+          <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-ink">
+            <li>Tăng quỹ thời gian rảnh nếu thực tế bạn còn khung giờ có thể học.</li>
+            <li>Sửa estimate nếu thời lượng ban đầu không còn chính xác.</li>
+            <li>Ưu tiên deadline gần/trọng số cao; các nhiệm vụ khác vẫn được giữ dưới dạng rủi ro, không tự động bị bỏ.</li>
+            <li>Nếu cần đổi deadline hoặc phạm vi học vụ, hãy trao đổi với giảng viên.</li>
+          </ul>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <Button variant="secondary" icon="edit" onClick={() => navigate('/plan/new')}>
+              Điều chỉnh quỹ thời gian và estimate
+            </Button>
+            <Button iconRight="arrowRight" onClick={() => navigate(`/recover/${selectedOption.id}${impactId ? `?${searchParamsForImpact(impactId, drift)}` : ''}`)}>
+              Xem lịch phần đã xếp được
+            </Button>
+          </div>
+        </section>
+      )}
+
       <div className="sticky bottom-[76px] z-20 mt-6 flex flex-col-reverse gap-3 rounded-2xl border border-line bg-white/95 p-4 shadow-card backdrop-blur sm:flex-row sm:items-center lg:bottom-4">
         <ButtonLink to="/dashboard" variant="secondary">
           Để sau
         </ButtonLink>
         <p className="caption flex-1 sm:text-right">{selected ? `Đã chọn phương án ${selected}. Lịch chưa thay đổi.` : 'Bạn chưa chọn phương án nào.'}</p>
-        <Button iconRight="arrowRight" disabled={!selected} onClick={() => navigate(`/recover/${selected}`)}>
-          Xem thay đổi
+        <Button iconRight="arrowRight" disabled={!selected} onClick={() => navigate(`/recover/${selected}${impactId ? `?${searchParamsForImpact(impactId, drift)}` : ''}`)}>
+          {selectedOption && !selectedOption.fullyRecovers ? 'Xem lịch phần đã xếp' : 'Xem thay đổi'}
         </Button>
       </div>
     </div>
   );
+}
+
+function searchParamsForImpact(impactId: string, drift: Drift) {
+  return new URLSearchParams({ impactId, taskId: drift.taskId, courseId: drift.courseId }).toString();
 }

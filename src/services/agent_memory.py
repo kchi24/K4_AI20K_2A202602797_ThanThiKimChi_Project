@@ -138,8 +138,19 @@ def persist_agent_outcome(
             assessment=assessment,
             recorded_at=now,
         )
-    if workflow == "reflect" and result.get("reflection_draft"):
+    if (
+        workflow == "reflect"
+        and result.get("status") == "completed"
+        and result.get("reflection_draft")
+    ):
         profile["last_reflection"] = result["reflection_draft"]
+        profile["next_week_adjustment"] = {
+            "effective_week_start": result["reflection_draft"].get(
+                "effective_week_start"
+            ),
+            "adjustment": result["reflection_draft"].get("adjustment"),
+            "confirmed_at": now,
+        }
     if workflow == "tracking":
         profile["last_progress_metrics"] = result.get("progress_metrics") or {}
 
