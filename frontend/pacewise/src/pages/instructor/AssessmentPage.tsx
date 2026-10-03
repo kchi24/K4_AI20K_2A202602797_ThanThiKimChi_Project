@@ -2,11 +2,14 @@ import { useState } from 'react';
 import { Badge } from '../../components/ui/Badge';
 import { Button, ButtonLink } from '../../components/ui/Button';
 import { Card } from '../../components/ui/Card';
+import { StatTile } from '../../components/domain/StatTile';
 import { Textarea } from '../../components/ui/Field';
 import { Modal } from '../../components/ui/Modal';
 import { PageHeader } from '../../components/ui/PageHeader';
+import { ErrorState } from '../../components/ui/States';
 import { useToast } from '../../components/ui/Toast';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
+import { useInstructorData } from '../../hooks/useInstructorData';
 import { useAppStore } from '../../store/AppStore';
 import { saveInstructorAction } from '../../services/api';
 import type { AssessmentItem, AssessmentStatus, Tone } from '../../types';
@@ -27,6 +30,11 @@ export function AssessmentPage() {
   const [err, setErr] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState('');
+  const { loading, error: loadError } = useInstructorData();
+  const statusCounts = state.assessments.reduce<Record<AssessmentStatus, number>>(
+    (counts, item) => ({ ...counts, [item.status]: counts[item.status] + 1 }),
+    { draft: 0, review: 0, approved: 0, rejected: 0 },
+  );
 
   const updateStatus = async (item: AssessmentItem, status: AssessmentStatus, actionNote?: string) => {
     setBusyId(item.id);
@@ -59,6 +67,13 @@ export function AssessmentPage() {
   return (
     <div className="page max-w-4xl">
       <PageHeader title="Ngân hàng câu hỏi" description="Duyệt câu hỏi và rubric trước khi dùng cho sinh viên. Nội dung do hệ thống tạo không tự xuất bản." />
+      {loadError && state.assessments.length === 0 && <ErrorState title="Không thể tải ngân hàng câu hỏi" description={loadError.message} requestId={loadError.requestId} />}
+      <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4" aria-busy={loading}>
+        <StatTile icon="file" label="Bản nháp" value={statusCounts.draft} hint="chưa gửi duyệt" />
+        <StatTile icon="clock" label="Chờ giảng viên" value={statusCounts.review} hint="cần quyết định" />
+        <StatTile icon="checkCircle" label="Đã xuất bản" value={statusCounts.approved} hint="đang dùng" />
+        <StatTile icon="refresh" label="Cần chỉnh sửa" value={statusCounts.rejected} hint="đã trả lại" />
+      </div>
       {actionError && <p role="alert" className="mb-4 text-sm font-medium text-danger-ink">{actionError}</p>}
       <div className="space-y-4">
         {state.assessments.map((a) => (

@@ -92,6 +92,22 @@ async def test_student_sync_builds_multicourse_payload_and_review_resolutions(mo
             ]
         if path == "/api/pacewise/v1/users/12/planner":
             return [{"course_id": 701, "assignment_id": 1, "title": "Todo"}]
+        if path == "/api/pacewise/v1/users/12/calendar":
+            return [
+                {
+                    "id": "event-1",
+                    "source_id": 1,
+                    "type": "event",
+                    "course_id": 701,
+                    "course_code": "CS701",
+                    "title": "Online class",
+                    "starts_at": "2099-10-01T10:00:00Z",
+                    "ends_at": "2099-10-01T11:00:00Z",
+                    "duration_minutes": 60,
+                    "event_kind": "class_session",
+                    "editable": False,
+                }
+            ]
         if path.endswith("/assignments"):
             course_id = int(path.split("/")[-2])
             return [
@@ -170,6 +186,46 @@ async def test_student_sync_builds_multicourse_payload_and_review_resolutions(mo
 
 
 @pytest.mark.asyncio
+async def test_course_snapshot_uses_the_effective_planner_deadline():
+    session = _session()
+
+    async def service_get(path, params=None):
+        if path.endswith("/assignments"):
+            return [
+                {
+                    "id": 9,
+                    "title": "Individual deadline",
+                    "due_at": "2026-10-05T23:59:00+07:00",
+                    "points_possible": 10,
+                }
+            ]
+        if path.endswith("/submissions"):
+            return []
+        if path.endswith("/modules") or path.endswith("/files") or path.endswith("/appointment-groups"):
+            return []
+        raise AssertionError(path)
+
+    client = SimpleNamespace(service_get=AsyncMock(side_effect=service_get))
+    tasks, _snapshot = await lms_integration._course_snapshot(
+        client,
+        {"id": 701},
+        session,
+        [
+            {
+                "id": 1,
+                "course_id": 701,
+                "assignment_id": 9,
+                "due_at": "2026-10-06T23:59:00+07:00",
+                "completed": False,
+            }
+        ],
+    )
+
+    assert tasks[0]["deadline"] == "2026-10-06"
+    assert tasks[0]["dueAt"] == "2026-10-06T23:59:00+07:00"
+
+
+@pytest.mark.asyncio
 async def test_instructor_snapshot_loads_private_course_analytics(monkeypatch):
     session = _session(role="instructor")
 
@@ -236,12 +292,13 @@ def _overview_service(student_count: int):
     assignment = {
         "id": 10,
         "title": "Project",
-        "due_at": "2026-10-06T23:59:00Z",
+        "due_at": "2026-10-02T23:59:00Z",
         "assignment_group": {"id": 1},
         "rubric": {"id": 1},
     }
     submissions = [
         {
+            "id": 100 + index,
             "assignment_id": 10,
             "user_id": index,
             "late": index == student_count,
@@ -264,8 +321,14 @@ def _overview_service(student_count: int):
                     "user_id": 1,
                     "score": 4,
                     "max_score": 10,
-                    "competency_key": "recursion",
+                    "competency_key": "outcome:5",
                     "evidence_type": "quiz",
+                    "source_type": "submission",
+                    "source_id": 101,
+                    "details": {
+                        "comment": "The base case is not justified.",
+                        "rubric": {"understanding": 1, "process": 2},
+                    },
                     "observed_at": "2026-10-02T10:00:00Z",
                 }
             ]
@@ -281,6 +344,8 @@ def _overview_service(student_count: int):
             return [{"id": 1, "name": "Teams", "groups": [{"id": 1}]}]
         if path.endswith("/modules"):
             return [{"id": 1, "name": "Week 1", "requirements": [{"type": "view"}]}]
+        if path.endswith("/outcomes"):
+            return [{"id": 5, "title": "Recursive problem solving"}]
         raise AssertionError(path)
 
     return service_get
@@ -350,8 +415,13 @@ async def test_instructor_overview_aggregates_anonymous_workflow_data(monkeypatc
 
     stats = result["groupStats"]["all"]
     assert stats["onTimeRate"] == pytest.approx(0.8)
+    assert stats["onTimeTotal"] == 5
     assert stats["weeklyCompletion"][0]["count"] == 4
-    assert stats["topics"][0]["topic"] == "recursion"
+    assert stats["topics"][0]["topic"] == "Recursive problem solving"
+    evidence_case = next(item for item in result["reviewQueue"] if item["id"] == "EV-1")
+    assert evidence_case["responseExcerpt"] == "The base case is not justified."
+    assert evidence_case["rubricCriteria"][0]["name"] == "Hiểu khái niệm"
+    assert evidence_case["sourceRefs"][0]["label"] == "Project"
     assert result["assessments"][0]["status"] == "approved"
     assert any(item["id"] == "coverage-agent-review" for item in result["reviewQueue"])
     assert result["lmsSummary"]["weightedAssignments"] == 1

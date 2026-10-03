@@ -357,8 +357,16 @@ python evals/run_pilot_eval.py evals/datasets/pilot-human-v1.jsonl
 File `evals/datasets/pilot-human-template.jsonl` chỉ mô tả schema; không phải dữ
 liệu người thật và không được dùng để tuyên bố metric pilot.
 
-Chạy load test. Lệnh 1.000 virtual users là bài kiểm tra acceptance trên môi trường staging đủ
-tài nguyên, không nên chạy trên laptop yếu và không được coi là đã pass nếu chưa lưu report:
+Smoke test đồng thời cho MVP dùng ba tài khoản sinh viên demo, đồng thời báo median/max latency,
+error và chênh lệch số lần gọi/token/cost của LLM:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\evaluate_concurrent_students.py
+```
+
+Đây chỉ là kiểm tra tích hợp với 2–3 người dùng, không phải bằng chứng hệ thống chịu được 1.000
+người. Bài 1.000 virtual users được hoãn tới môi trường staging đủ tài nguyên; khi thực hiện mới
+dùng lệnh sau và phải lưu report trước khi tuyên bố đạt:
 
 ```powershell
 pip install -r requirements.txt

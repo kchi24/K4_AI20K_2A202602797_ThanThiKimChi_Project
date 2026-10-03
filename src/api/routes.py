@@ -298,6 +298,7 @@ async def chat(
         draft = build_plan_draft(
             plan_input,
             lms_context["assignments"],
+            proposed_milestones=result.get("proposed_milestones") or [],
             timezone_name=settings.app_timezone,
         )
         milestone_validation = output.get("plan_validation")

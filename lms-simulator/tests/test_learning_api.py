@@ -6,6 +6,7 @@ from app.db import Base, get_db
 from app.main import app
 from app.models import (
     Assignment,
+    CalendarEvent,
     Course,
     CourseModule,
     Enrollment,
@@ -92,6 +93,49 @@ def _login(client: TestClient, email: str) -> dict[str, str]:
     response = client.post("/api/session", json={"email": email, "password": "demo12345"})
     assert response.status_code == 200
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+def test_demo_submission_timing_supports_early_on_time_and_late() -> None:
+    client, factory = _client()
+    student = _login(client, "student@example.test")
+
+    expected_late = {-60: False, 0: False, 60: True}
+    for offset_minutes, late in expected_late.items():
+        response = client.post(
+            "/api/assignments/1/submissions",
+            headers=student,
+            json={
+                "user_id": 2,
+                "text_entry": f"Demo at {offset_minutes} minutes",
+                "demo_submission_offset_minutes": offset_minutes,
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["late"] is late
+        with factory() as db:
+            due_at = db.get(Assignment, 1).due_at
+        submitted_at = datetime.fromisoformat(payload["submitted_at"])
+        if due_at.tzinfo is None:
+            due_at = due_at.replace(tzinfo=UTC)
+        if submitted_at.tzinfo is None:
+            submitted_at = submitted_at.replace(tzinfo=UTC)
+        assert submitted_at == due_at + timedelta(minutes=offset_minutes)
+
+    history = client.get("/api/submissions/1/history", headers=student)
+    assert history.status_code == 200
+    assert len(history.json()["attempts"]) == 3
+
+    invalid = client.post(
+        "/api/assignments/1/submissions",
+        headers=student,
+        json={
+            "user_id": 2,
+            "text_entry": "Outside the supported demo range",
+            "demo_submission_offset_minutes": 10_081,
+        },
+    )
+    assert invalid.status_code == 422
 
 
 def test_assignment_groups_deadline_override_and_rubric() -> None:
@@ -265,6 +309,33 @@ def test_module_progress_submission_history_and_resource_version(monkeypatch) ->
     assert other_user_files.json() == []
     with factory() as db:
         assert db.scalar(select(Submission).where(Submission.id == submitted.json()["id"]))
+
+
+def test_service_calendar_exposes_fixed_student_commitments(monkeypatch) -> None:
+    client, factory = _client()
+    starts_at = datetime.now(UTC) + timedelta(days=1)
+    with factory() as db:
+        db.add(
+            CalendarEvent(
+                user_id=2,
+                course_id=1,
+                title="Online class",
+                description="course-activity-v1; required",
+                starts_at=starts_at,
+                ends_at=starts_at + timedelta(minutes=90),
+                event_kind="class_session",
+            )
+        )
+        db.commit()
+    monkeypatch.setenv("PACEWISE_API_KEY", "test-service-key")
+    response = client.get(
+        "/api/pacewise/v1/users/2/calendar",
+        headers={"X-PaceWise-Key": "test-service-key"},
+    )
+    assert response.status_code == 200
+    assert response.json()[0]["event_kind"] == "class_session"
+    assert response.json()[0]["duration_minutes"] == 90
+    assert response.json()[0]["editable"] is False
 
 
 def test_sections_groups_planner_and_analytics() -> None:

@@ -5,9 +5,10 @@ Agent phụ trách: Recovery Agent.
 
 import json
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -16,6 +17,7 @@ from src.agents.llm import get_agent_llm
 from src.agents.prompts.recovery import RECOVERY_SYSTEM_PROMPT
 from src.agents.state import LearningGraphState
 from src.agents.validators import build_pending_action, validate_recovery_options
+from src.services.planning import build_plan_draft
 
 
 def _clock_minutes(value: str) -> int:
@@ -27,20 +29,77 @@ def _clock(value: int) -> str:
     return f"{value // 60:02d}:{value % 60:02d}"
 
 
+def _scheduled_minutes(blocks: list[dict[str, Any]]) -> int:
+    """Return executable study time represented by schedule blocks."""
+    total = 0
+    for block in blocks:
+        try:
+            total += max(0, _clock_minutes(block["end"]) - _clock_minutes(block["start"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return total
+
+
+def _recovery_now(state: LearningGraphState) -> datetime:
+    raw = (state.get("request") or {}).get("current_time")
+    if raw:
+        try:
+            parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            return parsed.astimezone(ZoneInfo("Asia/Ho_Chi_Minh")) if parsed.tzinfo else parsed
+        except ValueError:
+            pass
+    return datetime.now(ZoneInfo("Asia/Ho_Chi_Minh"))
+
+
+def _recovery_assignments(state: LearningGraphState) -> list[dict[str, Any]]:
+    """Limit validation and UI evidence to tasks in the recovery proposal."""
+    assignments = list(state.get("assignments") or [])
+    recovery_task_ids = {
+        str(item.get("task_id") or item.get("taskId") or item.get("milestone_id") or "")
+        for item in state.get("proposed_milestones") or []
+    }
+    recovery_task_ids.discard("")
+    if not recovery_task_ids:
+        return assignments
+    return [
+        assignment
+        for assignment in assignments
+        if str(assignment.get("id") or "") in recovery_task_ids
+    ]
+
+
 def _executable_recovery_options(state: LearningGraphState) -> list[dict[str, Any]]:
     """Build schedule patches on the server so the browser never invents recovery decisions."""
     plan = state.get("current_plan") or {}
     blocks = list(plan.get("blocks") or [])
     metrics = state.get("progress_metrics") or {}
     drift = metrics.get("drift") or {}
+    plan_impact = metrics.get("plan_impact") or {}
+    affected_block_ids = {
+        str(block_id) for block_id in plan_impact.get("affectedBlockIds", []) if block_id
+    }
+    current = _recovery_now(state)
+    current_date = current.date()
+    recovery_week_start = current_date - timedelta(days=current_date.weekday())
+    recovery_end = recovery_week_start + timedelta(days=13)
+    # A conflicted block is no longer usable capacity. Remove it from executable
+    # recovery candidates. Past blocks describe history rather than capacity and
+    # must never be copied into a new executable plan. Recovery proposals are
+    # limited to the current and following calendar weeks. Option C still
+    # preserves the original snapshot unchanged.
+    working_blocks = [
+        block
+        for block in blocks
+        if str(block.get("id")) not in affected_block_ids
+        and (not block.get("date") or str(block.get("date"))[:10] >= current_date.isoformat())
+        and (not block.get("date") or str(block.get("date"))[:10] <= recovery_end.isoformat())
+    ]
     task_id = str(drift.get("taskId") or drift.get("task_id") or "")
     deficit = int(drift.get("deficitMin") or drift.get("deficit_minutes") or 0)
     deadline = str(drift.get("deadline") or "")[:10]
-    week_start_raw = str(plan.get("weekStart") or plan.get("week_start") or "")[:10]
-    if not task_id or deficit <= 0 or not deadline or not week_start_raw:
+    if not task_id or deficit <= 0 or not deadline:
         return []
     try:
-        week_start = date.fromisoformat(week_start_raw)
         deadline_date = date.fromisoformat(deadline)
     except ValueError:
         return []
@@ -50,7 +109,7 @@ def _executable_recovery_options(state: LearningGraphState) -> list[dict[str, An
     # than only the drifting task's ISO date; otherwise a valid executable
     # patch is discarded and replaced by the legacy text-only fallback.
     protected_deadlines: list[str] = []
-    for assignment in state.get("assignments") or []:
+    for assignment in _recovery_assignments(state):
         identifier = next(
             (
                 str(assignment.get(field, "")).strip()
@@ -67,21 +126,36 @@ def _executable_recovery_options(state: LearningGraphState) -> list[dict[str, An
     availability = state.get("availability") or []
     unavailable = state.get("unavailable_slots") or []
     free_slots: list[tuple[str, int, int]] = []
-    for item in availability:
-        weekday = int(item.get("weekday", item.get("day", 0)))
-        slot_date = week_start + timedelta(days=weekday)
+    schedule_start = current_date
+    for offset in range(max(0, (recovery_end - schedule_start).days + 1)):
+        slot_date = schedule_start + timedelta(days=offset)
         if slot_date > deadline_date:
             continue
+        weekday = slot_date.weekday()
+        item = next(
+            (
+                candidate
+                for candidate in availability
+                if int(candidate.get("weekday", candidate.get("day", -1))) == weekday
+                and candidate.get("enabled", True)
+            ),
+            None,
+        )
+        if not item:
+            continue
         start, end = _clock_minutes(item["start"]), _clock_minutes(item["end"])
+        if slot_date == current_date:
+            start = max(start, current.hour * 60 + current.minute)
         occupied = [
             (_clock_minutes(block["start"]), _clock_minutes(block["end"]))
-            for block in blocks
+            for block in working_blocks
             if block.get("date") == slot_date.isoformat()
         ]
         occupied.extend(
             (_clock_minutes(slot["start"]), _clock_minutes(slot["end"]))
             for slot in unavailable
             if int(slot.get("weekday", slot.get("day", -1))) == weekday
+            and (not slot.get("date") or str(slot.get("date"))[:10] == slot_date.isoformat())
         )
         cursor = start
         for other_start, other_end in sorted(occupied):
@@ -112,20 +186,117 @@ def _executable_recovery_options(state: LearningGraphState) -> list[dict[str, An
             cursor += duration + 10
     placed = deficit - left
     options = []
-    if placed:
+
+    milestones = [
+        item
+        for item in state.get("proposed_milestones") or []
+        if item.get("milestone_id") and int(item.get("estimated_minutes") or 0) > 0
+    ]
+    if milestones:
+        rebalance = build_plan_draft(
+            {
+                "weekStart": recovery_week_start.isoformat(),
+                "goal": "Phục hồi kế hoạch đa môn",
+                "tasks": [
+                    {
+                        "taskId": str(item["milestone_id"]),
+                        "remainingMin": int(item["estimated_minutes"]),
+                    }
+                    for item in milestones
+                ],
+                "availability": availability,
+                "unavailable": unavailable,
+                "preferred": ["morning", "afternoon", "evening"],
+            },
+            [
+                {
+                    "id": str(item["milestone_id"]),
+                    "title": item.get("title") or item["milestone_id"],
+                    "deadline": item.get("deadline"),
+                    "priority": item.get("priority") or "medium",
+                    "assignment_group": item.get("assignment_group"),
+                    "points_possible": item.get("points_possible") or 0,
+                }
+                for item in milestones
+            ],
+            today=current_date,
+            window_days=14,
+        )
+        old_ids: dict[str, list[str]] = {}
+        for block in sorted(working_blocks, key=lambda item: (item.get("taskId"), item.get("date"), item.get("start"))):
+            old_ids.setdefault(str(block.get("taskId")), []).append(str(block.get("id")))
+        reused: dict[str, int] = {}
+        rebalanced_blocks = []
+        for block in rebalance["blocks"]:
+            task = str(block["taskId"])
+            index = reused.get(task, 0)
+            previous_ids = old_ids.get(task, [])
+            rebalanced_blocks.append({**block, "id": previous_ids[index] if index < len(previous_ids) else block["id"]})
+            reused[task] = index + 1
+        workload_minutes = int(rebalance["feasibility"]["requiredMin"])
+        scheduled_minutes = min(workload_minutes, _scheduled_minutes(rebalanced_blocks))
+        missing_minutes = max(0, workload_minutes - scheduled_minutes)
+        moved_count = sum(
+            1
+            for old in blocks
+            for new in rebalanced_blocks
+            if old.get("id") == new.get("id")
+            and (old.get("date"), old.get("start"), old.get("end")) != (new.get("date"), new.get("start"), new.get("end"))
+        )
         options.append(
             {
                 "id": "A",
-                "title": "Bảo vệ deadline",
+                "title": "Cân bằng lại tất cả môn",
+                "summary": "Xếp lại toàn bộ phần việc còn lại theo deadline gần nhất và quỹ thời gian mới.",
+                "changes": [
+                    f"Di chuyển {moved_count} study block giữa các ngày",
+                    f"Bảo vệ {len(milestones)} nhiệm vụ thuộc nhiều môn",
+                ],
+                "impact": (
+                    "Đủ capacity trong cửa sổ tuần này và tuần sau."
+                    if rebalance["feasibility"]["feasible"]
+                    else f"Vẫn thiếu {rebalance['feasibility']['deficitMin']} phút cần quyết định thêm."
+                ),
+                "time": f"Xếp lại {rebalance['feasibility']['requiredMin']} phút",
+                "tradeoff": "Một số task có deadline xa có thể được dời để bảo vệ deadline gần hơn.",
+                "new_blocks": rebalanced_blocks,
+                "assumptions": ["Ước lượng còn lại và lịch bận mới nhất là chính xác."],
+                "fully_recovers": rebalance["feasibility"]["feasible"],
+                "workload_minutes": workload_minutes,
+                "scheduled_minutes": scheduled_minutes,
+                "missing_minutes": missing_minutes,
+                "shortfalls": list(rebalance["feasibility"].get("shortfalls") or []),
+                "option_name": "Cân bằng lại tất cả môn",
+                "kept_items": [str(item["milestone_id"]) for item in milestones],
+                "moved_items": [str(item["milestone_id"]) for item in milestones],
+                "hours_short_or_free": round(-rebalance["feasibility"]["deficitMin"] / 60, 2),
+                "protected_deadlines": protected_deadlines,
+                "remaining_risks": (
+                    "Không còn thiếu capacity trong cửa sổ hiện tại."
+                    if rebalance["feasibility"]["feasible"]
+                    else f"Còn thiếu {rebalance['feasibility']['deficitMin']} phút."
+                ),
+            }
+        )
+    if placed:
+        add_only_id = "B" if options else "A"
+        options.append(
+            {
+                "id": add_only_id,
+                "title": "Chỉ bổ sung thời gian trống",
                 "summary": f"Xếp thêm {placed} phút vào các khung giờ còn trống trước deadline.",
                 "changes": [f"Thêm phiên {item['date']} {item['start']}-{item['end']}" for item in added],
                 "impact": f"Bù được {placed}/{deficit} phút thiếu hụt.",
                 "time": f"Thêm {placed} phút",
                 "tradeoff": "Giảm quỹ thời gian dự phòng trước deadline.",
-                "new_blocks": [*blocks, *added],
+                "new_blocks": [*working_blocks, *added],
                 "assumptions": ["Khung giờ rảnh do sinh viên khai báo vẫn còn khả dụng."],
                 "fully_recovers": placed >= deficit,
-                "option_name": "Bảo vệ deadline",
+                "workload_minutes": deficit,
+                "scheduled_minutes": placed,
+                "missing_minutes": max(0, deficit - placed),
+                "shortfalls": [] if placed >= deficit else [{"taskId": task_id, "missingMin": deficit - placed}],
+                "option_name": "Chỉ bổ sung thời gian trống",
                 "kept_items": [task_id],
                 "moved_items": [],
                 "hours_short_or_free": round((placed - deficit) / 60, 2),
@@ -133,29 +304,7 @@ def _executable_recovery_options(state: LearningGraphState) -> list[dict[str, An
                 "remaining_risks": "Không còn thiếu thời gian." if placed >= deficit else f"Còn thiếu {deficit - placed} phút.",
             }
         )
-        reduced = added[: max(1, len(added) // 2)]
-        reduced_minutes = sum(_clock_minutes(item["end"]) - _clock_minutes(item["start"]) for item in reduced)
-        options.append(
-            {
-                "id": "B",
-                "title": "Phục hồi một phần",
-                "summary": f"Chỉ xếp thêm {reduced_minutes} phút để giữ lại thời gian dự phòng.",
-                "changes": [f"Thêm phiên {item['date']} {item['start']}-{item['end']}" for item in reduced],
-                "impact": f"Bù được {reduced_minutes}/{deficit} phút thiếu hụt.",
-                "time": f"Thêm {reduced_minutes} phút",
-                "tradeoff": f"Còn thiếu {max(0, deficit - reduced_minutes)} phút cần xử lý thủ công.",
-                "new_blocks": [*blocks, *reduced],
-                "assumptions": ["Sinh viên chấp nhận chỉ phục hồi một phần tiến độ."],
-                "fully_recovers": reduced_minutes >= deficit,
-                "option_name": "Phục hồi một phần",
-                "kept_items": [task_id],
-                "moved_items": [],
-                "hours_short_or_free": round((reduced_minutes - deficit) / 60, 2),
-                "protected_deadlines": protected_deadlines,
-                "remaining_risks": f"Còn thiếu {max(0, deficit - reduced_minutes)} phút.",
-            }
-        )
-    else:
+    elif not options:
         options.append(
             {
                 "id": "B",
@@ -168,6 +317,10 @@ def _executable_recovery_options(state: LearningGraphState) -> list[dict[str, An
                 "new_blocks": blocks,
                 "assumptions": ["Giảng viên sẽ xem xét yêu cầu hỗ trợ; hệ thống không tự gửi yêu cầu."],
                 "fully_recovers": False,
+                "workload_minutes": deficit,
+                "scheduled_minutes": 0,
+                "missing_minutes": deficit,
+                "shortfalls": [{"taskId": task_id, "missingMin": deficit}],
                 "option_name": "Yêu cầu hỗ trợ",
                 "kept_items": [task_id],
                 "moved_items": [],
@@ -188,6 +341,10 @@ def _executable_recovery_options(state: LearningGraphState) -> list[dict[str, An
             "new_blocks": blocks,
             "assumptions": [],
             "fully_recovers": False,
+            "workload_minutes": deficit,
+            "scheduled_minutes": 0,
+            "missing_minutes": deficit,
+            "shortfalls": [{"taskId": task_id, "missingMin": deficit}],
             "option_name": "Giữ nguyên lịch",
             "kept_items": [task_id],
             "moved_items": [],
@@ -459,11 +616,13 @@ def recover_node(state: LearningGraphState) -> dict:
     executable_options = _executable_recovery_options(state)
     if executable_options:
         recovery_options = executable_options
-    recovery_validation = validate_recovery_options(recovery_options, state.get("assignments") or [])
+        response_text = _format_options_as_text(recovery_options)
+    recovery_assignments = _recovery_assignments(state)
+    recovery_validation = validate_recovery_options(recovery_options, recovery_assignments)
     if not recovery_validation["valid"]:
         recovery_options = _deterministic_recovery_options(state)
         response_text = _format_options_as_text(recovery_options)
-        recovery_validation = validate_recovery_options(recovery_options, state.get("assignments") or [])
+        recovery_validation = validate_recovery_options(recovery_options, recovery_assignments)
 
     # LOẠI BỎ KHỐI JSON KHỎI RESPONSE_TEXT ĐỂ NGƯỜI DÙNG CHỈ THẤY DẠNG TEXT THÂN THIỆN
     clean_user_response = _clean_json_from_response(response_text, recovery_options)
@@ -485,4 +644,3 @@ def recover_node(state: LearningGraphState) -> dict:
         "status": "awaiting_student",
         "output": {"recovery_validation": recovery_validation},
     }
-

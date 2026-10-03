@@ -326,11 +326,12 @@ async def test_plan_returns_server_side_canonical_schedule(client, authenticated
     assert response.json()["output"]["plan_validation"]["valid"] is True
     assert response.json()["output"]["milestone_validation"]["valid"] is False
     assert draft["feasibility"]["feasible"] is True
-    assert (
+    scheduled_minutes = (
         sum(
             (int(block["end"][:2]) * 60 + int(block["end"][3:]))
             - (int(block["start"][:2]) * 60 + int(block["start"][3:]))
             for block in draft["blocks"]
         )
-        == 60
     )
+    assert scheduled_minutes == draft["planningTargets"][0]["targetMin"]
+    assert scheduled_minutes < 60  # Far-future work is staged instead of forced into this week.

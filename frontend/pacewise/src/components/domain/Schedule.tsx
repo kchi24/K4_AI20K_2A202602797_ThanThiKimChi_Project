@@ -51,11 +51,11 @@ export function Schedule({ blocks, taskById, courseById, onEdit, highlightIds, e
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                        <p className="font-semibold">{task?.title ?? 'Nhiệm vụ'}</p>
+                        <p className="font-semibold">{b.milestoneTitle ?? task?.title ?? 'Nhiệm vụ'}</p>
                         <CourseTag course={course} />
                         {past && <Badge>Đã qua</Badge>}
                       </div>
-                      {task && <p className="caption">Hạn chót {formatDeadline(task.deadline)}</p>}
+                      {task && <p className="caption">{b.milestoneTitle ? `${task.title} · ` : ''}Hạn chót {formatDeadline(task.deadline)}</p>}
                     </div>
                     {onEdit && <IconButton icon="edit" label={`Sửa buổi ${task?.title} ${formatRange(b.start, b.end)}`} onClick={() => onEdit(b)} />}
                   </li>

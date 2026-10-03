@@ -56,18 +56,25 @@ def reflect_node(state: LearningGraphState) -> dict:
     except Exception:
         response_text = "Mình chưa thể tổng hợp phản tư tự động lúc này; bạn có thể kiểm tra bản điều chỉnh tối thiểu bên dưới."
 
+    progress_metrics = state.get("progress_metrics") or {}
     reflection_draft = {
         "effective": "",
         "deviation_cause": "",
         "adjustment": "Giữ một thay đổi nhỏ, cụ thể cho tuần sau.",
-        "evidence": state.get("progress_metrics") or {},
+        "evidence": progress_metrics,
+        "week_start": progress_metrics.get("week_start"),
+        "week_end": progress_metrics.get("week_end"),
+        "effective_week_start": progress_metrics.get("effective_week_start"),
     }
     json_match = re.search(r"```json\s*([\s\S]*?)```", response_text)
     if json_match:
         try:
             parsed = json.loads(json_match.group(1))
             if isinstance(parsed, dict):
-                reflection_draft.update({key: parsed.get(key, reflection_draft[key]) for key in reflection_draft})
+                ai_fields = ("effective", "deviation_cause", "adjustment", "evidence")
+                reflection_draft.update(
+                    {key: parsed.get(key, reflection_draft[key]) for key in ai_fields}
+                )
         except (TypeError, ValueError, json.JSONDecodeError):
             pass
     clean_response = re.sub(r"```json[\s\S]*?```", "", response_text).strip() or response_text

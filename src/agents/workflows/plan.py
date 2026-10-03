@@ -87,8 +87,10 @@ def _extract_milestones_from_text(text: str) -> list[dict[str, Any]]:
                             item.get("estimated_minutes") or item.get("duration_minutes") or item.get("duration")
                         )
                         deps = _parse_depends_on(item.get("depends_on") or item.get("dependencies"))
+                        task_id = str(item.get("task_id") or item.get("taskId") or item.get("assignment_id") or "")
                         result.append({
                             "milestone_id": m_id,
+                            **({"task_id": task_id} if task_id else {}),
                             "title": title,
                             "deliverable": deliv,
                             "estimated_minutes": est_min,
@@ -113,8 +115,10 @@ def _extract_milestones_from_text(text: str) -> list[dict[str, Any]]:
                     result = []
                     for idx, item in enumerate(items):
                         if isinstance(item, dict):
+                            task_id = str(item.get("task_id") or item.get("taskId") or item.get("assignment_id") or "")
                             result.append({
                                 "milestone_id": str(item.get("milestone_id") or f"M{idx + 1}"),
+                                **({"task_id": task_id} if task_id else {}),
                                 "title": str(item.get("title") or f"Milestone {idx + 1}"),
                                 "deliverable": str(item.get("deliverable") or "Đầu ra kiểm chứng được"),
                                 "estimated_minutes": _parse_int_minutes(item.get("estimated_minutes")),

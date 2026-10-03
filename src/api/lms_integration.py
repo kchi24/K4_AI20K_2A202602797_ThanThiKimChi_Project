@@ -1,7 +1,7 @@
 import json
 from asyncio import gather
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
@@ -58,12 +58,14 @@ def _weekly_completion(
     student_ids: set[int],
     *,
     limit: int = 8,
+    as_of: datetime | None = None,
 ) -> list[dict]:
     """Aggregate on-time completion by assignment due week without identifiers."""
+    cutoff = as_of or datetime.now(UTC)
     assignments_by_week: dict[tuple[int, int], list[int]] = defaultdict(list)
     for assignment in assignments:
         due_at = _parse_lms_datetime(assignment.get("due_at"))
-        if due_at is None:
+        if due_at is None or due_at > cutoff:
             continue
         calendar = due_at.isocalendar()
         assignments_by_week[(calendar.year, calendar.week)].append(int(assignment["id"]))
@@ -98,6 +100,136 @@ def _weekly_completion(
             }
         )
     return rows
+
+
+def _accepted_submission(item: dict | None) -> bool:
+    return bool(item) and str(item.get("workflow_state") or "submitted") in {
+        "submitted",
+        "graded",
+        "pending_review",
+    }
+
+
+def _display_text(value: object, fallback: str = "") -> str:
+    """Repair legacy UTF-8 text that was persisted after a Latin-1 decode."""
+    text = str(value or fallback).strip()
+    if not any(marker in text for marker in ("Ã", "Â", "Ä", "á»", "áº")):
+        return text
+    try:
+        return text.encode("cp1252").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
+
+
+def _topic_catalog(outcomes: list[dict], quizzes: list[dict]) -> dict[str, str]:
+    """Map stable LMS competency keys to labels an instructor can understand."""
+    catalog = {
+        f"outcome:{item['id']}": _display_text(
+            item.get("title") or item.get("name"),
+            f"Outcome {item['id']}",
+        )
+        for item in outcomes
+        if item.get("id") is not None
+    }
+    for quiz in quizzes:
+        quiz_title = _display_text(quiz.get("title"), f"Quiz {quiz.get('id', '')}")
+        for question in quiz.get("questions") or []:
+            key = f"quiz:{quiz.get('id')}:question:{question.get('id')}"
+            prompt = _display_text(question.get("prompt"), "Câu hỏi chưa có tiêu đề")
+            catalog[key] = f"{quiz_title}: {prompt}"
+    return catalog
+
+
+def _topic_label(key: object, catalog: dict[str, str]) -> str:
+    value = str(key or "unclassified")
+    if value in catalog:
+        return catalog[value]
+    if value == "unclassified":
+        return "Chưa phân loại"
+    return value.replace("_", " ").replace(":", " · ").strip().capitalize()
+
+
+def _assignment_risk_summary(
+    assignments: list[dict],
+    submissions: list[dict],
+    student_ids: set[int],
+    *,
+    as_of: datetime | None = None,
+    look_ahead_days: int = 14,
+    urgent_hours: int = 72,
+) -> tuple[list[dict], set[int]]:
+    """Return actionable near-term bottlenecks, never all future coursework.
+
+    A student is counted only when an assignment is still unsubmitted and its
+    deadline is inside the urgent part of the 14-day look-ahead window. The
+    longer window is still exposed to clients so planning can inspect it, while
+    the risk badge remains an actionable signal rather than an all-year count.
+    """
+    now = as_of or datetime.now(UTC)
+    horizon = now + timedelta(days=look_ahead_days)
+    urgent_until = now + timedelta(hours=urgent_hours)
+    submitted = {
+        (int(item.get("assignment_id") or 0), int(item.get("user_id") or 0))
+        for item in submissions
+        if _accepted_submission(item)
+    }
+    rows: list[dict] = []
+    at_risk_students: set[int] = set()
+    for assignment in assignments:
+        due_at = _parse_lms_datetime(assignment.get("due_at"))
+        if due_at is None or not (now <= due_at <= horizon):
+            continue
+        missing = {
+            student_id
+            for student_id in student_ids
+            if (int(assignment["id"]), student_id) not in submitted
+        }
+        if not missing or due_at > urgent_until:
+            continue
+        estimated_minutes = max(
+            30,
+            min(240, round(float(assignment.get("points_possible") or 5) * 12)),
+        )
+        at_risk_students.update(missing)
+        rows.append(
+            {
+                "assignmentId": str(assignment["id"]),
+                "title": _display_text(assignment.get("title"), "Bài tập chưa đặt tên"),
+                "dueAt": due_at.isoformat(),
+                "atRiskCount": len(missing),
+                "totalStudents": len(student_ids),
+                "missingMinutes": len(missing) * estimated_minutes,
+            }
+        )
+    rows.sort(key=lambda item: (-item["atRiskCount"], item["dueAt"], item["title"]))
+    return rows[:8], at_risk_students
+
+
+def _rubric_criteria(details: dict) -> list[dict]:
+    labels = {
+        "understanding": "Hiểu khái niệm",
+        "accuracy": "Độ chính xác",
+        "process": "Quy trình và lập luận",
+    }
+    rubric = details.get("rubric") or {}
+    if isinstance(rubric, list):
+        return [item for item in rubric if isinstance(item, dict)]
+    if not isinstance(rubric, dict):
+        return []
+    return [
+        {"name": labels.get(str(key), str(key).replace("_", " ").capitalize()), "score": value}
+        for key, value in rubric.items()
+    ]
+
+
+def _evidence_details(item: dict) -> dict:
+    details = item.get("details") or {}
+    if isinstance(details, str):
+        try:
+            details = json.loads(details)
+        except json.JSONDecodeError:
+            return {}
+    return details if isinstance(details, dict) else {}
 
 
 def _validate_claims(claims: dict) -> None:
@@ -254,6 +386,7 @@ def _submission_status(submission: dict | None) -> dict:
         return {
             "state": "unsubmitted",
             "attempts": 0,
+            "submittedAt": None,
             "late": False,
             "score": None,
             "feedback": "",
@@ -262,6 +395,7 @@ def _submission_status(submission: dict | None) -> dict:
     return {
         "state": submission.get("workflow_state") or "unsubmitted",
         "attempts": len(submission.get("history") or []),
+        "submittedAt": submission.get("submitted_at"),
         "late": bool(submission.get("late")),
         "score": submission.get("score"),
         "feedback": submission.get("feedback") or "",
@@ -312,6 +446,7 @@ async def _course_snapshot(
     course: dict,
     session: SessionContext,
     planner_items: list[dict],
+    calendar_items: list[dict] | None = None,
 ) -> tuple[list[dict], dict]:
     course_id = int(course["id"])
     user_params = {"user_id": session.user_id}
@@ -324,8 +459,27 @@ async def _course_snapshot(
         client.service_get(f"/api/pacewise/v1/courses/{course_id}/appointment-groups"),
     )
     submissions_by_assignment = {int(item["assignment_id"]): item for item in submissions}
+    planner_by_assignment = {
+        int(item["assignment_id"]): item
+        for item in planner_items
+        if int(item.get("course_id") or 0) == course_id
+        and item.get("assignment_id") is not None
+    }
     tasks = [
-        _task_payload(course_id, item, submissions_by_assignment.get(int(item["id"])))
+        _task_payload(
+            course_id,
+            {
+                **item,
+                # Planner carries the effective student/group/section override.
+                # Use the same value as the Agent context so every PaceWise
+                # surface calculates risk from one deadline.
+                "due_at": (
+                    planner_by_assignment.get(int(item["id"]), {}).get("due_at")
+                    or item.get("due_at")
+                ),
+            },
+            submissions_by_assignment.get(int(item["id"])),
+        )
         for item in assignments
     ]
     snapshot = {
@@ -334,6 +488,11 @@ async def _course_snapshot(
         "resources": files,
         "plannerItems": [
             item for item in planner_items if int(item.get("course_id") or 0) == course_id
+        ],
+        "calendarItems": [
+            item
+            for item in (calendar_items or [])
+            if item.get("course_id") is None or int(item.get("course_id") or 0) == course_id
         ],
         "appointmentGroups": appointments,
     }
@@ -384,8 +543,16 @@ async def _sync_payload(session: SessionContext, settings: Settings, db: Session
         if session.role == "student"
         else []
     )
+    calendar_items = (
+        await client.service_get(f"/api/pacewise/v1/users/{session.user_id}/calendar")
+        if session.role == "student"
+        else []
+    )
     synchronized = await gather(
-        *[_course_snapshot(client, course, session, planner_items) for course in allowed_courses]
+        *[
+            _course_snapshot(client, course, session, planner_items, calendar_items)
+            for course in allowed_courses
+        ]
     )
     tasks = [task for course_tasks, _snapshot in synchronized for task in course_tasks]
     course_data = {snapshot["courseId"]: snapshot for _tasks, snapshot in synchronized}
@@ -542,6 +709,7 @@ async def instructor_overview(
         sections,
         groups,
         modules,
+        outcomes,
     ) = await gather(
         client.service_get(f"/api/pacewise/v1/courses/{course_id}/enrollments"),
         client.service_get(f"/api/pacewise/v1/courses/{course_id}/assignments"),
@@ -553,6 +721,7 @@ async def instructor_overview(
         client.service_get(f"/api/pacewise/v1/courses/{course_id}/sections"),
         client.service_get(f"/api/pacewise/v1/courses/{course_id}/groups"),
         client.service_get(f"/api/pacewise/v1/courses/{course_id}/modules"),
+        client.service_get(f"/api/pacewise/v1/courses/{course_id}/outcomes"),
     )
     students = [item for item in enrollments if item.get("role") == "student"]
     student_ids = {int(item["user_id"]) for item in students}
@@ -568,30 +737,36 @@ async def instructor_overview(
     ).all()
     guidance = _guidance_payload(list(saved_actions))
 
-    submitted_by_student: dict[int, list[dict]] = defaultdict(list)
-    for item in submissions:
-        if int(item["user_id"]) in student_ids:
-            submitted_by_student[int(item["user_id"])].append(item)
-    on_time_ids = {
-        student_id
-        for student_id, rows in submitted_by_student.items()
-        if rows and any(not bool(row.get("late")) for row in rows)
+    now = datetime.now(UTC)
+    due_assignment_ids = {
+        int(item["id"])
+        for item in assignments
+        if (due_at := _parse_lms_datetime(item.get("due_at"))) is not None and due_at <= now
     }
+    due_submissions = [
+        item
+        for item in submissions
+        if int(item.get("assignment_id") or 0) in due_assignment_ids
+        and int(item.get("user_id") or 0) in student_ids
+        and _accepted_submission(item)
+    ]
+    on_time_count = sum(1 for item in due_submissions if not bool(item.get("late")))
+    on_time_total = len(due_assignment_ids) * len(student_ids)
     total_students = len(students)
-    required = max(1, len(assignments))
-    at_risk = sum(
-        1
-        for student_id in student_ids
-        if any(row.get("late") for row in submitted_by_student.get(student_id, []))
-        or len(submitted_by_student.get(student_id, [])) < required
+    assignment_risks, at_risk_students = _assignment_risk_summary(
+        assignments,
+        submissions,
+        student_ids,
+        as_of=now,
     )
+    topic_catalog = _topic_catalog(outcomes, quizzes)
     topic_users: dict[str, set[int]] = defaultdict(set)
     low_evidence = []
     for item in evidence:
         max_score = float(item.get("max_score") or 0)
         ratio = float(item.get("score") or 0) / max_score if max_score else 0
         if ratio < 0.7:
-            topic = str(item.get("competency_key") or "Chưa phân loại")
+            topic = _topic_label(item.get("competency_key"), topic_catalog)
             topic_users[topic].add(int(item["user_id"]))
             low_evidence.append(item)
 
@@ -611,51 +786,104 @@ async def instructor_overview(
             },
             "lmsSummary": None,
         }
-    rate = len(on_time_ids) / total_students if total_students else 0
-    weekly_completion = _weekly_completion(assignments, submissions, student_ids)
+    rate = on_time_count / on_time_total if on_time_total else 0
+    weekly_completion = _weekly_completion(assignments, submissions, student_ids, as_of=now)
+    progress_improvement = (
+        weekly_completion[-1]["rate"] - weekly_completion[0]["rate"]
+        if len(weekly_completion) >= 2
+        else None
+    )
     stats = {
         "groupId": "all",
         "onTimeRate": rate,
-        "onTimeCount": len(on_time_ids),
+        "onTimeCount": on_time_count,
+        "onTimeTotal": on_time_total,
         "weeklyCompletion": weekly_completion or [
-            {"week": "Hiện tại", "rate": rate, "count": len(on_time_ids), "total": total_students}
+            {"week": "Hiện tại", "rate": rate, "count": on_time_count, "total": on_time_total}
         ],
         "topics": [
             {"topic": key, "needsSupport": len(value), "n": total_students}
             for key, value in sorted(topic_users.items(), key=lambda row: len(row[1]), reverse=True)[:5]
         ],
-        "atRisk": at_risk,
+        "atRisk": len(at_risk_students),
+        "assignmentRisks": assignment_risks,
+        "riskWindowDays": 14,
+        "progressImprovement": progress_improvement,
     }
-    review_queue = [
-        {
-            "id": f"EV-{item['id']}",
-            "topic": item.get("competency_key", "Chưa phân loại"),
-            "question": f"Xem lại bằng chứng {item.get('evidence_type', 'learning evidence')}",
-            "responseExcerpt": "Dữ liệu cá nhân được ẩn trong màn hình tổng hợp.",
-            "confidence": "low",
-            "reason": "Điểm bằng chứng dưới ngưỡng 70%.",
-            "status": "pending",
-            "submittedAt": item.get("observed_at", ""),
-        }
-        for item in low_evidence[:20]
-    ]
-    review_queue.extend(
-        {
-            "id": item.id,
-            "topic": "Đánh giá hiểu bài"
-            if item.case_type == "understanding_review"
-            else "Khiếu nại trích dẫn",
-            "question": item.entity_id,
-            "responseExcerpt": "Nội dung cá nhân chỉ hiển thị cho giảng viên được phân quyền.",
-            "confidence": "low",
-            "reason": item.case_type,
-            "status": item.status,
-            "submittedAt": item.created_at.isoformat(),
-            "suggestedStatus": (json.loads(item.payload_json or "{}").get("assessment_result") or {}).get("status"),
-            "rubricVersion": json.loads(item.payload_json or "{}").get("rubric_version"),
-        }
-        for item in agent_review_cases
-    )
+    assignment_by_id = {int(item["id"]): item for item in assignments}
+    submission_by_id = {int(item["id"]): item for item in submissions if item.get("id") is not None}
+    review_queue = []
+    for item in low_evidence[:20]:
+        details = _evidence_details(item)
+        submission = submission_by_id.get(int(item.get("source_id") or 0))
+        assignment = assignment_by_id.get(int((submission or {}).get("assignment_id") or 0))
+        score = float(item.get("score") or 0)
+        max_score = float(item.get("max_score") or 0)
+        comment = str(details.get("comment") or "").strip()
+        excerpt = comment or f"Điểm bằng chứng: {score:g}/{max_score:g}."
+        source_label = _display_text(
+            (assignment or {}).get("title") or item.get("evidence_type"),
+            "LMS evidence",
+        )
+        review_queue.append(
+            {
+                "id": f"EV-{item['id']}",
+                "topic": _topic_label(item.get("competency_key"), topic_catalog),
+                "question": f"Xem lại bằng chứng từ {source_label}",
+                "responseExcerpt": excerpt,
+                "confidence": "low",
+                "reason": f"Điểm {score:g}/{max_score:g} thấp hơn ngưỡng 70%.",
+                "status": "pending",
+                "submittedAt": item.get("observed_at", ""),
+                "aiConclusion": "Bằng chứng hiện tại cho thấy người học cần được xem xét thêm.",
+                "rubricCriteria": _rubric_criteria(details),
+                "evidenceQuotes": [comment] if comment else [],
+                "sourceRefs": [
+                    {
+                        "label": source_label,
+                        "type": str(item.get("source_type") or item.get("evidence_type") or "lms"),
+                        "id": str(item.get("source_id") or item.get("id")),
+                    }
+                ],
+            }
+        )
+    for item in agent_review_cases:
+        case_payload = json.loads(item.payload_json or "{}")
+        assessment_result = case_payload.get("assessment_result") or {}
+        quotes = assessment_result.get("evidence_quotes") or case_payload.get("evidence_quotes") or []
+        if isinstance(quotes, str):
+            quotes = [quotes]
+        feedback = str(assessment_result.get("feedback") or "").strip()
+        review_queue.append(
+            {
+                "id": item.id,
+                "topic": "Đánh giá hiểu bài"
+                if item.case_type == "understanding_review"
+                else "Khiếu nại trích dẫn",
+                "question": item.entity_id,
+                "responseExcerpt": str(quotes[0])
+                if quotes
+                else feedback or "Chưa có trích đoạn; cần yêu cầu thêm bằng chứng.",
+                "confidence": "low",
+                "reason": item.case_type,
+                "status": item.status,
+                "submittedAt": item.created_at.isoformat(),
+                "suggestedStatus": assessment_result.get("status"),
+                "rubricVersion": case_payload.get("rubric_version"),
+                "aiConclusion": feedback
+                or str(assessment_result.get("status") or "Chưa đủ bằng chứng"),
+                "rubricCriteria": _rubric_criteria(
+                    {
+                        "rubric": assessment_result.get("rubric_scores")
+                        or assessment_result.get("criteria")
+                        or {}
+                    }
+                ),
+                "evidenceQuotes": [str(value) for value in quotes[:3]],
+                "sourceRefs": case_payload.get("source_refs")
+                or [{"label": item.entity_id, "type": item.case_type, "id": item.id}],
+            }
+        )
     assessments = []
     for quiz in quizzes:
         for question in quiz.get("questions", []):

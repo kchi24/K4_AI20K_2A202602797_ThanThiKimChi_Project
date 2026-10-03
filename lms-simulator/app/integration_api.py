@@ -25,6 +25,7 @@ from app.models import (
     AppointmentReservation,
     Assignment,
     AuditLog,
+    CalendarEvent,
     Course,
     CourseContent,
     CourseGroup,
@@ -460,6 +461,57 @@ def planner(user_id: int, db: Session = Depends(get_db)) -> list[dict]:
             "completed": item.completed,
         }
         for item in items
+    ]
+
+
+@service_router.get("/users/{user_id}/calendar", dependencies=[Depends(require_service_key)])
+def user_calendar(user_id: int, db: Session = Depends(get_db)) -> list[dict]:
+    """Return fixed calendar commitments used by PaceWise planning.
+
+    Assignment deadlines remain in the assignment API. This endpoint exposes
+    events with an actual start/end range so PaceWise can treat them as dynamic
+    constraints and react when an instructor moves or removes one.
+    """
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    enrolled_course_ids = set(
+        db.scalars(select(Enrollment.course_id).where(Enrollment.user_id == user_id)).all()
+    )
+    events = db.scalars(
+        select(CalendarEvent)
+        .where(
+            CalendarEvent.user_id == user_id,
+            (CalendarEvent.course_id.is_(None) | CalendarEvent.course_id.in_(enrolled_course_ids)),
+        )
+        .order_by(CalendarEvent.starts_at)
+    ).all()
+    courses = {
+        item.id: item
+        for item in db.scalars(select(Course).where(Course.id.in_(enrolled_course_ids))).all()
+    }
+    return [
+        {
+            "id": f"event-{item.id}",
+            "source_id": item.id,
+            "type": "event",
+            "course_id": item.course_id,
+            "course_code": courses[item.course_id].code if item.course_id in courses else None,
+            "title": item.title,
+            "starts_at": _iso(item.starts_at),
+            "ends_at": _iso(item.ends_at),
+            "duration_minutes": (
+                max(0, int((item.ends_at - item.starts_at).total_seconds() // 60))
+                if item.ends_at
+                else None
+            ),
+            "event_kind": item.event_kind,
+            "editable": not (
+                item.description.startswith("pacewise-2026-v1;")
+                or item.description.startswith("course-activity-v1;")
+            ),
+        }
+        for item in events
     ]
 
 

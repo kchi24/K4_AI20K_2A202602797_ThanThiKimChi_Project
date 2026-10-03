@@ -10,10 +10,12 @@ import type {
   Drift,
   Plan,
   PlanDraft,
+  PlanImpact,
   PlanInput,
   ReviewItem,
   RecoveryOption,
   Source,
+  StudySession,
   Task,
   UnavailableSlot,
   User,
@@ -24,7 +26,7 @@ const API_BASE = (import.meta.env.VITE_API_URL || '/api/v1').replace(/\/$/, '');
 
 export class ApiError extends Error {
   constructor(
-    public code: 'AI_UNAVAILABLE' | 'TIMEOUT' | 'INVALID_CREDENTIALS' | 'UNAUTHENTICATED' | 'FORBIDDEN' | 'UPSTREAM' | 'UNKNOWN',
+    public code: 'AI_UNAVAILABLE' | 'TIMEOUT' | 'INVALID_CREDENTIALS' | 'UNAUTHENTICATED' | 'FORBIDDEN' | 'CONFLICT' | 'UPSTREAM' | 'UNKNOWN',
     message: string,
     public requestId = `PW-REQ-${Math.random().toString(16).slice(2, 8).toUpperCase()}`,
   ) {
@@ -60,6 +62,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const code = response.status === 401
       ? path === '/auth/lms-login' ? 'INVALID_CREDENTIALS' : 'UNAUTHENTICATED'
       : response.status === 403 ? 'FORBIDDEN'
+      : response.status === 409 ? 'CONFLICT'
       : response.status >= 502 ? 'UPSTREAM'
       : 'UNKNOWN';
     throw new ApiError(code, payload.detail || `Yêu cầu thất bại (${response.status}).`, response.headers.get('X-Request-ID') || undefined);
@@ -129,14 +132,14 @@ export async function switchCourse(courseId: string): Promise<{ courseId: string
   });
 }
 
-export async function loadWorkspace(): Promise<{ state: Record<string, unknown>; version: number }> {
-  return request<{ state: Record<string, unknown>; version: number }>('/workspace');
+export async function loadWorkspace(): Promise<{ state: Record<string, unknown>; version: number; updatedAt: string | null }> {
+  return request<{ state: Record<string, unknown>; version: number; updatedAt: string | null }>('/workspace');
 }
 
-export async function saveWorkspace(state: Record<string, unknown>): Promise<{ version: number; updatedAt: string }> {
+export async function saveWorkspace(state: Record<string, unknown>, expectedVersion: number): Promise<{ version: number; updatedAt: string }> {
   return request<{ version: number; updatedAt: string }>('/workspace', {
     method: 'PUT',
-    body: JSON.stringify({ state }),
+    body: JSON.stringify({ state, expectedVersion }),
   });
 }
 
@@ -213,6 +216,7 @@ export interface AgentResponse {
   mode?: string;
   status: string;
   pending_action?: Record<string, unknown> | null;
+  proposed_milestones?: Array<Record<string, unknown>>;
   output?: {
     plan_validation?: { valid: boolean; errors: { code: string }[] };
     plan_draft?: PlanDraft;
@@ -259,11 +263,23 @@ export async function trackProgress(
   plan: Plan | null,
   availability: AvailabilityDay[],
   unavailable: UnavailableSlot[],
+  tasks: Task[] = [],
+  sessions: StudySession[] = [],
 ): Promise<AgentResponse> {
   return runAgent('Kiểm tra tiến độ hiện tại và cảnh báo deadline có rủi ro.', 'tracking', {
     current_plan: plan,
     availability,
     unavailable_slots: unavailable,
+    progress_metrics: {
+      tasks: tasks.map((task) => ({
+        id: task.id,
+        estimate_min: task.estimateMin,
+        logged_min: task.loggedMin,
+        status: task.status,
+      })),
+      session_count: sessions.length,
+      studied_minutes: sessions.reduce((total, session) => total + session.minutes, 0),
+    },
   });
 }
 
@@ -314,18 +330,29 @@ export async function generateRecoveryOptions(
   drift: Drift,
   availability: AvailabilityDay[],
   unavailable: UnavailableSlot[],
+  impact?: PlanImpact,
 ): Promise<RecoveryOption[]> {
   const result = await runAgent(
     `Kế hoạch đang thiếu ${drift.deficitMin} phút cho nhiệm vụ ${drift.taskId} trước deadline ${drift.deadline}.`,
     'recover',
     {
       current_plan: plan,
-      progress_metrics: { drift },
+      progress_metrics: { drift, plan_impact: impact },
       availability,
       unavailable_slots: unavailable,
       proposed_milestones: tasks.map((task) => ({
         milestone_id: task.id,
         title: task.title,
+        course_id: task.courseId,
+        priority: task.priority,
+        assignment_group: task.assignmentGroup
+          ? {
+              id: task.assignmentGroup.id,
+              name: task.assignmentGroup.name,
+              weight: task.assignmentGroup.weight,
+            }
+          : null,
+        points_possible: task.pointsPossible ?? 0,
         estimated_minutes: Math.max(0, task.estimateMin - task.loggedMin),
         deadline: task.deadline,
       })),
@@ -342,6 +369,18 @@ export async function generateRecoveryOptions(
     newBlocks: Array.isArray(raw.new_blocks) ? raw.new_blocks as RecoveryOption['newBlocks'] : plan.blocks,
     assumptions: Array.isArray(raw.assumptions) ? raw.assumptions.map(String) : [],
     fullyRecovers: Boolean(raw.fully_recovers),
+    workloadMinutes: typeof raw.workload_minutes === 'number' ? raw.workload_minutes : undefined,
+    scheduledMinutes: typeof raw.scheduled_minutes === 'number' ? raw.scheduled_minutes : undefined,
+    missingMinutes: typeof raw.missing_minutes === 'number' ? raw.missing_minutes : undefined,
+    shortfalls: Array.isArray(raw.shortfalls)
+      ? raw.shortfalls.flatMap((item) => {
+          if (!item || typeof item !== 'object') return [];
+          const value = item as Record<string, unknown>;
+          const taskId = String(value.taskId ?? value.task_id ?? '');
+          const missingMin = Number(value.missingMin ?? value.missing_min ?? 0);
+          return taskId && Number.isFinite(missingMin) && missingMin > 0 ? [{ taskId, missingMin }] : [];
+        })
+      : [],
   }));
 }
 
@@ -370,7 +409,7 @@ export async function generatePlan(input: PlanInput, tasks: Task[]): Promise<Pla
     .filter(Boolean)
     .join(', ');
   const agentResult = await runAgent(
-    `Lập kế hoạch tuần cho mục tiêu “${input.goal}”. Các nhiệm vụ đã chọn: ${selected}.`,
+    `Lập kế hoạch 7 ngày cho mục tiêu “${input.goal}”. Các nhiệm vụ đã chọn: ${selected}.`,
     'plan',
     {
       availability: input.availability
@@ -383,16 +422,20 @@ export async function generatePlan(input: PlanInput, tasks: Task[]): Promise<Pla
         start: item.start,
         end: item.end,
       })),
-      goals: [{ title: input.goal }],
+      goals: input.tasks.map((item) => {
+        const task = tasks.find((candidate) => candidate.id === item.taskId);
+        return {
+          task_id: item.taskId,
+          title: task?.title ?? item.taskId,
+          course_id: task?.courseId,
+          deadline: task?.deadline,
+          remaining_minutes: item.remainingMin,
+          weekly_goal: input.goal,
+        };
+      }),
       plan_input: input,
     },
   );
-  if (agentResult.output?.plan_validation && !agentResult.output.plan_validation.valid) {
-    throw new ApiError(
-      'AI_UNAVAILABLE',
-      `Kế hoạch AI chưa khả thi: ${agentResult.output.plan_validation.errors.map((item) => item.code).join(', ')}.`,
-    );
-  }
   const draft = agentResult.output?.plan_draft;
   if (!draft) {
     throw new ApiError('UPSTREAM', 'Backend không trả về lịch học chuẩn hóa.');

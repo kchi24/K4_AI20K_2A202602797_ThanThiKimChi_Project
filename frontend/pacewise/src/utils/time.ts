@@ -1,21 +1,26 @@
 import type { Clock, Weekday } from '../types';
 
+export const APP_TIMEZONE = 'Asia/Ho_Chi_Minh';
 const runtimeNow = new Date();
-const localDate = (value: Date) => {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, '0');
-  const day = String(value.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
-const monday = new Date(runtimeNow);
-monday.setHours(0, 0, 0, 0);
-monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
-
+const runtimeParts = Object.fromEntries(
+  new Intl.DateTimeFormat('en-CA', {
+    timeZone: APP_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(runtimeNow).map((part) => [part.type, part.value]),
+);
 /** Runtime clock aliases retained to avoid breaking existing domain helpers. */
-export const DEMO_TODAY = localDate(runtimeNow);
-export const DEMO_NOW: Clock = `${String(runtimeNow.getHours()).padStart(2, '0')}:${String(runtimeNow.getMinutes()).padStart(2, '0')}`;
-export const WEEK_START = localDate(monday);
-export const TIMEZONE_LABEL = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local';
+export const DEMO_TODAY = `${runtimeParts.year}-${runtimeParts.month}-${runtimeParts.day}`;
+export const DEMO_NOW: Clock = `${runtimeParts.hour}:${runtimeParts.minute}`;
+export const PLANNING_WINDOW_DAYS = 7;
+export const TASK_SELECTION_HORIZON_DAYS = 14;
+/** Rolling planning window shared with the backend scheduler: today + six days. */
+export const PLANNING_WINDOW_START = DEMO_TODAY;
+export const TIMEZONE_LABEL = APP_TIMEZONE;
 
 const WEEKDAY_LONG = ['Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy', 'Chủ Nhật'];
 const WEEKDAY_SHORT = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
@@ -47,7 +52,11 @@ export function diffDays(a: string, b: string) {
 export function weekdayOf(date: string): Weekday {
   return ((parse(date).getUTCDay() + 6) % 7) as Weekday;
 }
-export const weekDates = (weekStart = WEEK_START) => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+/** Monday of the calendar week containing `date`. */
+export const calendarWeekStart = (date: string) => addDays(date, -weekdayOf(date));
+export const WEEK_START = calendarWeekStart(DEMO_TODAY);
+export const NEXT_WEEK_START = addDays(WEEK_START, 7);
+export const weekDates = (weekStart = PLANNING_WINDOW_START) => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 
 export const weekdayName = (w: Weekday) => WEEKDAY_LONG[w];
 export const weekdayShort = (w: Weekday) => WEEKDAY_SHORT[w];

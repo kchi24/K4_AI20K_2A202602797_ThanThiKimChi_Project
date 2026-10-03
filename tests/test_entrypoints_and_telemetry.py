@@ -40,6 +40,39 @@ def test_model_usage_callback_records_tokens_cost_and_errors(monkeypatch):
     assert calls[-1][1]["outcome"] == "error"
 
 
+def test_model_usage_callback_reads_message_metadata_and_flags_missing_usage(monkeypatch):
+    from src.agents import telemetry
+
+    calls = []
+    monkeypatch.setattr(telemetry, "increment", lambda name, **labels: calls.append((name, labels)))
+    monkeypatch.setattr(
+        telemetry,
+        "get_settings",
+        lambda: SimpleNamespace(
+            llm_input_cost_per_million=0.0,
+            llm_output_cost_per_million=0.0,
+        ),
+    )
+    callback = telemetry.ModelUsageCallback()
+    message = SimpleNamespace(
+        usage_metadata={"input_tokens": 40, "output_tokens": 10, "total_tokens": 50},
+        response_metadata={"model_name": "metadata-model"},
+    )
+    callback.on_llm_end(
+        SimpleNamespace(
+            llm_output=None,
+            generations=[[SimpleNamespace(message=message)]],
+        )
+    )
+    callback.on_llm_end(SimpleNamespace(llm_output={}, generations=[]))
+
+    assert (
+        "pacewise_llm_tokens_total",
+        {"amount": 50.0, "model": "metadata-model", "token_type": "total"},
+    ) in calls
+    assert ("pacewise_llm_usage_missing_total", {"model": "unknown"}) in calls
+
+
 def test_llm_factories_apply_runtime_configuration(monkeypatch):
     from src.agents import llm as agent_llm
     from src.services import llm as service_llm
@@ -55,6 +88,8 @@ def test_llm_factories_apply_runtime_configuration(monkeypatch):
         openai_base_url="https://llm.example/v1",
         model_name="fallback-model",
         llm_temperature=0.2,
+        llm_timeout_seconds=30.0,
+        llm_max_output_tokens=600,
     )
     monkeypatch.setattr(agent_llm, "get_settings", lambda: settings)
     monkeypatch.setattr(agent_llm, "ChatOpenAI", fake_chat_openai)

@@ -36,7 +36,7 @@ export function PlanGeneratingPage() {
       const err = e instanceof ApiError ? e : new ApiError('AI_UNAVAILABLE', 'Chưa thể tạo kế hoạch.');
       setError({
         title: err.code === 'TIMEOUT' ? 'Tác vụ mất nhiều thời gian hơn dự kiến' : 'Chưa thể tạo kế hoạch',
-        description: 'Dữ liệu bạn nhập vẫn được giữ lại và chưa có thay đổi nào được lưu. Bạn có thể thử lại với cùng dữ liệu.',
+        description: `${err.message} Dữ liệu bạn nhập vẫn được giữ lại và chưa có thay đổi nào được lưu.`,
         requestId: err.requestId,
       });
     } finally {
@@ -57,7 +57,7 @@ export function PlanGeneratingPage() {
 
   return (
     <div className="page max-w-3xl">
-      <PageHeader title="Tạo kế hoạch tuần" description="Bạn có thể rời màn hình này; dữ liệu nhập vẫn được giữ." />
+      <PageHeader title="Tạo kế hoạch 7 ngày" description="Bạn có thể rời màn hình này; dữ liệu nhập vẫn được giữ." />
       {error ? (
         <ErrorState
           title={error.title}

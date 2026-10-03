@@ -559,14 +559,26 @@ function courseHeader(title, actions = "") {
   return `<div class="content-header"><h1>${escapeHtml(title)}</h1><div class="content-header-actions">${actions}</div></div>`;
 }
 
+function submissionTimingText(item) {
+  if (!item.submitted_at || !item.due_at) return "";
+  const differenceMinutes = Math.round((new Date(item.due_at).getTime() - new Date(item.submitted_at).getTime()) / 60000);
+  if (Math.abs(differenceMinutes) < 1) return "Submitted on time";
+  return differenceMinutes > 0
+    ? `Submitted ${differenceMinutes} min early`
+    : `Submitted ${Math.abs(differenceMinutes)} min late`;
+}
+
 function assignmentRows(assignments, allowSubmit = false) {
   if (!assignments.length) return '<div class="empty-state"><p>No assignments found.</p></div>';
-  return assignments.map((item) => `
+  return assignments.map((item) => {
+    const submissionTiming = submissionTimingText(item);
+    return `
     <div class="content-row">
       <span class="content-row-icon">▤</span>
-      <div><span class="content-row-title">${escapeHtml(item.title)}</span><span class="content-row-meta">${escapeHtml(item.assignment_group?.name || "Assignments")} · Due ${formatDate(item.due_at)} · ${item.points_possible} pts${item.lock_at ? ` · Locks ${formatDate(item.lock_at)}` : ""}${item.override_target ? ` · ${escapeHtml(item.override_target)} override` : ""}</span></div>
+      <div><span class="content-row-title">${escapeHtml(item.title)}</span><span class="content-row-meta">${escapeHtml(item.assignment_group?.name || "Assignments")} · Due ${formatDate(item.due_at)} · ${item.points_possible} pts${item.lock_at ? ` · Locks ${formatDate(item.lock_at)}` : ""}${item.override_target ? ` · ${escapeHtml(item.override_target)} override` : ""}${submissionTiming ? ` · ${escapeHtml(submissionTiming)}` : ""}</span></div>
       <div class="row-actions">${state.user.role === "instructor" ? `<button class="Button Button--small" data-assignment-override="${item.id}">Override</button><button class="Button Button--small" data-assignment-edit="${item.id}">Edit</button><button class="Button Button--small" data-assignment-delete="${item.id}">Delete</button>` : allowSubmit ? `<button class="Button" data-submit="${item.id}">${["submitted", "late"].includes(item.state) ? "Resubmit Assignment" : "Submit Assignment"}</button>` : `<span class="published-icon">✓</span>`}</div>
-    </div>`).join("");
+    </div>`;
+  }).join("");
 }
 
 function renderCourseTab() {
@@ -983,24 +995,43 @@ function openSubmissionEditor(assignment) {
       ${assignment.submission_types.includes("online_text_entry") ? '<label class="ic-Label" for="submission-text">Text Entry</label><textarea class="ic-Input text-area" id="submission-text" rows="7"></textarea>' : ""}
       ${assignment.submission_types.includes("online_url") ? '<label class="ic-Label" for="submission-url">Website URL</label><input class="ic-Input" id="submission-url" type="url" placeholder="https://">' : ""}
       ${assignment.submission_types.includes("online_upload") ? '<label class="ic-Label" for="submission-file">Files (up to 10)</label><input class="ic-Input" id="submission-file" type="file" multiple accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg,.zip">' : ""}
+      <fieldset class="canvas-fieldset demo-timing-fieldset">
+        <legend>Demo submission time</legend>
+        <p class="muted">Use real time, or simulate an outcome relative to this assignment's deadline.</p>
+        <input id="demo-submission-offset" type="hidden" value="">
+        <div class="demo-timing-options" role="group" aria-label="Demo submission time">
+          <button class="Button Button--small Button--primary" type="button" data-demo-offset="">Real time</button>
+          <button class="Button Button--small" type="button" data-demo-offset="-60">60 min early</button>
+          <button class="Button Button--small" type="button" data-demo-offset="0">On time</button>
+          <button class="Button Button--small" type="button" data-demo-offset="60">60 min late</button>
+        </div>
+      </fieldset>
       <div class="dialog-actions"><button class="Button" type="button" data-cancel-submission>Cancel</button><button class="Button Button--primary" type="submit">Submit Assignment</button></div>
     </form>`);
   document.querySelector("[data-cancel-submission]").addEventListener("click", closeDialog);
+  document.querySelectorAll("[data-demo-offset]").forEach((button) => button.addEventListener("click", () => {
+    document.querySelector("#demo-submission-offset").value = button.dataset.demoOffset;
+    document.querySelectorAll("[data-demo-offset]").forEach((option) => option.classList.toggle("Button--primary", option === button));
+  }));
   document.querySelector("#submission-editor").addEventListener("submit", async (event) => {
     event.preventDefault();
     const files = [...(document.querySelector("#submission-file")?.files || [])];
     const textEntry = document.querySelector("#submission-text")?.value || "";
     const websiteUrl = document.querySelector("#submission-url")?.value || "";
+    const demoOffsetValue = document.querySelector("#demo-submission-offset").value;
+    const demoOffset = demoOffsetValue === "" ? null : Number(demoOffsetValue);
+    let submission;
     if (files.length) {
       const form = new FormData();
       form.append("user_id", state.user.id);
+      if (demoOffset !== null) form.append("demo_submission_offset_minutes", String(demoOffset));
       files.forEach((file) => form.append("uploads", file));
-      await request(`/api/assignments/${assignment.id}/submissions/files`, { method: "POST", body: form });
+      submission = await request(`/api/assignments/${assignment.id}/submissions/files`, { method: "POST", body: form });
     } else {
-      await request(`/api/assignments/${assignment.id}/submissions`, { method: "POST", body: JSON.stringify({ user_id: state.user.id, text_entry: textEntry, website_url: websiteUrl }) });
+      submission = await request(`/api/assignments/${assignment.id}/submissions`, { method: "POST", body: JSON.stringify({ user_id: state.user.id, text_entry: textEntry, website_url: websiteUrl, demo_submission_offset_minutes: demoOffset }) });
     }
     closeDialog();
-    showFlash("Submission received");
+    showFlash(submissionTimingText({ submitted_at: submission.submitted_at, due_at: assignment.due_at }) || "Submission received");
     await loadCourse(state.currentCourse.course.id, "assignments");
   });
 }

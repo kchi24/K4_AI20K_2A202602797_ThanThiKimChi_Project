@@ -20,6 +20,24 @@ import { useAppStore } from '../../store/AppStore';
 
 const MIN_GROUP = 5;
 const pct = (x: number) => `${Math.round(x * 100)}%`;
+const formatDateTime = (value: string) => new Intl.DateTimeFormat('vi-VN', {
+  day: '2-digit',
+  month: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+}).format(new Date(value));
+
+function currentWeekLabel() {
+  const today = new Date();
+  const monday = new Date(today);
+  const day = monday.getDay() || 7;
+  monday.setDate(monday.getDate() - day + 1);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  const short = (value: Date) => value.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' });
+  return `${short(monday)} – ${short(sunday)}`;
+}
 
 export function InstructorOverviewPage() {
   useDocumentTitle('Tổng quan lớp');
@@ -103,7 +121,7 @@ export function InstructorOverviewPage() {
     <div className="page">
       <PageHeader
         title="Tổng quan lớp"
-        description={`${activeCourse?.code ?? 'Môn đang chọn'} · ${activeCourse?.name ?? 'Dữ liệu lớp học'} — tuần 28/09 – 04/10`}
+        description={`${activeCourse?.code ?? 'Môn đang chọn'} · ${activeCourse?.name ?? 'Dữ liệu lớp học'} — tuần ${currentWeekLabel()}`}
         actions={
           <Select
             className="w-full sm:w-64"
@@ -137,12 +155,42 @@ export function InstructorOverviewPage() {
         </Card>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <StatTile icon="checkCircle" label="Nộp đúng hạn" value={pct(stats.onTimeRate)} hint={`${stats.onTimeCount}/${group.n} sinh viên`} />
-            <StatTile icon="alert" label="Có tín hiệu nguy cơ" value={stats.atRisk} hint={`trên ${group.n} sinh viên`} />
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+            <StatTile icon="checkCircle" label="Nộp đúng hạn" value={pct(stats.onTimeRate)} hint={`${stats.onTimeCount}/${stats.onTimeTotal ?? group.n} lượt nộp đã đến hạn`} />
+            <StatTile icon="alert" label="Có tín hiệu nguy cơ" value={stats.atRisk} hint={`trong ${stats.riskWindowDays ?? 14} ngày tới`} />
+            <StatTile
+              icon="chart"
+              label="Cải thiện tiến độ"
+              value={stats.progressImprovement == null ? 'Chưa đủ mẫu' : `${stats.progressImprovement >= 0 ? '+' : ''}${Math.round(stats.progressImprovement * 100)} điểm %`}
+              hint="so với tuần đầu trong cửa sổ"
+            />
             <StatTile icon="users" label="Quy mô nhóm" value={group.n} hint="sinh viên" />
             <StatTile icon="inbox" label="Ca cần xem" value={pending} hint="trong Hàng chờ duyệt" />
           </div>
+
+          <Card className="mt-5" aria-labelledby="assignment-risks">
+            <CardHeader
+              id="assignment-risks"
+              title="Deadline cần can thiệp"
+              subtitle={`Bài chưa nộp, còn tối đa 72 giờ và nằm trong cửa sổ ${stats.riskWindowDays ?? 14} ngày`}
+            />
+            {(stats.assignmentRisks ?? []).length === 0 ? (
+              <p className="text-[15px] text-muted">Chưa có deadline nào cần can thiệp ngay.</p>
+            ) : (
+              <ul className="divide-y divide-line">
+                {(stats.assignmentRisks ?? []).map((item) => (
+                  <li key={item.assignmentId} className="grid gap-2 py-3 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center sm:gap-5">
+                    <div>
+                      <p className="font-semibold text-ink">{item.title}</p>
+                      <p className="caption">Hạn {formatDateTime(item.dueAt)}</p>
+                    </div>
+                    <p className="text-sm"><strong>{item.atRiskCount}/{item.totalStudents}</strong> sinh viên chưa nộp</p>
+                    <p className="text-sm text-warning-ink"><strong>{Math.round(item.missingMinutes / 60)} giờ</strong> chưa được bảo vệ</p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
 
           {lmsSummary && (
             <Card className="mt-5" aria-labelledby="lms-course-structure">

@@ -140,3 +140,77 @@ Kết quả này **không được dùng để tuyên bố LLM/RAG đạt 100% c
 khả năng phát hiện cách nói lách và mức đồng thuận đánh giá hiểu bài vẫn cần bộ pilot tối thiểu
 100 mẫu do SME gán nhãn, RAGAS và báo cáo Cohen's/weighted Kappa theo
 [`05-ai-workflows-and-evaluation.md`](05-ai-workflows-and-evaluation.md).
+
+## 4. Regression evidence cho pain point deadline đa môn
+
+Các test tự động bổ sung kiểm tra trực tiếp chuỗi `LMS change → Plan impact → Recover`:
+
+| Ca | Điều được kiểm tra | Expected |
+|---|---|---|
+| LMS-01 | Thêm/kéo dài ca học trùng study block | Tạo `schedule_conflict`, không tự sửa plan |
+| LMS-02 | Xóa/rút ngắn ca học | Tạo `capacity_released`, không tự nhồi task |
+| LMS-03 | Deadline dời sớm | Xác định block nằm sau deadline mới |
+| LMS-04 | Assignment bị xóa | Liệt kê block cần gỡ và yêu cầu xác nhận |
+| PLAN-01 | Task nằm trong horizon 14 ngày nhưng ngoài window 7 ngày | Chỉ xếp milestone tỷ lệ của tuần hiện tại |
+| RISK-01 | Chưa có plan nhưng tổng effort vượt capacity | Cảnh báo `capacity_gap` trước deadline |
+| RECOVER-01 | Hai task thuộc nhiều môn cạnh tranh capacity | Có phương án cân bằng lại toàn bộ deadline |
+| ESTIMATE-01 | Task hoàn thành lâu hơn estimate | Cập nhật hệ số course cho estimate còn là giả định |
+
+## 5. Evidence dashboard giảng viên và HITL
+
+Dashboard giảng viên dùng cùng một mẫu số cho KPI và chỉ báo rủi ro:
+
+- `Nộp đúng hạn = lượt nộp đúng hạn / tổng lượt nộp đã đến hạn`; mẫu số luôn hiển thị.
+- Risk không còn so với toàn bộ assignment cả năm. Chỉ bài chưa nộp, nằm trong look-ahead
+  14 ngày và còn tối đa 72 giờ mới vào chỉ báo cần can thiệp.
+- Trend loại toàn bộ tuần tương lai.
+- Mỗi bottleneck nêu assignment, số sinh viên chưa nộp và tổng thời lượng ước tính chưa được
+  bảo vệ.
+- Topic kỹ thuật được ánh xạ sang tên outcome hoặc câu hỏi quiz.
+- Review case hiển thị trích đoạn, tiêu chí rubric, kết luận AI và nguồn. Quyết định sửa, từ chối
+  hoặc yêu cầu thêm bằng chứng bắt buộc có ghi chú và được audit.
+
+Kết quả kiểm tra live ngày 03/10/2026 trên course `CS101` sau sửa:
+
+| Chỉ số | Kết quả thực tế |
+|---|---:|
+| Mẫu KPI nộp đúng hạn | `85/140` lượt nộp đã đến hạn |
+| Sinh viên có risk gần hạn | `7/28` |
+| Assignment bottleneck | `1` |
+| Tuần trend tương lai | `0` |
+| Topic đã ánh xạ tên dễ đọc | `3/3` |
+| Review case có rubric/source | Có |
+
+Smoke test ba sinh viên đồng thời:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\evaluate_concurrent_students.py
+```
+
+Kết quả lần chạy ngày 03/10/2026:
+
+| Chế độ | Pass | Median | Max của 3 mẫu | LLM calls | Tokens |
+|---|---:|---:|---:|---:|---:|
+| Cache lạnh | 3/3 | `5788.1 ms` | `6132.6 ms` | 1 | 182 |
+| Cache đã warm | 3/3 | `2475.9 ms` | `2656.8 ms` | 0 | 0 |
+
+Classifier cache chỉ lưu SHA-256 của câu hỏi và kết quả policy, không giữ nội dung người học;
+ba yêu cầu giống nhau chỉ gọi model một lần. Runtime còn có hard cap output token,
+timeout/retry và metrics cho call thành công/thất bại, token, estimated cost và trường hợp provider
+không trả usage metadata. `estimated_cost_usd=0` trong local vì đơn giá model chưa được cấu hình;
+đây không phải tuyên bố model miễn phí.
+
+Đây là integration smoke test, **không** phải load test hay bằng chứng cho quy mô 1.000 sinh viên.
+
+Lệnh tái lập:
+
+```powershell
+cd frontend/pacewise
+npm test
+
+cd ../..
+.\.venv\Scripts\python.exe -m pytest tests -q
+
+cd lms-simulator
+..\.venv\Scripts\python.exe -m pytest tests -q
+```

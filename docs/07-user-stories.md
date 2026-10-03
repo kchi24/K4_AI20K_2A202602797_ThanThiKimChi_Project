@@ -70,6 +70,9 @@ Quy ước ưu tiên:
 3. Không đọc tiêu đề hoặc nội dung sự kiện Google khi chỉ cần busy/free.
 4. Slot học không được chồng lên khoảng bận hoặc nằm ngoài quỹ thời gian đã xác nhận.
 5. Nếu không kết nối Google, chức năng lập kế hoạch nội bộ vẫn hoạt động bình thường.
+6. Khi thêm hoặc kéo dài khoảng bận trùng study block đã lưu, hệ thống tạo cảnh báo Recover nhưng không tự đổi lịch.
+7. Khi xóa hoặc rút ngắn khoảng bận, hệ thống báo capacity mới nhưng không tự nhồi thêm việc.
+8. Sinh viên không phải nhập lý do; thay đổi lịch cá nhân không làm thay đổi deadline hoặc trạng thái học vụ trong LMS.
 
 ### US-STU-04 — Tạo kế hoạch tuần khả thi
 
@@ -146,6 +149,8 @@ Quy ước ưu tiên:
 3. Nếu không còn phương án khả thi, hệ thống nói rõ và gợi ý trao đổi với giảng viên.
 4. Hiển thị diff trước–sau và chỉ áp dụng sau khi sinh viên xác nhận.
 5. Snapshot kế hoạch trước khi thay đổi được giữ để audit hoặc khôi phục.
+6. Recover dùng cùng dữ liệu đa môn đang hiển thị trong tab Kế hoạch: LMS cố định, study block và hard constraint cá nhân.
+7. Study block bị xung đột không còn được tính là capacity hợp lệ; deadline LMS vẫn giữ nguyên.
 
 ### US-STU-10 — Hỏi đáp dựa trên tài liệu môn học
 

@@ -18,11 +18,11 @@ Khảo sát thăm dò 17 sinh viên ghi nhận nhu cầu về lịch, nhắc dea
 PaceWise là trợ lý học tập theo chu trình **Plan–Do–Reflect**, giúp sinh viên tự điều chỉnh thay vì chỉ nhắc việc.
 
 - **Plan:** đọc dữ liệu Canvas, chia assignment thành milestone và kiểm tra quỹ thời gian, phụ thuộc, deadline.
-- **Lịch:** lịch PaceWise hoạt động độc lập; Google Calendar là kết nối tùy chọn để đọc busy/free và tạo study block sau xác nhận, còn `.ics` là fallback không cần OAuth.
+- **Lịch trong Kế hoạch:** timeline hợp nhất ca học/deadline LMS, study block đã xác nhận và khoảng không thể học. Google Calendar là kết nối tùy chọn để đọc busy/free và tạo study block sau xác nhận, còn `.ics` là fallback không cần OAuth.
 - **Do:** ghi nhận thời gian thực tế và trả lời từ tài liệu môn học có trích dẫn.
 - **Check trong Do:** dùng 1–3 câu đã duyệt để thu bằng chứng theo một đơn vị kiến thức.
-- **Recover trong Do:** tạo 2–3 phương án khi tiến độ lệch; sinh viên xác nhận trước khi đổi lịch.
-- **Reflect:** so sánh dự kiến–thực tế, tìm nguyên nhân và chọn một điều chỉnh cho tuần sau.
+- **Recover trong Do:** khi tiến độ, lịch bận hoặc dữ liệu LMS thay đổi, hệ thống tính lại capacity đa môn, tạo 2–3 phương án và chỉ đổi lịch sau khi sinh viên xác nhận. Deadline LMS luôn được giữ nguyên.
+- **Reflect:** tổng kết đúng tuần học Thứ Hai–Chủ Nhật, so sánh dự kiến–thực tế, tìm nguyên nhân và chọn một điều chỉnh làm đầu vào cho bản nháp tuần sau. Mặc định mở Chủ Nhật 20:00 và không tự áp dụng kế hoạch khi sinh viên chưa xác nhận.
 - **Giảng viên:** duyệt rubric, xem xu hướng tổng hợp và xử lý ca cần người xem.
 
 MVP luôn chạy bằng dữ liệu Canvas mô phỏng. Canvas REST chỉ đọc chỉ bật khi có sandbox/token; LTI 1.3 là P1 khi trường cấp developer key.
@@ -40,6 +40,7 @@ PaceWise tham khảo “check for understanding” nhưng chỉ pilot một môn
 - Không xếp hạng, kỷ luật hoặc tự động gắn nhãn “yếu/kém”.
 - Không tự đổi lịch, gửi hỗ trợ cá nhân hoặc chia sẻ dữ liệu khi chưa có xác nhận.
 - Không bắt buộc tài khoản Google trùng email trường và không làm PaceWise phụ thuộc vào một nhà cung cấp lịch.
+- Không xác minh lý do sinh viên thay đổi lịch cá nhân, không quản lý giấy tờ y tế và không tự cấp gia hạn/thi bù; nếu không còn kế hoạch khả thi, hệ thống chỉ báo phần thiếu và khuyến nghị trao đổi với giảng viên.
 
 ## Đo thành công
 

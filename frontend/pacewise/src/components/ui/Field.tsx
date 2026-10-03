@@ -105,6 +105,45 @@ export function Select({ label, hint, error, required, hideLabel, className, opt
   );
 }
 
+type TimeSelectProps = Omit<SelectProps, 'options'> & {
+  stepMinutes?: number;
+  includeEndOfDay?: boolean;
+};
+
+/** Locale-independent 24-hour control; avoids browser-specific SA/CH rendering. */
+export function TimeSelect({
+  stepMinutes = 30,
+  includeEndOfDay = false,
+  value,
+  ...rest
+}: TimeSelectProps) {
+  const lastMinute = includeEndOfDay ? 24 * 60 : 24 * 60 - stepMinutes;
+  const values = Array.from(
+    { length: Math.floor(lastMinute / stepMinutes) + 1 },
+    (_, index) => index * stepMinutes,
+  ).map((minutes) => {
+    if (minutes === 24 * 60) return '24:00';
+    return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+  });
+  const current = typeof value === 'string' ? value : undefined;
+  if (current && !values.includes(current)) values.push(current);
+  values.sort((left, right) => {
+    const toMinutes = (clock: string) => {
+      const [hours, minutes] = clock.split(':').map(Number);
+      return hours * 60 + minutes;
+    };
+    return toMinutes(left) - toMinutes(right);
+  });
+
+  return (
+    <Select
+      {...rest}
+      value={value}
+      options={values.map((clock) => ({ value: clock, label: clock }))}
+    />
+  );
+}
+
 export function Checkbox({ label, description, className, ...rest }: { label: React.ReactNode; description?: React.ReactNode } & React.InputHTMLAttributes<HTMLInputElement>) {
   const id = useId();
   return (
