@@ -65,11 +65,11 @@ LTI cấp trường và việc ghi dữ liệu ngược vào Canvas nằm ngoài
 | Backend | Python 3.11, FastAPI, Pydantic |
 | AI workflow | LangGraph, LangChain |
 | LLM | OpenAI-compatible API qua OpenRouter; model cấu hình bằng `.env` |
-| Database/vector | SQLite hiện tại; mục tiêu PostgreSQL + Qdrant |
-| Cache/job | Redis + RQ worker — chưa triển khai |
-| Frontend | Next.js + TypeScript — chưa triển khai |
-| Guardrail | Quy tắc xác định trước + Llama Guard |
-| Test/eval | pytest/Ruff; mục tiêu Vitest, Playwright, Locust/k6, RAGAS và metric xác định trước |
+| Database/vector | PostgreSQL + Qdrant service; SQLite chỉ cho test/local tối giản |
+| Cache/job | PostgreSQL durable ingestion queue + worker riêng |
+| Frontend | React 19 + TypeScript + Vite, HashRouter |
+| Guardrail | Quy tắc nhanh + semantic classifier hiệu chuẩn + output policy |
+| Test/eval | pytest/Ruff, Vitest/Testing Library, axe-core, deterministic eval; Locust/k6 và RAGAS cho pilot |
 | Observability | Mục tiêu OpenTelemetry, structured logs, Prometheus/Grafana và LLM tracing |
 | Deploy | Docker; Render hoặc GCP Cloud Run sau khi chốt ngân sách |
 
@@ -122,12 +122,120 @@ uvicorn src.main:app --reload --port 8000
 
 Không commit `.env`, API key hoặc token Canvas lên GitHub.
 
+### Biến môi trường
+
+Tạo `.env` từ `.env.example`. Các biến quan trọng nhất:
+
+| Biến | Bắt buộc | Mục đích |
+|---|---|---|
+| `OPENAI_API_KEY` | Khi dùng AI thật | Khóa của OpenAI-compatible provider; không commit |
+| `OPENAI_BASE_URL` | Khi dùng AI thật | Endpoint provider, ví dụ OpenRouter hoặc proxy nội bộ |
+| `MODEL_NAME` | Khi dùng AI thật | Model dùng cho coordinator/specialist |
+| `DATABASE_URL` | Có | PostgreSQL cho session, workspace, projection, queue và memory |
+| `PACEWISE_DB_PASSWORD` | Docker | Mật khẩu PostgreSQL local; phải đổi khi deploy |
+| `QDRANT_URL` | Docker/pilot | Qdrant service; để trống mới dùng embedded fallback local |
+| `PACEWISE_API_KEY` | Có khi tích hợp LMS | Service key giữa PaceWise backend và LMS; không gửi xuống browser |
+| `PACEWISE_SESSION_SECRET` | Có | Ký session; giá trị riêng tối thiểu 32 ký tự |
+| `LMS_BASE_URL` | Có | URL LMS Simulator hoặc adapter Canvas |
+| `GOOGLE_CLIENT_ID` | Tùy chọn | OAuth client để kết nối Google Calendar |
+| `GOOGLE_CLIENT_SECRET` | Tùy chọn | OAuth secret, chỉ lưu phía server |
+| `GOOGLE_TOKEN_ENCRYPTION_KEY` | Tùy chọn | Fernet key mã hóa refresh token |
+| `LANGCHAIN_API_KEY` | Tùy chọn | LangSmith tracing; không ảnh hưởng chức năng cốt lõi |
+| `SEMANTIC_SAFETY_MODE` | Không | `signals` hoặc `all` cho semantic safety classifier |
+| `RAG_SCORE_THRESHOLD` | Không | Ngưỡng từ chối câu trả lời thiếu nguồn |
+
+Xem đầy đủ giá trị, chú thích và cấu hình secret-file trong [`.env.example`](.env.example).
+
+### Chạy toàn bộ hệ thống bằng Docker
+
+Compose ở thư mục gốc chạy PaceWise frontend, backend, worker, Qdrant, LMS Simulator và hai PostgreSQL bằng một lệnh:
+
+```powershell
+Copy-Item .env.example .env
+# Điền OPENAI_API_KEY và thay các secret mẫu trong .env.
+docker compose up -d --build
+docker compose ps
+```
+
+Mở các địa chỉ sau:
+
+- PaceWise frontend: <http://localhost:5173>
+- PaceWise API/Swagger: <http://localhost:8000/docs>
+- LMS Simulator: <http://localhost:8010>
+- PaceWise PostgreSQL: `localhost:5433`
+- LMS PostgreSQL: `localhost:5434`
+- Qdrant API/dashboard: <http://localhost:6333/dashboard>
+
+Trong PaceWise, nút **Quay lại LMS** giữ nguyên phiên LMS và trở về URL cấu hình
+bởi `VITE_LMS_URL`; **Đăng xuất PaceWise** chỉ thu hồi session PaceWise hiện tại.
+
+Frontend production build được phục vụ bởi Nginx. Request `/api/*` được reverse proxy nội bộ tới
+FastAPI; FastAPI gọi LMS qua `http://lms-simulator:8010`. Vì vậy service key LMS không xuất hiện
+trong JavaScript hoặc trình duyệt.
+
+```powershell
+# Xem log
+docker compose logs -f backend worker frontend lms-simulator qdrant
+
+# Dừng nhưng giữ dữ liệu database
+docker compose down
+```
+
+Tài khoản simulator dùng mật khẩu `demo123`: `student@canvas.local` và
+`teacher@canvas.local`. Đăng nhập thủ công chỉ phục vụ local; luồng tích hợp chuẩn là
+Canvas tạo one-time launch URL tới `/#/launch?token=...`. Nút **PaceWise** ở Global
+Navigation mở dashboard tổng hợp mọi môn; tab **PaceWise** trong Course Navigation
+mở cùng ứng dụng với môn hiện tại được chọn làm ngữ cảnh ban đầu.
+
+Mô hình bảo mật:
+
+- Trình duyệt không nhận `PACEWISE_API_KEY`; chỉ PaceWise backend gọi service API của LMS.
+- Launch token chỉ dùng một lần. Sau xác thực, backend cấp cookie session `HttpOnly` và
+  cookie CSRF tách biệt.
+- Session được lưu và có thể thu hồi trong PostgreSQL, nên logout có hiệu lực với mọi
+  backend instance; đăng nhập bị rate-limit dùng chung qua database.
+- `user_id`, `course_id` và role lấy từ session đã ký; client không được tự chọn người dùng.
+- Sinh viên chỉ đọc dữ liệu của mình. Endpoint tổng quan lớp yêu cầu role giảng viên và
+  chỉ trả dữ liệu tổng hợp, không trả tên/email sinh viên.
+- Production hỗ trợ bắt buộc HTTPS, HSTS/security headers và đọc secret từ file mount qua
+  `PACEWISE_API_KEY_FILE`/`PACEWISE_SESSION_SECRET_FILE`.
+
+Dữ liệu kế hoạch, phiên học và reflection được lưu trong PostgreSQL thay vì chỉ nằm ở
+`localStorage`. Sau đăng nhập, frontend tự đồng bộ LMS mỗi 30 giây, tổng hợp deadline của
+tất cả môn đã đăng ký và cho phép đổi môn đang xem. Worker riêng đọc event feed của LMS, lưu
+cursor, cập nhật projection/risk và xếp job ingest RAG bền vững để tiếp tục đúng vị trí sau khi
+restart. Chat request không tải hoặc embedding học liệu.
+
 ## Kiểm thử
 
 ```powershell
-pytest
-ruff check .
+python -m ruff check src/ evals/ tests/
+python -m pytest tests/ -q
+python -m evals.run_agent_eval
+python -m evals.run_manual_evidence
 ```
+
+### Sample queries
+
+Sau khi đăng nhập bằng tài khoản sinh viên local, thử các câu sau trong PaceWise:
+
+| Luồng | Câu hỏi mẫu | Kết quả mong đợi |
+|---|---|---|
+| Plan | `Lập kế hoạch tuần từ các assignment hiện tại, mỗi ngày tối đa 2 giờ.` | Bản nháp milestone và màn hình xác nhận; chưa tự lưu |
+| Tracking | `Kiểm tra tiến độ hiện tại và cho tôi biết deadline nào đang có nguy cơ.` | Slack, mức rủi ro và lý do dựa trên dữ liệu LMS |
+| QA/RAG | `Theo tài liệu môn học, overfitting là gì? Trích nguồn giúp tôi.` | Trả lời có citation hoặc từ chối nếu chưa đủ nguồn |
+| Guardrail | `Làm hoàn chỉnh bài tập tính điểm này để tôi nộp.` | Không làm hộ; chuyển sang gợi ý từng bước |
+| Understanding | `Kiểm tra mức hiểu bài của tôi theo assessment đang chọn.` | Dùng rubric server-side; trả bằng chứng, confidence hoặc chuyển review |
+| Recover | `Bài này kéo dài thêm 3 giờ, hãy đưa ra phương án cứu lịch.` | 2–3 phương án và diff; chỉ áp dụng sau xác nhận |
+| Reflect | `Tổng kết tuần này và đề xuất một thay đổi cho tuần sau.` | Bản reflection dựa trên kế hoạch/thực tế, chờ người dùng xác nhận |
+
+Health check không cần đăng nhập:
+
+```powershell
+curl.exe http://localhost:8000/health
+```
+
+Bằng chứng manual mới nhất: [Manual Evaluation Evidence](docs/08-evaluation-evidence.md).
 
 ## API hiện có
 
@@ -135,11 +243,28 @@ ruff check .
 |---|---|---|
 | `GET` | `/health` | Kiểm tra backend |
 | `GET` | `/api/v1/status` | Kiểm tra trạng thái agent |
-| `POST` | `/api/v1/chat` | Gửi tin nhắn tới LangGraph agent mẫu |
+| `POST` | `/api/v1/chat` | Chạy LangGraph agent bằng PaceWise session và dữ liệu LMS đã phân quyền |
+| `POST` | `/api/v1/auth/lms-launch` | Đổi one-time LMS launch token lấy PaceWise session |
+| `POST` | `/api/v1/auth/lms-login` | Đăng nhập LMS dành cho môi trường local |
+| `GET` | `/api/v1/auth/me` | Khôi phục session hiện tại |
+| `POST` | `/api/v1/auth/course` | Đổi môn đang xem trong phạm vi enrollment |
+| `POST` | `/api/v1/auth/logout` | Đăng xuất có kiểm tra CSRF |
+| `GET` | `/api/v1/lms/sync` | Đồng bộ course, assignment và trạng thái nộp bài theo session |
+| `GET/PUT` | `/api/v1/workspace` | Đọc/lưu kế hoạch và dữ liệu học tập cá nhân trong PostgreSQL |
+| `GET` | `/api/v1/instructor/overview` | Dashboard tổng hợp, chỉ dành cho giảng viên |
+| `POST` | `/api/v1/instructor/actions` | Lưu duyệt assessment/review/hướng dẫn và audit log |
+| `GET/POST/DELETE` | `/api/v1/integrations/google-calendar/*` | OAuth, đọc busy/free, xuất study block đã xác nhận và thu hồi quyền |
+| `POST` | `/api/v1/calendar/pacewise-study-plan.ics` | Tải kế hoạch dạng `.ics` không cần Google OAuth |
 
-Các API nghiệp vụ Plan–Do–Reflect, bao gồm Check/Recover trong bước Do, chưa
-được triển khai. Phạm vi dự kiến được quản lý trong PRD, không được xem là tính
-năng đã hoàn thành.
+API chat hiện điều phối sáu workflow Plan, Tracking, QA, Understanding, Recover
+và Reflect. Plan/Recover/Reflect có bước xác nhận; QA có guardrail và kiểm tra
+trích dẫn; Understanding chuyển ca thiếu bằng chứng/rubric cho giảng viên. Đây là
+AI harness đã qua kiểm thử xác định, chưa thay thế kiểm thử pilot với model và dữ
+liệu thật.
+
+Frontend gọi API AI bằng PaceWise session `HttpOnly`; backend tự lấy user, role,
+course và assignment từ LMS simulator. Học liệu do worker ingest trước vào Qdrant; request chat chỉ retrieval. Client không được tự truyền
+`user_id`, `role`, `course_id` hoặc `thread_id` cho agent.
 
 ## Tài liệu Gate 01
 
@@ -149,6 +274,10 @@ năng đã hoàn thành.
 - [Wireframe & UI Flow](docs/03-wireframe-uiflow.md)
 - [Architecture Diagram](docs/architecture_diagram.md)
 - [Project Charter & 5-week Delivery Plan](docs/04-project-charter.md)
+- [AI Workflows & Evaluation](docs/05-ai-workflows-and-evaluation.md)
+- [Google Calendar Integration](docs/06-google-calendar-integration.md)
+- [User Stories & Acceptance Criteria](docs/07-user-stories.md)
+- [Manual Evaluation Evidence](docs/08-evaluation-evidence.md)
 
 ## Cấu trúc repository
 
@@ -162,7 +291,7 @@ src/
 └── main.py       # FastAPI entry point
 tests/            # Unit/integration tests
 docs/             # Brief, PRD, wireframe và tài liệu kỹ thuật
-eval/             # Evaluation evidence
+evals/            # Dataset, runner và evaluation evidence
 presentation/     # Pitch deck và video demo
 ```
 
@@ -190,6 +319,59 @@ presentation/     # Pitch deck và video demo
 Mỗi thay đổi được thực hiện trên một nhánh ngắn hạn tạo từ `develop`, mở pull
 request trở lại `develop` và xóa branch sau khi merge. Khi một phiên bản đã ổn
 định, đội mở pull request từ `develop` vào `main`.
+
+## AI runtime, observability và evaluation
+
+- LangGraph dùng PostgreSQL checkpointer khi `DATABASE_URL` là PostgreSQL; state của cùng một
+  hành trình học được khôi phục qua khóa `institution:user:course:learning-cycle`. `MemorySaver` chỉ còn là fallback
+  cho test/local SQLite.
+- Worker RAG ingest bất đồng bộ học liệu đã được LMS phân quyền và version hóa, tạo embedding đa ngôn ngữ bằng FastEmbed, truy xuất
+  từ Qdrant, rerank bằng FlashRank ONNX đa ngôn ngữ và trả citation theo tài liệu/trang/đoạn.
+  FastEmbed và reranker đều lazy-load, nên các workflow không dùng RAG không tốn RAM cho model.
+- Backend xuất structured request logs, `X-Request-ID` và Prometheus metrics tại `/metrics`.
+
+Chạy thêm Prometheus + Grafana (dashboard `PaceWise Overview`):
+
+```powershell
+docker compose --profile observability up -d --build
+```
+
+- Prometheus: <http://localhost:9090>
+- Grafana: <http://localhost:3001> (mặc định local: `admin` / `pacewise-local-only`)
+
+Chạy RAGAS với bộ JSONL đã gán nhãn tối thiểu 100 mẫu. Mỗi dòng cần `user_input`, `response`,
+`retrieved_contexts` và `reference`:
+
+```powershell
+pip install -r requirements.txt
+python evals/run_ragas_eval.py evals/datasets/rag-pilot.jsonl
+```
+
+Đo độ đồng thuận giữa hai SME, AI so với nhãn đã adjudicate và false-positive/
+false-negative của safety policy:
+
+```powershell
+python evals/run_pilot_eval.py evals/datasets/pilot-human-v1.jsonl
+```
+
+File `evals/datasets/pilot-human-template.jsonl` chỉ mô tả schema; không phải dữ
+liệu người thật và không được dùng để tuyên bố metric pilot.
+
+Smoke test đồng thời cho MVP dùng ba tài khoản sinh viên demo, đồng thời báo median/max latency,
+error và chênh lệch số lần gọi/token/cost của LLM:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\evaluate_concurrent_students.py
+```
+
+Đây chỉ là kiểm tra tích hợp với 2–3 người dùng, không phải bằng chứng hệ thống chịu được 1.000
+người. Bài 1.000 virtual users được hoãn tới môi trường staging đủ tài nguyên; khi thực hiện mới
+dùng lệnh sau và phải lưu report trước khi tuyên bố đạt:
+
+```powershell
+pip install -r requirements.txt
+locust -f load_tests/locustfile.py --host http://localhost:5173 --headless -u 1000 -r 50 -t 5m --csv evals/reports/load-1000
+```
 
 ## License
 

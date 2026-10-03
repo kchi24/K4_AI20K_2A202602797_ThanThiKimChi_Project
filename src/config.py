@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field
@@ -17,20 +18,85 @@ class Settings(BaseSettings):
     app_env: Literal["development", "production", "test"] = "development"
     app_port: int = Field(default=8000, ge=1, le=65535)
     app_host: str = "0.0.0.0"
+    institution_id: str = "university-x"
+    app_timezone: str = "Asia/Ho_Chi_Minh"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
-    cors_origins: str = "http://localhost:3000"
+    cors_origins: str = "http://localhost:5173"
+
+    # Canvas LMS simulator integration. The service key never leaves the backend.
+    lms_base_url: str = "http://127.0.0.1:8010"
+    pacewise_api_key: str = ""
+    pacewise_api_key_file: str = ""
+    pacewise_session_secret: str = "development-only-change-this-session-secret"
+    pacewise_session_secret_file: str = ""
+    pacewise_session_cookie: str = "pacewise_session"
+    pacewise_csrf_cookie: str = "pacewise_csrf"
+    pacewise_session_minutes: int = Field(default=240, ge=5, le=1440)
+    session_cookie_secure: bool = False
+    login_rate_limit: int = Field(default=5, ge=1, le=100)
+    login_rate_window_seconds: int = Field(default=600, ge=60, le=86400)
+    lms_sync_interval_seconds: int = Field(default=30, ge=5, le=3600)
+    worker_batch_size: int = Field(default=100, ge=1, le=500)
+    force_https: bool = False
+
+    # Google Calendar OAuth. Keep the client secret and token-encryption key on
+    # the server; neither value is ever returned to the browser.
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_client_secret_file: str = ""
+    google_token_encryption_key: str = ""
+    google_token_encryption_key_file: str = ""
+    google_redirect_uri: str = "http://localhost:8000/api/v1/integrations/google-calendar/callback"
+    google_oauth_success_url: str = "http://localhost:5173/#/settings"
+    google_calendar_scopes: str = (
+        "openid email "
+        "https://www.googleapis.com/auth/calendar.freebusy "
+        "https://www.googleapis.com/auth/calendar.events.owned"
+    )
 
     # LLM
     openai_api_key: str = ""
     openai_base_url: str = "https://openrouter.ai/api/v1"
     model_name: str = "openai/gpt-4o-mini"
     llm_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    llm_timeout_seconds: float = Field(default=45.0, ge=5.0, le=180.0)
+    llm_max_output_tokens: int = Field(default=800, ge=64, le=4096)
+    semantic_safety_mode: Literal["signals", "all"] = "signals"
+    llm_input_cost_per_million: float = Field(default=0.0, ge=0.0)
+    llm_output_cost_per_million: float = Field(default=0.0, ge=0.0)
 
     # Database
-    database_url: str = "sqlite:///./data/app.db"
+    database_url: str = "sqlite:///./data/pacewise.db"
+    use_postgres_checkpoint: bool = True
 
     # Vector Store
-    chroma_persist_dir: str = "./data/chroma"
+    vector_store_type: str = "qdrant"
+    qdrant_url: str = ""
+    qdrant_api_key: str = ""
+    qdrant_path: str = "./data/qdrant"
+    chroma_persist_dir: str = "./src/agents/data/chroma"
+    embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    embedding_cache_dir: str = "./data/models/fastembed"
+    # Multilingual ONNX cross-encoder; loaded lazily only after retrieval.
+    reranker_model: str = "ms-marco-MultiBERT-L-12"
+    reranker_cache_dir: str = "./data/models/flashrank"
+    rag_top_k: int = Field(default=8, ge=3, le=30)
+    rag_final_k: int = Field(default=3, ge=1, le=10)
+    rag_rerank_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    rag_score_threshold: float = Field(default=0.72, ge=0.0, le=1.0)
+    metrics_enabled: bool = True
+
+    def model_post_init(self, __context: object) -> None:
+        """Support Docker/Kubernetes/cloud secrets mounted as read-only files."""
+        for value_field, file_field in (
+            ("pacewise_api_key", "pacewise_api_key_file"),
+            ("pacewise_session_secret", "pacewise_session_secret_file"),
+            ("google_client_secret", "google_client_secret_file"),
+            ("google_token_encryption_key", "google_token_encryption_key_file"),
+        ):
+            secret_file = getattr(self, file_field).strip()
+            if secret_file:
+                setattr(self, value_field, Path(secret_file).read_text(encoding="utf-8").strip())
 
 
 @lru_cache

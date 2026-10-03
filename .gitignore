@@ -29,7 +29,7 @@ env/
 Thumbs.db
 
 # Data (never commit large data)
-data/
+/data/
 *.db
 *.sqlite3
 
@@ -41,6 +41,7 @@ logs/
 htmlcov/
 .coverage
 coverage.xml
+.tracecov/
 
 # Docker
 docker-compose.override.yml
@@ -58,3 +59,12 @@ out/
 # AI logs — tracked structure, ignored content
 .ai-log/*.jsonl
 .ai-log/archive/
+
+# Local external repositories and generated working files
+canvas-lms/
+P-008-ci-fix/
+.tmp-cursus-media/
+lms-simulator/uploads/
+
+# Local reference decks
+*.pptx
