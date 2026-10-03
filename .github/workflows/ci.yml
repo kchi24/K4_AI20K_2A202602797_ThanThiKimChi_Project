@@ -61,7 +61,13 @@ jobs:
       - name: Run frontend unit and accessibility tests
         run: npm.cmd test
         working-directory: frontend/pacewise
+        env:
+          # Keep Node predictable on the shared Windows runner where Docker/WSL
+          # may already consume most of the available commit memory.
+          NODE_OPTIONS: --max-old-space-size=1024
 
       - name: Typecheck and build frontend
         run: npm.cmd run build
         working-directory: frontend/pacewise
+        env:
+          NODE_OPTIONS: --max-old-space-size=1024
