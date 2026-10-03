@@ -6,8 +6,10 @@ rollouts started in this repository and appends missing user prompts to the
 same pending AI log used by the live hook. It is safe to run more than once.
 """
 
+import argparse
 import json
 import os
+import re
 import subprocess
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -15,6 +17,26 @@ from pathlib import Path
 VN_TZ = timezone(timedelta(hours=7))
 LOG_DIR = Path(os.environ.get("AI_LOG_DIR", ".ai-log"))
 CODEX_HOME = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+
+SECRET_PATTERNS = (
+    re.compile(r"\bsk-[A-Za-z0-9_-]{12,}\b"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+    re.compile(r"\bB73[A-Za-z0-9]{20,}\b"),
+    re.compile(
+        r"(?im)^(\s*(?:OPENAI_API_KEY|LANGSMITH_API_KEY|GOOGLE_CLIENT_SECRET|SESSION_SECRET)\s*=)\s*\S+"
+    ),
+)
+
+
+def _redact(text: str) -> str:
+    result = text
+    for pattern in SECRET_PATTERNS:
+        result = pattern.sub(
+            lambda match: f"{match.group(1)}[REDACTED]" if match.lastindex else "[REDACTED]",
+            result,
+        )
+    return result
 
 
 def _git(*args: str) -> str:
@@ -55,7 +77,12 @@ def _logged_turns() -> set[tuple[str, str]]:
     return seen
 
 
-def _entries(rollout: Path, repo_root: str, seen: set[tuple[str, str]]):
+def _entries(
+    rollout: Path,
+    repo_root: str,
+    seen: set[tuple[str, str]],
+    target_session_id: str | None = None,
+):
     with rollout.open(encoding="utf-8") as stream:
         first = stream.readline()
         try:
@@ -65,12 +92,15 @@ def _entries(rollout: Path, repo_root: str, seen: set[tuple[str, str]]):
         if header.get("type") != "session_meta":
             return
         meta = header.get("payload") or {}
-        if meta.get("source") != "vscode" or not _same_path(
-            meta.get("cwd", ""), repo_root
-        ):
+        if meta.get("source") != "vscode":
             return
 
         session_id = meta.get("id") or meta.get("session_id") or ""
+        if target_session_id:
+            if session_id != target_session_id:
+                return
+        elif not _same_path(meta.get("cwd", ""), repo_root):
+            return
         for line in stream:
             try:
                 item = json.loads(line)
@@ -111,13 +141,19 @@ def _entries(rollout: Path, repo_root: str, seen: set[tuple[str, str]]):
                 "branch": _git("rev-parse", "--abbrev-ref", "HEAD"),
                 "commit": _git("rev-parse", "--short", "HEAD"),
                 "student": _git("config", "user.email"),
-                "prompt": prompt[:1000],
+                "prompt": _redact(prompt[:1000]),
                 "turn_id": turn_id,
                 "transcript_path": str(rollout),
             }
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--session-id",
+        help="Recover one explicit Codex conversation even when it started outside the repo.",
+    )
+    args = parser.parse_args()
     repo_root = _git("rev-parse", "--show-toplevel")
     sessions = CODEX_HOME / "sessions"
     if not repo_root or not sessions.is_dir():
@@ -126,7 +162,7 @@ def main() -> None:
     recovered = []
     for rollout in sessions.rglob("rollout-*.jsonl"):
         try:
-            recovered.extend(_entries(rollout, repo_root, seen))
+            recovered.extend(_entries(rollout, repo_root, seen, args.session_id))
         except (OSError, UnicodeError):
             continue  # A conversation may still be writing its rollout.
     if not recovered:
