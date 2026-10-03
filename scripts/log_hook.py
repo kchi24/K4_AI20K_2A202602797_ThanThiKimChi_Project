@@ -6,12 +6,40 @@ Reads JSON from stdin, normalizes to common format, appends to .ai-log/session.j
 
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 VN_TZ = timezone(timedelta(hours=7))
+
+SECRET_PATTERNS = (
+    re.compile(r"\bsk-[A-Za-z0-9_-]{12,}\b"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+    re.compile(r"\bB73[A-Za-z0-9]{20,}\b"),
+    re.compile(
+        r"(?im)^(\s*(?:OPENAI_API_KEY|LANGSMITH_API_KEY|GOOGLE_CLIENT_SECRET|SESSION_SECRET)\s*=)\s*\S+"
+    ),
+)
+
+
+def redact(value):
+    """Remove common credentials while preserving useful hook context."""
+    if isinstance(value, str):
+        result = value
+        for pattern in SECRET_PATTERNS:
+            result = pattern.sub(
+                lambda match: f"{match.group(1)}[REDACTED]" if match.lastindex else "[REDACTED]",
+                result,
+            )
+        return result
+    if isinstance(value, dict):
+        return {key: redact(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [redact(item) for item in value]
+    return value
 
 
 def git(cmd):
@@ -150,6 +178,7 @@ def normalize(data: dict, tool: str) -> dict | None:
     # this only checked `prompt`, which dropped Claude Bash/Edit events (their
     # tool_input has `command` / `file_path`, not `prompt` or `content`) and
     # any Gemini/Cursor/Copilot turn that carried context but no plain prompt.
+    base = redact(base)
     payload_keys = ("prompt", "tool_input", "response_summary", "tool_response", "tool_args", "files_context")
     lifecycle_events = ("Stop", "stop", "SessionEnd", "sessionEnd", "AfterModel")
     has_payload = any(base.get(k) for k in payload_keys)

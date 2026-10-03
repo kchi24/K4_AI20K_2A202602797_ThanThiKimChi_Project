@@ -213,6 +213,8 @@ python -m ruff check src/ evals/ tests/
 python -m pytest tests/ -q
 python -m evals.run_agent_eval
 python -m evals.run_manual_evidence
+# Cần Docker + model trong .env; tạo 20 output live và cập nhật evidence
+python -m evals.run_live_manual_evidence
 ```
 
 ### Sample queries
@@ -235,7 +237,7 @@ Health check không cần đăng nhập:
 curl.exe http://localhost:8000/health
 ```
 
-Bằng chứng manual mới nhất: [Manual Evaluation Evidence](docs/08-evaluation-evidence.md).
+Bằng chứng manual mới nhất: [Live Manual Evaluation Evidence](docs/evaluation-evidence.md).
 
 ## API hiện có
 
@@ -275,9 +277,8 @@ course và assignment từ LMS simulator. Học liệu do worker ingest trước
 - [Architecture Diagram](docs/architecture_diagram.md)
 - [Project Charter & 5-week Delivery Plan](docs/04-project-charter.md)
 - [AI Workflows & Evaluation](docs/05-ai-workflows-and-evaluation.md)
-- [Google Calendar Integration](docs/06-google-calendar-integration.md)
-- [User Stories & Acceptance Criteria](docs/07-user-stories.md)
-- [Manual Evaluation Evidence](docs/08-evaluation-evidence.md)
+- [User Stories & Acceptance Criteria](docs/06-user-stories.md)
+- [Live Manual Evaluation Evidence](docs/evaluation-evidence.md)
 
 ## Cấu trúc repository
 
