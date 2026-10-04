@@ -8,6 +8,8 @@ const START_HOUR = 0;
 const END_HOUR = 24;
 const HOUR_HEIGHT = 58;
 const MIN_EVENT_HEIGHT = 34;
+const EDIT_SNAP_MINUTES = 5;
+const MIN_EDITABLE_DURATION = 15;
 
 type DragPayload =
   | { kind: 'block'; id: string }
@@ -20,8 +22,8 @@ interface PlanCalendarBoardProps {
   items: PlanTimelineItem[];
   draftMode: boolean;
   onMoveBlock: (id: string, date: string, start: string) => void;
-  onResizeBlock: (id: string, end: string) => void;
-  onResizeBusy: (id: string, end: string) => void;
+  onResizeBlock: (id: string, edge: 'start' | 'end', clock: string) => void;
+  onResizeBusy: (id: string, edge: 'start' | 'end', clock: string) => void;
   onAddBusy: (date: string, start: string, category: PersonalSlotCategory, label: string) => void;
   onOpenPersonal: (category: PersonalSlotCategory, label: string) => void;
   onOpenRoutine: () => void;
@@ -128,7 +130,7 @@ function CourseTaskList({ courses, tasks, onSetPriority }: Pick<PlanCalendarBoar
         <p className="text-xs font-bold uppercase tracking-[0.12em] text-muted">Nhiệm vụ từ LMS</p>
         <p className="mt-1 text-xs text-muted">Dữ liệu chỉ đọc; Agent tự chia và xếp lịch học.</p>
       </div>
-      <div className="min-h-0 flex-1 p-3">
+      <div className="auto-hide-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 pb-8 scroll-pb-8">
         {selectedTask ? (
           <>
             <label className="block text-xs font-bold text-muted">
@@ -251,47 +253,55 @@ function CalendarEvent({
   lane: number;
   laneCount: number;
   draftMode: boolean;
-  onResizeBlock: (id: string, end: string) => void;
-  onResizeBusy: (id: string, end: string) => void;
+  onResizeBlock: (id: string, edge: 'start' | 'end', clock: string) => void;
+  onResizeBusy: (id: string, edge: 'start' | 'end', clock: string) => void;
   onOpenBlock: (id: string) => void;
   onRemoveBlock: (id: string) => void;
   onRemoveBusy: (id: string) => void;
 }) {
   const start = Math.max(START_HOUR * 60, Math.min(END_HOUR * 60 - 30, minuteOf(item.start)));
   const end = item.end ? minuteOf(item.end) : start + Math.max(item.durationMin, 30);
+  const [resizeStart, setResizeStart] = useState<number | null>(null);
   const [resizeEnd, setResizeEnd] = useState<number | null>(null);
+  const displayStart = resizeStart ?? start;
   const displayEnd = resizeEnd ?? end;
-  const top = ((start - START_HOUR * 60) / 60) * HOUR_HEIGHT;
-  const height = Math.max(MIN_EVENT_HEIGHT, ((Math.max(start + 30, displayEnd) - start) / 60) * HOUR_HEIGHT - 3);
+  const top = ((displayStart - START_HOUR * 60) / 60) * HOUR_HEIGHT;
+  const height = Math.max(MIN_EVENT_HEIGHT, ((Math.max(displayStart + MIN_EDITABLE_DURATION, displayEnd) - displayStart) / 60) * HOUR_HEIGHT - 3);
   const canMove = item.source === 'pacewise' && !item.readOnly && draftMode && item.entityId;
   const canDeleteBusy = item.source === 'busy' && !item.readOnly && item.entityId;
   const canResize = Boolean(canMove || canDeleteBusy);
   const canOpen = item.source === 'pacewise' && item.scheduleStatus !== 'history' && Boolean(item.entityId && item.taskId);
-  const widthPercent = 100 / laneCount;
-  const leftPercent = lane * widthPercent;
+  const layered = laneCount > 2;
+  const widthPercent = layered ? 72 : 100 / laneCount;
+  const leftPercent = layered ? lane * (28 / Math.max(1, laneCount - 1)) : lane * widthPercent;
 
-  const startResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
+  const startResize = (edge: 'start' | 'end') => (event: ReactPointerEvent<HTMLButtonElement>) => {
     if (!canResize || !item.entityId) return;
     event.preventDefault();
     event.stopPropagation();
     const originY = Number.isFinite(event.clientY) ? event.clientY : 0;
-    const originEnd = end;
-    let latestEnd = originEnd;
+    const originValue = edge === 'start' ? start : end;
+    let latestValue = originValue;
     const move = (pointerEvent: PointerEvent) => {
       const pointerY = Number.isFinite(pointerEvent.clientY) ? pointerEvent.clientY : originY;
-      const delta = Math.round(((pointerY - originY) / HOUR_HEIGHT) * 2) * 30;
-      latestEnd = Math.max(start + 30, Math.min(END_HOUR * 60, originEnd + delta));
-      setResizeEnd(latestEnd);
+      const rawDelta = ((pointerY - originY) / HOUR_HEIGHT) * 60;
+      const delta = Math.round(rawDelta / EDIT_SNAP_MINUTES) * EDIT_SNAP_MINUTES;
+      latestValue = edge === 'start'
+        ? Math.max(START_HOUR * 60, Math.min(end - MIN_EDITABLE_DURATION, originValue + delta))
+        : Math.max(start + MIN_EDITABLE_DURATION, Math.min(END_HOUR * 60, originValue + delta));
+      if (edge === 'start') setResizeStart(latestValue);
+      else setResizeEnd(latestValue);
     };
     const finish = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', finish);
       window.removeEventListener('pointercancel', finish);
+      setResizeStart(null);
       setResizeEnd(null);
-      if (latestEnd !== originEnd) {
-        const nextEnd = clockOf(latestEnd, true);
-        if (item.source === 'pacewise') onResizeBlock(item.entityId!, nextEnd);
-        if (item.source === 'busy') onResizeBusy(item.entityId!, nextEnd);
+      if (latestValue !== originValue) {
+        const nextClock = clockOf(latestValue, edge === 'end');
+        if (item.source === 'pacewise') onResizeBlock(item.entityId!, edge, nextClock);
+        if (item.source === 'busy') onResizeBusy(item.entityId!, edge, nextClock);
       }
     };
     window.addEventListener('pointermove', move);
@@ -312,13 +322,13 @@ function CalendarEvent({
       }}
       role={canOpen ? 'button' : undefined}
       tabIndex={canOpen ? 0 : undefined}
-      className={`group absolute z-10 overflow-hidden rounded-md border border-white/70 border-l-[3px] px-2 py-1 shadow-sm ${item.kind === 'personal_self_study' ? 'border-l-[#4E9462] bg-[#EAF7EE] text-[#245D34]' : sourceStyle[item.source]} ${item.scheduleStatus === 'tentative' ? 'border-dashed opacity-70' : ''} ${item.scheduleStatus === 'history' ? 'opacity-55 grayscale' : ''} ${canMove ? 'cursor-grab active:cursor-grabbing' : ''}`}
+      className={`group absolute overflow-hidden rounded-md border border-white/70 border-l-[3px] px-2 py-1 shadow-sm hover:z-50 focus:z-50 ${item.source === 'pacewise' ? 'z-20' : 'z-10'} ${item.kind === 'personal_self_study' ? 'border-l-[#4E9462] bg-[#EAF7EE] text-[#245D34]' : sourceStyle[item.source]} ${item.scheduleStatus === 'tentative' ? 'border-dashed opacity-80' : ''} ${item.scheduleStatus === 'history' ? 'opacity-55 grayscale' : ''} ${canMove ? 'cursor-grab active:cursor-grabbing' : ''}`}
       style={{ top, height, left: `calc(${leftPercent}% + 3px)`, width: `calc(${widthPercent}% - 5px)` }}
       title={`${item.start}${item.end ? `–${item.end}` : ''} · ${item.title}${canOpen ? ' · Mở phiên tự học' : ''}`}
     >
       <div className="flex items-start gap-1">
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[10px] font-semibold leading-4">{item.start}{item.end ? `–${clockOf(displayEnd, true)}` : ''}</p>
+          <p className="truncate text-[10px] font-semibold leading-4">{clockOf(displayStart)}{item.end ? `–${clockOf(displayEnd, true)}` : ''}</p>
           <p className={`${height < 48 ? 'truncate' : 'line-clamp-2'} text-[11px] font-bold leading-4`}>{item.courseCode ? `${item.courseCode} · ` : ''}{item.title}{item.scheduleStatus === 'tentative' ? ' · Dự kiến' : ''}</p>
         </div>
         {(canMove || canDeleteBusy) && (
@@ -338,16 +348,28 @@ function CalendarEvent({
         )}
       </div>
       {canResize && (
-        <button
-          type="button"
-          draggable={false}
-          aria-label={`Thay đổi thời lượng ${item.title}`}
-          title="Kéo để tăng hoặc giảm thời lượng"
-          onPointerDown={startResize}
-          className={`absolute inset-x-0 bottom-0 flex h-2.5 touch-none cursor-ns-resize items-center justify-center bg-white/15 opacity-0 transition-opacity hover:bg-white/50 focus:opacity-100 group-hover:opacity-100 ${resizeEnd === null ? '' : 'opacity-100'}`}
-        >
-          <span className="h-0.5 w-5 rounded-full bg-current opacity-45" aria-hidden="true" />
-        </button>
+        <>
+          <button
+            type="button"
+            draggable={false}
+            aria-label={`Thay đổi giờ bắt đầu ${item.title}`}
+            title="Kéo lên hoặc xuống để đổi giờ bắt đầu"
+            onPointerDown={startResize('start')}
+            className={`absolute inset-x-0 top-0 flex h-2.5 touch-none cursor-ns-resize items-center justify-center bg-white/15 opacity-0 transition-opacity hover:bg-white/50 focus:opacity-100 group-hover:opacity-100 ${resizeStart === null ? '' : 'opacity-100'}`}
+          >
+            <span className="h-0.5 w-5 rounded-full bg-current opacity-45" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            draggable={false}
+            aria-label={`Thay đổi thời lượng ${item.title}`}
+            title="Kéo lên hoặc xuống để đổi giờ kết thúc"
+            onPointerDown={startResize('end')}
+            className={`absolute inset-x-0 bottom-0 flex h-2.5 touch-none cursor-ns-resize items-center justify-center bg-white/15 opacity-0 transition-opacity hover:bg-white/50 focus:opacity-100 group-hover:opacity-100 ${resizeEnd === null ? '' : 'opacity-100'}`}
+          >
+            <span className="h-0.5 w-5 rounded-full bg-current opacity-45" aria-hidden="true" />
+          </button>
+        </>
       )}
     </article>
   );
@@ -362,7 +384,8 @@ export function PlanCalendarBoard(props: PlanCalendarBoardProps) {
     const payload = payloadOf(event);
     if (!payload) return;
     const rect = event.currentTarget.getBoundingClientRect();
-    const minute = Math.round(((event.clientY - rect.top) / HOUR_HEIGHT) * 2) * 30 + START_HOUR * 60;
+    const rawMinute = ((event.clientY - rect.top) / HOUR_HEIGHT) * 60 + START_HOUR * 60;
+    const minute = Math.round(rawMinute / EDIT_SNAP_MINUTES) * EDIT_SNAP_MINUTES;
     const start = clockOf(minute);
     if (payload.kind === 'block') props.onMoveBlock(payload.id, date, start);
     if (payload.kind === 'busy') props.onAddBusy(date, start, payload.category, payload.label);

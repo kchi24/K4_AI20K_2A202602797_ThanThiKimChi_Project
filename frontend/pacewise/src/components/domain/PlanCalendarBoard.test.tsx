@@ -59,7 +59,13 @@ describe('PlanCalendarBoard', () => {
     fireEvent.pointerDown(resizeHandle, { clientY: 100 });
     fireEvent.pointerMove(window, { clientY: 129 });
     fireEvent.pointerUp(window, { clientY: 129 });
-    expect(onResizeBlock).toHaveBeenCalledWith('block-1', '20:30');
+    expect(onResizeBlock).toHaveBeenCalledWith('block-1', 'end', '20:30');
+
+    const startHandle = screen.getByRole('button', { name: 'Thay đổi giờ bắt đầu Mini project' });
+    fireEvent.pointerDown(startHandle, { clientY: 100 });
+    fireEvent.pointerMove(window, { clientY: 71 });
+    fireEvent.pointerUp(window, { clientY: 71 });
+    expect(onResizeBlock).toHaveBeenCalledWith('block-1', 'start', '18:30');
   });
 
   it('places overlapping items in separate horizontal lanes', () => {

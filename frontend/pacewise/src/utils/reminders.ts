@@ -186,6 +186,7 @@ function addStudyBlockReminders(
 }
 
 function eventRule(kind: string): { leadMinutes: number; reminderKind: Reminder['kind']; urgency: Reminder['urgency']; label: string }[] {
+  if (kind === 'class') return [{ leadMinutes: 10, reminderKind: 'online_class', urgency: 'normal', label: 'Buổi học tại lớp' }];
   if (kind === 'class_session') return [{ leadMinutes: 10, reminderKind: 'online_class', urgency: 'normal', label: 'Buổi học online' }];
   if (kind === 'quiz') return [{ leadMinutes: 30, reminderKind: 'quiz', urgency: 'urgent', label: 'Quiz' }];
   if (kind === 'midterm' || kind === 'final_exam') {

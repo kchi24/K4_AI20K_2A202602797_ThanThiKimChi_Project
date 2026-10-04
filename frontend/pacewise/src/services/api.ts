@@ -398,15 +398,21 @@ export async function createReflection(
   answers: [string, string, string],
   progressMetrics: Record<string, unknown>,
 ): Promise<AgentResponse> {
+  const activityReflection = progressMetrics.reflection_scope === 'activity';
   return runAgent(
-    `Điều hiệu quả: ${answers[0]}\nNguyên nhân lệch: ${answers[1]}\nĐiều chỉnh tuần sau: ${answers[2]}`,
+    activityReflection
+      ? `Kết quả sau hoạt động: ${answers[0]}\nĐiều hỗ trợ hoặc gây khó khăn: ${answers[1]}\nBước tiếp theo: ${answers[2]}`
+      : `Điều hiệu quả: ${answers[0]}\nNguyên nhân lệch: ${answers[1]}\nĐiều chỉnh tuần sau: ${answers[2]}`,
     'reflect',
     { progress_metrics: progressMetrics },
   );
 }
 
-export async function confirmReflection(): Promise<void> {
-  await runAgent('Tôi xác nhận điều chỉnh cho tuần sau.', 'reflect');
+export async function confirmReflection(scope: 'weekly' | 'activity' = 'weekly'): Promise<void> {
+  await runAgent(
+    scope === 'activity' ? 'Tôi xác nhận và lưu ghi nhận sau hoạt động này.' : 'Tôi xác nhận điều chỉnh cho tuần sau.',
+    'reflect',
+  );
 }
 
 export async function generatePlan(input: PlanInput, tasks: Task[]): Promise<PlanDraft> {

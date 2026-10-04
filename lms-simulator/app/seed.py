@@ -87,7 +87,7 @@ def seed_demo_data(db: Session) -> None:
         ),
         Course(
             code="DS201",
-            name="Dữ liệu và trực quan hóa",
+            name="Toán rời rạc",
             term="Học kỳ 1 · 2026–2027",
             color="#7c3aed",
         ),
@@ -123,9 +123,9 @@ def seed_demo_data(db: Session) -> None:
             ("Mini project: Quản lý thư viện", 5, 30),
         ],
         "DS201": [
-            ("Khám phá bộ dữ liệu bán hàng", -2, 15),
-            ("Thiết kế dashboard trực quan", 2, 25),
-            ("Phân tích xu hướng", 7, 30),
+            ("Bài tập: Tập hợp và ánh xạ", -2, 15),
+            ("Bài tập Chương 3: Quan hệ tương đương", 2, 25),
+            ("Bài tập Chương 3: Quan hệ thứ tự", 7, 30),
         ],
         "PM102": [
             ("Project charter", -4, 10),
@@ -159,9 +159,17 @@ def seed_demo_data(db: Session) -> None:
                 ),
                 Resource(
                     course=course,
-                    title="Slide bài giảng tuần này",
+                    title=(
+                        "Slide Chương 3: Quan hệ hai ngôi"
+                        if course.code == "DS201"
+                        else "Slide bài giảng tuần này"
+                    ),
                     kind="slides",
-                    source_url=f"/mock-files/{course.code.lower()}-week.pdf",
+                    source_url=(
+                        "/static/mock-files/TRR_Full_P4.pdf"
+                        if course.code == "DS201"
+                        else f"/mock-files/{course.code.lower()}-week.pdf"
+                    ),
                 ),
             ]
         )

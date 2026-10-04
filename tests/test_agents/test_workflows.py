@@ -56,7 +56,12 @@ def test_do_prepares_authorized_module_resources_for_study_block():
                 {
                     "title": "Tuần 2",
                     "items": [
-                        {"id": 11, "title": "Slide vòng lặp", "item_type": "file", "url": "/files/loops.pdf"},
+                        {
+                            "id": 11,
+                            "title": "Slide vòng lặp",
+                            "item_type": "file",
+                            "external_url": "/files/loops.pdf",
+                        },
                         {"id": 12, "title": "Video hàm", "item_type": "video", "url": "/videos/functions"},
                     ],
                 }
@@ -76,6 +81,7 @@ def test_do_prepares_authorized_module_resources_for_study_block():
     prepared = result["output"]["do_session"]
     assert prepared["status"] == "ready"
     assert prepared["recommended_resources"][0]["title"] == "Slide vòng lặp"
+    assert prepared["recommended_resources"][0]["url"] == "/files/loops.pdf"
     assert result["source_refs"][0]["citation"] == "[Tuần 2 · Slide vòng lặp]"
 
 
@@ -563,6 +569,32 @@ def test_reflect_confirmation():
         }
     )
     assert result["student_decision"]["action"] == "confirmed"
+
+
+def test_activity_reflect_creates_checkpoint_without_weekly_adjustment(monkeypatch):
+    content = (
+        "Bạn đã xác định được phần còn vướng.\n```json\n"
+        '{"effective":"hiểu vòng lặp cơ bản","difficulty":"vòng lặp lồng nhau",'
+        '"next_step":"ôn ví dụ trong slide","evidence":{"completion":50}}\n```'
+    )
+    monkeypatch.setattr(
+        "src.agents.workflows.reflect.get_agent_llm",
+        lambda **_kwargs: SimpleNamespace(invoke=lambda _messages: SimpleNamespace(content=content)),
+    )
+    result = reflect_node(
+        {
+            "query": "Phản tư sau phiên",
+            "progress_metrics": {
+                "reflection_scope": "activity",
+                "week_start": "2026-09-28",
+                "activity": {"id": "study:b1", "title": "Ôn vòng lặp"},
+            },
+        }
+    )
+    assert result["reflection_draft"]["scope"] == "activity"
+    assert result["reflection_draft"]["next_step"] == "ôn ví dụ trong slide"
+    assert result["pending_action"]["type"] == "save_activity_reflection"
+    assert "tuần sau" not in result["response"].lower()
 
 
 def test_tracking_recommends_recover_for_negative_slack():

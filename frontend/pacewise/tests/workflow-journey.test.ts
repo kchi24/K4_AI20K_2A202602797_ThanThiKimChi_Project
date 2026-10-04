@@ -6,8 +6,10 @@ import {
   confirmRecovery,
   confirmReflection,
   createReflection,
+  evaluateDoSession,
   generatePlan,
   generateRecoveryOptions,
+  prepareDoSession,
   saveInstructorAction,
   trackProgress,
 } from '../src/services/api';
@@ -75,6 +77,16 @@ describe('Plan → Do → Check → Recover → Reflect → teacher review', () 
         },
       }),
       agentResponse('plan'),
+      agentResponse('do', { output: { do_session: {
+        action: 'prepare', status: 'ready', block_id: block.id, task_id: task.id, title: task.title,
+        objective: task.objective, planned_minutes: 60, recommended_resources: [], opening_prompt: 'Bắt đầu học.',
+      } } }),
+      agentResponse('do', { output: { do_session: {
+        action: 'complete', status: 'needs_more_time', block_id: block.id, task_id: task.id,
+        planned_minutes: 60, actual_minutes: 70, variance_minutes: 10, completion_percent: 50,
+        remaining_minutes: 30, blocker: 'knowledge', blocker_note: 'Chưa hiểu phần khó', needs_recovery: true,
+        needs_understanding_check: true, next_action: 'Kiểm tra nhanh rồi Recover.',
+      } } }),
       agentResponse('tracking', { progress_metrics: { completion: 0.5 }, risk_signals: [] }),
       agentResponse('understanding', {
         status: 'awaiting_teacher',
@@ -88,7 +100,9 @@ describe('Plan → Do → Check → Recover → Reflect → teacher review', () 
         }],
       }),
       agentResponse('recover'),
-      agentResponse('reflect', { reflection_draft: { adjustment: 'Start earlier' } }),
+      agentResponse('reflect', { reflection_draft: { scope: 'activity', next_step: 'Review the difficult concept' } }),
+      agentResponse('reflect'),
+      agentResponse('reflect', { reflection_draft: { scope: 'weekly', adjustment: 'Start earlier' } }),
       agentResponse('reflect'),
       { id: 'ia-2', createdAt: '2026-10-02T09:00:00Z', payload: { status: 'edited' } },
     ];
@@ -100,13 +114,26 @@ describe('Plan → Do → Check → Recover → Reflect → teacher review', () 
     await saveInstructorAction('assessment', assessment.id, { status: 'approved', rubric: assessment.rubric });
     await generatePlan(input, [task]);
     await confirmPlan();
+    const prepared = await prepareDoSession({
+      courseId: task.courseId, blockId: block.id, taskId: task.id, title: task.title,
+      objective: task.objective, plannedMinutes: 60,
+    });
+    const doEvaluation = await evaluateDoSession({
+      courseId: task.courseId, blockId: block.id, taskId: task.id, plannedMinutes: 60,
+      actualMinutes: 70, completionPercent: 50, blocker: 'knowledge', blockerNote: 'Chưa hiểu phần khó',
+    });
     await trackProgress(plan, input.availability, []);
     const check = await assessUnderstanding(assessment, 'Student answer');
     const recovery = await generateRecoveryOptions(plan, [task], {
       taskId: task.id, expectedMin: 60, loggedMin: 0, deficitMin: 60, deadline: task.deadline,
     }, input.availability, []);
     await confirmRecovery(recovery[0].id);
-    await createReflection(['Worked', 'Started late', 'Start earlier'], { completion: 0.5 });
+    await createReflection(
+      ['Understood the basics', 'Difficult concept', 'Review the concept'],
+      { reflection_scope: 'activity', activity: { id: `study:${block.id}`, task_id: task.id } },
+    );
+    await confirmReflection('activity');
+    await createReflection(['Worked', 'Started late', 'Start earlier'], { reflection_scope: 'weekly', completion: 0.5 });
     await confirmReflection();
     await saveInstructorAction('review', check.reviewCaseId!, {
       status: 'edited',
@@ -116,8 +143,11 @@ describe('Plan → Do → Check → Recover → Reflect → teacher review', () 
 
     const bodies = calls.map((call) => JSON.parse(String(call.body)) as Record<string, unknown>);
     expect(bodies.filter((body) => body.workflow).map((body) => body.workflow)).toEqual([
-      'plan', 'plan', 'tracking', 'understanding', 'recover', 'recover', 'reflect', 'reflect',
+      'plan', 'plan', 'do', 'do', 'tracking', 'understanding', 'recover', 'recover',
+      'reflect', 'reflect', 'reflect', 'reflect',
     ]);
+    expect(prepared).toMatchObject({ action: 'prepare', block_id: block.id });
+    expect(doEvaluation).toMatchObject({ status: 'needs_more_time', needs_recovery: true, needs_understanding_check: true });
     expect(check).toMatchObject({
       evidenceState: 'abstained',
       requiresInstructorReview: true,

@@ -184,7 +184,7 @@ export type Action =
   | { type: 'SUBMIT_QUICK_CHECK'; result: QuickCheckResult; reviewItem?: ReviewItem }
   | { type: 'ADD_CLASS_GUIDANCE'; topic: string; message: string }
   | { type: 'APPLY_RECOVERY'; blocks: TimeBlock[]; impactId?: string }
-  | { type: 'SAVE_REFLECTION'; courseId: string; weekStart: string; effectiveWeekStart: string; answers: [string, string, string]; aiDraft?: Record<string, unknown>; aiSummary?: string }
+  | { type: 'SAVE_REFLECTION'; reflectionKey?: string; courseId: string; weekStart: string; effectiveWeekStart?: string; scope?: 'weekly' | 'activity'; activityId?: string; activityTitle?: string; activityKind?: string; answers: [string, string, string]; aiDraft?: Record<string, unknown>; aiSummary?: string }
   | { type: 'SET_RECOVERY_OPTIONS'; options: RecoveryOption[]; key: string | null }
   | { type: 'SAVE_AVAILABILITY'; availability: AvailabilityDay[]; unavailable: UnavailableSlot[] }
   | { type: 'UPDATE_ROUTINE_PROFILE'; profile: RoutineProfile }
@@ -247,6 +247,32 @@ function preserveLearningReferences(plan: Plan | null, sessions: StudySession[])
     plan,
     sessions,
   };
+}
+
+const LEGACY_DS201_TERMS = /làm sạch dữ liệu|phân tích mô tả|trực quan hóa|dashboard|dữ liệu bán hàng/i;
+const MILESTONE_PREFIX = /^(Hoàn thành|Hoàn thiện|Đọc yêu cầu và tiêu chí|Đọc yêu cầu và rubric|Thiết kế phương án thực hiện|Thực hiện phần chính|Thực hiện bản nháp|Kiểm thử và đối chiếu rubric|Rà soát và chuẩn bị nộp):/i;
+
+function reconcileLegacyBlockTitles(blocks: TimeBlock[], tasks: Task[]): TimeBlock[] {
+  const tasksById = new Map(tasks.map((task) => [task.id, task]));
+  let changed = false;
+  const next = blocks.map((block) => {
+    const legacyTitle = block.milestoneTitle?.trim();
+    const task = tasksById.get(block.taskId);
+    if (!legacyTitle || !task || !LEGACY_DS201_TERMS.test(legacyTitle)) return block;
+    const prefix = legacyTitle.match(MILESTONE_PREFIX)?.[1];
+    changed = true;
+    return {
+      ...block,
+      milestoneTitle: prefix ? `${prefix}: ${task.title}` : `Hoàn thành ${task.title}`,
+    };
+  });
+  return changed ? next : blocks;
+}
+
+function reconcilePlanTitles(plan: Plan | null, tasks: Task[]): Plan | null {
+  if (!plan) return null;
+  const blocks = reconcileLegacyBlockTitles(plan.blocks, tasks);
+  return blocks === plan.blocks ? plan : { ...plan, blocks };
 }
 
 function withFreshPilotMetrics(state: AppState): AppState {
@@ -417,10 +443,18 @@ export function reducer(state: AppState, action: Action): AppState {
         };
       });
       const reconciled = preserveLearningReferences(state.plan, state.sessions);
+      const currentPlan = reconcilePlanTitles(reconciled.plan, incomingTasks);
+      const currentDraft = state.planDraft
+        ? {
+            ...state.planDraft,
+            blocks: reconcileLegacyBlockTitles(state.planDraft.blocks, incomingTasks),
+          }
+        : null;
+      const provisionalBlocks = reconcileLegacyBlockTitles(state.provisionalBlocks, incomingTasks);
       const hasComparableSnapshot = comparisonTasks.length > 0 || Object.keys(comparisonCourseData).length > 0;
       const detectedImpacts = hasComparableSnapshot
         ? detectLmsPlanImpacts(
-            reconciled.plan,
+            currentPlan,
             comparisonTasks,
             incomingTasks,
             comparisonCourseData,
@@ -434,7 +468,7 @@ export function reducer(state: AppState, action: Action): AppState {
       ].slice(-50);
       const pilotMetric = calculatePilotMetrics(
         incomingTasks,
-        reconciled.plan,
+        currentPlan,
         reconciled.sessions,
         state.recoveryCount,
         state.availability,
@@ -466,7 +500,9 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         ...withTaskProgress(state, incomingTasks),
         taskProgress: Object.fromEntries(incomingTasks.map((task) => [task.id, progressOf(task)])),
-        plan: reconciled.plan,
+        plan: currentPlan,
+        planDraft: currentDraft,
+        provisionalBlocks,
         sessions: reconciled.sessions,
         quickChecks,
         estimateProfiles,
@@ -735,10 +771,14 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         reflections: {
           ...state.reflections,
-          [`${action.courseId}:${action.weekStart}`]: {
+          [action.reflectionKey ?? `${action.courseId}:${action.weekStart}`]: {
             courseId: action.courseId,
             weekStart: action.weekStart,
             effectiveWeekStart: action.effectiveWeekStart,
+            scope: action.scope ?? 'weekly',
+            activityId: action.activityId,
+            activityTitle: action.activityTitle,
+            activityKind: action.activityKind,
             answers: action.answers,
             savedAt: new Date().toISOString(),
             aiDraft: action.aiDraft,

@@ -192,6 +192,53 @@ def _ordered_intervals(
     )
 
 
+def _self_study_ranges(
+    current: date,
+    slots: list[dict[str, Any]],
+) -> list[tuple[int, int]]:
+    """Return learner-declared study windows that apply to one calendar day."""
+    ranges: list[tuple[int, int]] = []
+    for item in slots:
+        if str(item.get("category") or "") != "self_study":
+            continue
+        exact_date = str(item.get("date") or "")[:10]
+        if exact_date and exact_date != current.isoformat():
+            continue
+        if int(item.get("weekday", -1)) != current.weekday():
+            continue
+        try:
+            start = _clock_to_minutes(str(item["start"]))
+            end = _clock_to_minutes(str(item["end"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if end - start >= MIN_SLOT_MINUTES:
+            ranges.append((start, end))
+    return ranges
+
+
+def _merge_ranges(intervals: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    merged: list[list[int]] = []
+    for start, end in sorted(intervals):
+        if end <= start:
+            continue
+        if not merged or start > merged[-1][1]:
+            merged.append([start, end])
+        else:
+            merged[-1][1] = max(merged[-1][1], end)
+    return [(start, end) for start, end in merged]
+
+
+def _inside_self_study_window(
+    current: date,
+    interval: list[int],
+    slots: list[dict[str, Any]],
+) -> bool:
+    return any(
+        start <= interval[0] and interval[1] <= end
+        for start, end in _self_study_ranges(current, slots)
+    )
+
+
 def _free_intervals(
     current: date,
     availability: list[dict[str, Any]],
@@ -199,24 +246,28 @@ def _free_intervals(
     preferred: str | list[str],
 ) -> list[list[int]]:
     weekday = current.weekday()
+    preferred_ranges = _self_study_ranges(current, unavailable)
     available = next(
         (item for item in availability if int(item.get("weekday", -1)) == weekday and item.get("enabled", True)),
         None,
     )
-    if not available:
-        return []
-    try:
-        intervals = [
-            (
-                _clock_to_minutes(str(available["start"])),
-                _clock_to_minutes(str(available["end"])),
+    intervals: list[tuple[int, int]] = []
+    if available:
+        try:
+            intervals.append(
+                (
+                    _clock_to_minutes(str(available["start"])),
+                    _clock_to_minutes(str(available["end"])),
+                )
             )
-        ]
-    except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError):
+            pass
+    # A positioned self-study slot is an explicit declaration that the learner
+    # can study then. It therefore extends general availability, including on a
+    # weekend that is disabled in the recurring weekly profile.
+    intervals = _merge_ranges([*intervals, *preferred_ranges])
+    if not intervals:
         return []
-    if intervals[0][1] <= intervals[0][0]:
-        return []
-    preferred_ranges: list[tuple[int, int]] = []
     for item in unavailable:
         exact_date = str(item.get("date") or "")[:10]
         if exact_date and exact_date != current.isoformat():
@@ -225,12 +276,6 @@ def _free_intervals(
             continue
         try:
             if str(item.get("category") or "") == "self_study":
-                preferred_ranges.append(
-                    (
-                        _clock_to_minutes(str(item["start"])),
-                        _clock_to_minutes(str(item["end"])),
-                    )
-                )
                 continue
             intervals = _subtract(
                 intervals,
@@ -498,34 +543,49 @@ def build_plan_draft(
         task_milestones = [value for value in planning_milestones if value["taskId"] == item["task_id"]]
         remaining = max(0, item["target"] - pinned_minutes.get(item["task_id"], 0))
         last_day = min(item["deadline"], horizon_end)
-        day = schedule_start
         milestone_index = 0
         milestone_remaining = task_milestones[0]["targetMin"] if task_milestones else remaining
-        while day <= last_day and remaining > 0:
-            for interval in free_by_day.get(day, []):
-                while remaining > 0 and interval[1] - interval[0] >= min(MIN_SLOT_MINUTES, remaining):
-                    while milestone_index < len(task_milestones) and milestone_remaining <= 0:
-                        milestone_index += 1
-                        milestone_remaining = task_milestones[milestone_index]["targetMin"] if milestone_index < len(task_milestones) else remaining
-                    duration = min(remaining, milestone_remaining, MAX_BLOCK_MINUTES, interval[1] - interval[0])
-                    start = interval[0]
-                    milestone = task_milestones[milestone_index] if milestone_index < len(task_milestones) else None
-                    blocks.append(
-                        {
-                            "id": f"blk-{uuid4().hex[:12]}",
-                            "taskId": item["task_id"],
-                            "milestoneId": milestone["milestoneId"] if milestone else None,
-                            "milestoneTitle": milestone["title"] if milestone else None,
-                            "date": day.isoformat(),
-                            "start": _minutes_to_clock(start),
-                            "end": _minutes_to_clock(start + duration),
-                            "status": "confirmed" if day <= commitment_end else "tentative",
-                        }
-                    )
-                    remaining -= duration
-                    milestone_remaining -= duration
-                    interval[0] = min(interval[1], interval[0] + duration + BREAK_MINUTES)
-            day += timedelta(days=1)
+        candidate_intervals = [
+            (day, interval_order, interval)
+            for day, intervals in free_by_day.items()
+            if schedule_start <= day <= last_day
+            for interval_order, interval in enumerate(intervals)
+        ]
+        # Explicit self-study windows are learner intent, not busy time. Use
+        # them across the whole horizon before generic availability, then keep
+        # chronological order inside each group.
+        candidate_intervals.sort(
+            key=lambda value: (
+                0 if _inside_self_study_window(value[0], value[2], unavailable) else 1,
+                value[0],
+                value[1],
+            )
+        )
+        for day, _, interval in candidate_intervals:
+            while remaining > 0 and interval[1] - interval[0] >= min(MIN_SLOT_MINUTES, remaining):
+                while milestone_index < len(task_milestones) and milestone_remaining <= 0:
+                    milestone_index += 1
+                    milestone_remaining = task_milestones[milestone_index]["targetMin"] if milestone_index < len(task_milestones) else remaining
+                duration = min(remaining, milestone_remaining, MAX_BLOCK_MINUTES, interval[1] - interval[0])
+                start = interval[0]
+                milestone = task_milestones[milestone_index] if milestone_index < len(task_milestones) else None
+                blocks.append(
+                    {
+                        "id": f"blk-{uuid4().hex[:12]}",
+                        "taskId": item["task_id"],
+                        "milestoneId": milestone["milestoneId"] if milestone else None,
+                        "milestoneTitle": milestone["title"] if milestone else None,
+                        "date": day.isoformat(),
+                        "start": _minutes_to_clock(start),
+                        "end": _minutes_to_clock(start + duration),
+                        "status": "confirmed" if day <= commitment_end else "tentative",
+                    }
+                )
+                remaining -= duration
+                milestone_remaining -= duration
+                interval[0] = min(interval[1], interval[0] + duration + BREAK_MINUTES)
+            if remaining <= 0:
+                break
         if remaining:
             shortfalls.append({"taskId": item["task_id"], "missingMin": remaining})
 

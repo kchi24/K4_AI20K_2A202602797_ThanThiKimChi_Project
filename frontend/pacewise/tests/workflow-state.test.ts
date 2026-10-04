@@ -18,6 +18,27 @@ const task = (overrides: Partial<Task> = {}): Task => ({
 });
 
 describe('durable learner workflow state', () => {
+  it('round-trips personal schedule slots through workspace hydration after reload', () => {
+    const date = '2026-10-06';
+    const personalSlots = [
+      { id: 'meal-1', label: 'Ăn tối', date, weekday: weekdayOf(date), start: '18:00', end: '18:45', source: 'manual' as const, category: 'meal' as const },
+      { id: 'sleep-1', label: 'Ngủ', date, weekday: weekdayOf(date), start: '23:00', end: '24:00', source: 'manual' as const, category: 'sleep' as const },
+    ];
+
+    const saved = reducer(initialState, {
+      type: 'SAVE_AVAILABILITY',
+      availability: initialState.availability,
+      unavailable: personalSlots,
+    });
+    const reloaded = reducer(initialState, {
+      type: 'HYDRATE_WORKSPACE',
+      state: { unavailable: saved.unavailable },
+    });
+
+    expect(reloaded.unavailable).toEqual(personalSlots);
+    expect(reloaded.workspaceReady).toBe(true);
+  });
+
   it('reapplies saved progress to a fresh LMS task snapshot', () => {
     const hydrated = reducer(initialState, {
       type: 'HYDRATE_WORKSPACE',
@@ -60,6 +81,40 @@ describe('durable learner workflow state', () => {
 
     expect(second.reflections['1:2026-09-28'].answers).toEqual(['A', 'B', 'C']);
     expect(second.reflections['2:2026-09-28'].answers).toEqual(['D', 'E', 'F']);
+  });
+
+  it('carries a completed Do result into activity and weekly reflection state', () => {
+    const withTask = { ...initialState, tasks: [task()] };
+    const running = reducer(withTask, { type: 'START_SESSION', taskId: '1:10' });
+    const completed = reducer(running, {
+      type: 'COMPLETE_SESSION',
+      minutes: 75,
+      blockId: 'block-1',
+      plannedMin: 60,
+      evaluation: {
+        action: 'complete', status: 'needs_more_time', block_id: 'block-1', task_id: '1:10',
+        planned_minutes: 60, actual_minutes: 75, variance_minutes: 15, completion_percent: 50,
+        remaining_minutes: 30, blocker: 'knowledge', blocker_note: 'Chưa hiểu phần khó',
+        needs_recovery: true, needs_understanding_check: true, next_action: 'Kiểm tra nhanh.',
+      },
+    });
+    const withActivityReflect = reducer(completed, {
+      type: 'SAVE_REFLECTION', reflectionKey: 'activity:study:block-1', scope: 'activity',
+      courseId: '1', weekStart: '2026-09-28', activityId: 'study:block-1', activityTitle: 'Assignment',
+      activityKind: 'self_study', answers: ['Đã hiểu cơ bản', 'Vướng phần khó', 'Ôn lại ví dụ'],
+    });
+    const withWeeklyReflect = reducer(withActivityReflect, {
+      type: 'SAVE_REFLECTION', reflectionKey: 'all:2026-09-28', scope: 'weekly',
+      courseId: 'all', weekStart: '2026-09-28', effectiveWeekStart: '2026-10-05',
+      answers: ['Đã học 75 phút', 'Estimate thấp', 'Tăng thời lượng'],
+    });
+
+    expect(completed.sessions[0]).toMatchObject({
+      blockId: 'block-1', plannedMin: 60, minutes: 75, completionPercent: 50,
+      blocker: 'knowledge', needsRecovery: true,
+    });
+    expect(withWeeklyReflect.reflections['activity:study:block-1']).toMatchObject({ scope: 'activity', activityKind: 'self_study' });
+    expect(withWeeklyReflect.reflections['all:2026-09-28']).toMatchObject({ scope: 'weekly', effectiveWeekStart: '2026-10-05' });
   });
 
   it('applies the teacher resolution returned by synchronization', () => {
@@ -122,6 +177,37 @@ describe('durable learner workflow state', () => {
       affectedBlockIds: ['block-1'],
     });
     expect(changed.plan?.blocks).toHaveLength(1);
+  });
+
+  it('reconciles legacy DS201 milestone titles with the current LMS assignment title', () => {
+    const oldTask = task({ title: 'BTVN 2026 T10.1: Làm sạch dữ liệu' });
+    const currentTask = task({ title: 'BTVN 2026 T10.1: 3.1 Khái niệm quan hệ hai ngôi và tính chất' });
+    const synced = reducer({
+      ...initialState,
+      tasks: [oldTask],
+      plan: {
+        id: 'plan-ds201',
+        weekStart: '2026-10-05',
+        savedAt: '',
+        version: 1,
+        blocks: [{
+          id: 'block-ds201',
+          taskId: oldTask.id,
+          date: '2026-10-07',
+          start: '20:10',
+          end: '21:30',
+          milestoneTitle: 'Thực hiện bản nháp: BTVN 2026 T10.1: Làm sạch dữ liệu',
+        }],
+      },
+    }, {
+      type: 'SYNC_CANVAS',
+      tasks: [currentTask],
+      courseData: {},
+    });
+
+    expect(synced.plan?.blocks[0].milestoneTitle).toBe(
+      'Thực hiện bản nháp: BTVN 2026 T10.1: 3.1 Khái niệm quan hệ hai ngôi và tính chất',
+    );
   });
 
   it('detects an LMS deadline change against the persisted baseline after reopening', () => {

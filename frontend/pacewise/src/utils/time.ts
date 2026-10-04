@@ -1,21 +1,9 @@
 import type { Clock, Weekday } from '../types';
 
 export const APP_TIMEZONE = 'Asia/Ho_Chi_Minh';
-const runtimeNow = new Date();
-const runtimeParts = Object.fromEntries(
-  new Intl.DateTimeFormat('en-CA', {
-    timeZone: APP_TIMEZONE,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(runtimeNow).map((part) => [part.type, part.value]),
-);
-/** Runtime clock aliases retained to avoid breaking existing domain helpers. */
-export const DEMO_TODAY = `${runtimeParts.year}-${runtimeParts.month}-${runtimeParts.day}`;
-export const DEMO_NOW: Clock = `${runtimeParts.hour}:${runtimeParts.minute}`;
+/** Fixed pilot clock keeps the demo at the start of a complete learning week. */
+export const DEMO_TODAY = '2026-10-05';
+export const DEMO_NOW: Clock = '08:00';
 export const PLANNING_WINDOW_DAYS = 7;
 export const TASK_SELECTION_HORIZON_DAYS = 14;
 /** Rolling planning window shared with the backend scheduler: today + six days. */

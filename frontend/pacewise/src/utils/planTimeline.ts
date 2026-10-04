@@ -35,6 +35,7 @@ const zonedFormatter = new Intl.DateTimeFormat('en-US', {
 
 const EVENT_KIND_LABELS: Record<string, string> = {
   assignment: 'Deadline',
+  class: 'Buổi học tại lớp',
   class_session: 'Buổi học online',
   event: 'Sự kiện',
   final_exam: 'Thi cuối kỳ',

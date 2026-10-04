@@ -88,7 +88,20 @@ export function DoSessionSupport({
               );
               return (
                 <li key={`${resource.id}:${resource.citation}`} className="rounded-xl border border-line bg-canvas px-3 py-2.5">
-                  {href ? <a href={href} target="_blank" rel="noreferrer" className="block hover:text-primary-ink">{content}</a> : content}
+                  {href ? (
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={`Mở ${resource.title} trong tab mới`}
+                      className="block hover:text-primary-ink"
+                    >
+                      {content}
+                      <span className="mt-1 block text-[11px] font-semibold text-primary-ink">
+                        Mở tài liệu trong tab mới
+                      </span>
+                    </a>
+                  ) : content}
                 </li>
               );
             })}

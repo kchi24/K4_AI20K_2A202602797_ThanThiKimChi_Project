@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { PlanCalendarBoard } from '../../components/domain/PlanCalendarBoard';
 import { PlanEntryModal } from '../../components/domain/PlanEntryModal';
 import { PlanMonthBoard } from '../../components/domain/PlanMonthBoard';
 import { PersonalSlotDialog, RoutineDialog } from '../../components/domain/PersonalScheduleDialogs';
 import { ReminderCenter } from '../../components/domain/ReminderCenter';
+import { StudyBlockDialog } from '../../components/domain/StudyBlockDialog';
 import { Button, IconButton } from '../../components/ui/Button';
 import { Icon } from '../../components/ui/Icon';
 import { useToast } from '../../components/ui/Toast';
@@ -15,8 +16,8 @@ import type { PersonalSlotCategory, PlanInput, TimeBlock, UnavailableSlot, Weekl
 import { lmsUnavailableSlots, mergeUnavailable } from '../../utils/lmsPlanning';
 import { buildPlanTimeline } from '../../utils/planTimeline';
 import { routineAvailability, routineSleepSlots } from '../../utils/routine';
-import { minutesUntil, studyBlockAccess } from '../../utils/studyBlockAccess';
-import { addDays, calendarWeekStart, DEMO_TODAY, diffDays, durationMin, formatDM, formatDuration, TASK_SELECTION_HORIZON_DAYS, toClock, toMin, uid, weekdayOf, weekDates } from '../../utils/time';
+import { studyBlockAccess } from '../../utils/studyBlockAccess';
+import { addDays, calendarWeekStart, DEMO_NOW, DEMO_TODAY, diffDays, durationMin, formatDM, formatDuration, TASK_SELECTION_HORIZON_DAYS, toClock, toMin, uid, weekdayOf, weekDates } from '../../utils/time';
 
 type CalendarView = 'week' | 'month' | 'next7';
 
@@ -24,17 +25,6 @@ const monthStartOf = (date: string) => `${date.slice(0, 7)}-01`;
 const addMonths = (date: string, offset: number) => {
   const [year, month] = date.split('-').map(Number);
   return new Date(Date.UTC(year, month - 1 + offset, 1)).toISOString().slice(0, 10);
-};
-
-const currentClockInVietnam = () => {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Asia/Ho_Chi_Minh',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(new Date());
-  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${value.hour}:${value.minute}`;
 };
 
 const overlaps = (left: { start: string; end?: string }, right: { start: string; end?: string }) => (
@@ -47,14 +37,16 @@ export function PlanPage() {
   useDocumentTitle('Plan');
   const { state, dispatch } = useAppStore();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const toast = useToast();
-  const initialStart = state.planDraft?.weekStart ?? state.plan?.weekStart ?? calendarWeekStart(DEMO_TODAY);
+  const reflectionReanalysisStarted = useRef(false);
+  const initialStart = calendarWeekStart(DEMO_TODAY);
   const [anchorDate, setAnchorDate] = useState(initialStart);
   const [calendarView, setCalendarView] = useState<CalendarView>('week');
   const [blocks, setBlocks] = useState<TimeBlock[]>(
     state.planDraft?.blocks ?? [...(state.plan?.blocks ?? []), ...state.provisionalBlocks],
   );
-  const [unavailable, setUnavailable] = useState<UnavailableSlot[]>(editablePersonalSlots(state.planDraft?.input.unavailable ?? state.unavailable));
+  const [unavailable, setUnavailable] = useState<UnavailableSlot[]>(editablePersonalSlots(state.unavailable));
   const [needsAnalysis, setNeedsAnalysis] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -63,6 +55,7 @@ export function PlanPage() {
   const [goalDialogOpen, setGoalDialogOpen] = useState(false);
   const [routineDialogOpen, setRoutineDialogOpen] = useState(false);
   const [personalDialog, setPersonalDialog] = useState<{ category: PersonalSlotCategory; label: string } | null>(null);
+  const [pendingBlockId, setPendingBlockId] = useState<string | null>(null);
   const [loadingGoals, setLoadingGoals] = useState(false);
   const [weeklyGoals, setWeeklyGoals] = useState<WeeklyGoal[]>(
     state.planDraft?.weeklyGoals ?? state.wizardInput?.weeklyGoals ?? [],
@@ -72,11 +65,17 @@ export function PlanPage() {
   useEffect(() => {
     if (!state.planDraft) return;
     setBlocks(state.planDraft.blocks);
-    setUnavailable(editablePersonalSlots(state.planDraft.input.unavailable));
-    setAnchorDate(state.planDraft.weekStart ?? state.planDraft.input.weekStart ?? initialStart);
+    const draftStart = state.planDraft.weekStart ?? state.planDraft.input.weekStart ?? initialStart;
+    setAnchorDate(draftStart < initialStart ? initialStart : draftStart);
     setWeeklyGoals(state.planDraft.weeklyGoals ?? state.planDraft.input.weeklyGoals ?? []);
     setGoalsApproved(true);
   }, [initialStart, state.planDraft]);
+
+  useEffect(() => {
+    // Personal schedule is owned by the hydrated workspace, not by an older
+    // AI draft. Keep local calendar state in sync even when no draft exists.
+    setUnavailable(editablePersonalSlots(state.unavailable));
+  }, [state.unavailable]);
 
   const monthStart = monthStartOf(anchorDate);
   const monthEnd = addDays(addMonths(monthStart, 1), -1);
@@ -120,7 +119,7 @@ export function PlanPage() {
     const task = state.tasks.find((item) => item.id === candidate.taskId);
     if (!task) return 'Nhiệm vụ không còn tồn tại.';
     if (candidate.date < DEMO_TODAY) return 'Không thể xếp study block vào thời gian đã qua.';
-    if (candidate.date === DEMO_TODAY && toMin(candidate.start) < toMin(currentClockInVietnam()) + 15) {
+    if (candidate.date === DEMO_TODAY && toMin(candidate.start) < toMin(DEMO_NOW) + 15) {
       return 'Study block phải bắt đầu sau thời điểm hiện tại ít nhất 15 phút.';
     }
     if (candidate.date > task.deadline) return 'Không thể xếp study block sau deadline.';
@@ -133,7 +132,14 @@ export function PlanPage() {
       return `Nhiệm vụ này chỉ còn ${formatDuration(Math.max(0, remainingWork - alreadyPlanned))} chưa được xếp.`;
     }
     const availability = state.availability.find((day) => day.weekday === weekdayOf(candidate.date));
-    if (!availability?.enabled || toMin(candidate.start) < toMin(availability.start) || toMin(candidate.end) > toMin(availability.end)) return 'Khung giờ này nằm ngoài thời gian bạn có thể học.';
+    const insideDeclaredStudyTime = constraints.some((slot) => (
+      slot.category === 'self_study'
+      && (!slot.date || slot.date === candidate.date)
+      && slot.weekday === weekdayOf(candidate.date)
+      && toMin(candidate.start) >= toMin(slot.start)
+      && toMin(candidate.end) <= toMin(slot.end)
+    ));
+    if (!insideDeclaredStudyTime && (!availability?.enabled || toMin(candidate.start) < toMin(availability.start) || toMin(candidate.end) > toMin(availability.end))) return 'Khung giờ này nằm ngoài thời gian bạn có thể học.';
     if (blocks.some((block) => block.id !== ignoreId && block.date === candidate.date && overlaps(candidate, block))) return 'Study block bị trùng với một block khác.';
     const preferredSlotIds = new Set(constraints.filter((slot) => slot.category === 'self_study').map((slot) => slot.id));
     const fixed = timeline.filter((item) => item.source !== 'pacewise' && item.date === candidate.date && item.end && !(item.entityId && preferredSlotIds.has(item.entityId)));
@@ -161,36 +167,45 @@ export function PlanPage() {
     setNeedsAnalysis(true);
   };
 
-  const resizeBlock = (id: string, end: string) => {
+  const resizeBlock = (id: string, edge: 'start' | 'end', clock: string) => {
     const current = blocks.find((block) => block.id === id);
     if (!current) return;
-    const candidate = { ...current, end };
+    const candidate = { ...current, [edge]: clock };
     const error = validateBlock(candidate, id);
     if (error) { toast({ tone: 'warning', title: 'Không thể đổi thời lượng', description: error }); return; }
     setBlocks((list) => list.map((block) => block.id === id ? candidate : block));
     setNeedsAnalysis(true);
   };
 
-  const resizeBusy = (id: string, end: string) => {
-    setUnavailable((current) => current.map((slot) => slot.id === id ? { ...slot, end } : slot));
+  const savePersonalSchedule = (next: UnavailableSlot[]) => {
+    setUnavailable(next);
+    dispatch({ type: 'SAVE_AVAILABILITY', availability: state.availability, unavailable: next });
     setNeedsAnalysis(true);
+  };
+
+  const resizeBusy = (id: string, edge: 'start' | 'end', clock: string) => {
+    savePersonalSchedule(unavailable.map((slot) => slot.id === id ? { ...slot, [edge]: clock } : slot));
   };
 
   const removeBlock = (id: string) => { setBlocks((current) => current.filter((block) => block.id !== id)); setNeedsAnalysis(true); };
 
   const openStudyBlock = (id: string) => {
+    setPendingBlockId(id);
+  };
+
+  const startStudyBlock = (id: string) => {
     const block = blocks.find((item) => item.id === id);
     if (!block) return;
+    if (needsAnalysis) {
+      toast({ tone: 'warning', title: 'Lịch vừa được chỉnh sửa', description: 'Bấm AI phân tích lại rồi áp dụng kế hoạch trước khi bắt đầu Do.' });
+      return;
+    }
     const saved = state.plan?.blocks.some((item) => item.id === id);
     if (!saved) {
-      toast({ tone: 'warning', title: 'Study block chưa được áp dụng', description: 'Hãy xác nhận kế hoạch trước khi bắt đầu phiên tự học.' });
+      toast({ tone: 'warning', title: 'Study block chưa sẵn sàng', description: 'Hãy áp dụng kế hoạch trước khi bắt đầu Do.' });
       return;
     }
     const access = studyBlockAccess(block);
-    if (access.state === 'too_early') {
-      toast({ tone: 'info', title: 'Chưa đến giờ tự học', description: `Phiên học mở trước giờ bắt đầu 5 phút. Còn khoảng ${minutesUntil(access.opensAt)} phút.` });
-      return;
-    }
     if (access.state === 'ended') {
       toast({ tone: 'warning', title: 'Buổi tự học đã kết thúc', description: 'Block vẫn được giữ trên lịch sử. Hãy để Plan Agent sắp xếp lại phần chưa hoàn thành.' });
       return;
@@ -198,10 +213,24 @@ export function PlanPage() {
     navigate(`/study/${block.taskId}/session?blockId=${encodeURIComponent(block.id)}`);
   };
 
+  const updateBlockExactTime = (candidate: TimeBlock) => {
+    const error = validateBlock(candidate, candidate.id);
+    if (error) {
+      toast({ tone: 'warning', title: 'Không thể đổi thời gian', description: error });
+      return false;
+    }
+    setBlocks((current) => current.map((block) => block.id === candidate.id ? candidate : block));
+    if (state.planDraft?.blocks.some((block) => block.id === candidate.id)) {
+      dispatch({ type: 'UPDATE_DRAFT_BLOCK', block: candidate });
+    }
+    setNeedsAnalysis(true);
+    toast({ tone: 'info', title: 'Đã cập nhật thời gian', description: 'Bấm AI phân tích lại để kiểm tra capacity và xung đột trước khi áp dụng.' });
+    return true;
+  };
+
   const addPersonalSlot = (date: string, start: string, category: PersonalSlotCategory, label: string, end?: string) => {
     const slot: UnavailableSlot = { id: uid('personal-slot'), label, weekday: weekdayOf(date), date, start, end: end ?? toClock(Math.min(24 * 60, toMin(start) + 60)), source: 'manual', category };
-    setUnavailable((current) => [...current, slot]);
-    setNeedsAnalysis(true);
+    savePersonalSchedule([...unavailable, slot]);
     toast({
       tone: 'info',
       title: category === 'self_study' ? 'Đã thêm giờ tự học ưu tiên' : `Đã thêm ${label.toLowerCase()}`,
@@ -284,13 +313,49 @@ export function PlanPage() {
     }
   };
 
-  const save = async () => {
+  useEffect(() => {
+    if (searchParams.get('reanalyze') !== 'reflection' || reflectionReanalysisStarted.current) return;
+    reflectionReanalysisStarted.current = true;
+    const confirmedGoals = weeklyGoals.filter((goal) => goal.confirmed && goal.title.trim());
+    const goals = confirmedGoals.length > 0
+      ? confirmedGoals
+      : tasksForHorizon().slice(0, 4).map((task, index) => ({
+          id: `reflection-goal-${index + 1}`,
+          title: `Hoàn thành phần cần thiết của ${task.title} trước hạn`,
+          taskIds: [task.id],
+          confirmed: true,
+        }));
+    setSearchParams({}, { replace: true });
+    toast({
+      tone: 'info',
+      title: 'AI đang phân tích lại lịch',
+      description: 'PaceWise sẽ tạo bản đề xuất; lịch hiện tại vẫn được giữ cho đến khi bạn áp dụng.',
+    });
+    void analyzeWithGoals(goals);
+  // This is a one-shot hand-off from Reflect. A ref prevents duplicate calls
+  // under React StrictMode while the query string is being replaced.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  const save = async (openAfterSaveId?: string) => {
     if (!draftReady) return;
     setSaving(true);
-    try { await confirmPlan(); dispatch({ type: 'SAVE_PLAN' }); setNeedsAnalysis(false); toast({ tone: 'success', title: 'Đã áp dụng kế hoạch tuần' }); }
+    try {
+      await confirmPlan();
+      dispatch({ type: 'SAVE_PLAN' });
+      setNeedsAnalysis(false);
+      setPendingBlockId(null);
+      toast({ tone: 'success', title: 'Đã áp dụng kế hoạch tuần' });
+      const block = openAfterSaveId ? blocks.find((item) => item.id === openAfterSaveId) : undefined;
+      if (block && block.status !== 'tentative') {
+        navigate(`/study/${block.taskId}/session?blockId=${encodeURIComponent(block.id)}`);
+      }
+    }
     catch { toast({ tone: 'danger', title: 'Chưa thể lưu kế hoạch', description: 'Bản nháp vẫn được giữ.' }); }
     finally { setSaving(false); }
   };
+
+  const pendingBlock = pendingBlockId ? blocks.find((item) => item.id === pendingBlockId) : undefined;
 
   return (
     <div className="flex h-[calc(100dvh-4rem)] min-h-0 flex-col overflow-hidden bg-canvas pb-[68px] lg:h-dvh lg:pb-0">
@@ -312,7 +377,7 @@ export function PlanPage() {
           {calendarView !== 'month' && <Button size="sm" variant="secondary" icon="plus" onClick={() => { setEntryTaskId(undefined); setEntryOpen(true); }}>Study block</Button>}
           <ReminderCenter compact />
           {calendarView !== 'month' && <Button size="sm" icon="sparkle" loading={generating || loadingGoals} onClick={() => void analyze()}>{state.planDraft || needsAnalysis ? 'AI phân tích lại' : 'AI lập kế hoạch'}</Button>}
-          {calendarView !== 'month' && draftReady && <Button size="sm" icon="check" loading={saving} onClick={() => void save()}>Xác nhận</Button>}
+          {calendarView !== 'month' && draftReady && <Button size="sm" icon="check" loading={saving} onClick={() => void save()}>Áp dụng kế hoạch</Button>}
         </div>
       </header>
 
@@ -329,11 +394,24 @@ export function PlanPage() {
         {calendarView === 'month' ? (
           <PlanMonthBoard dates={dates} month={monthStart.slice(0, 7)} items={timeline} onSelectDate={(date) => { setAnchorDate(date); setCalendarView('week'); }} />
         ) : (
-          <PlanCalendarBoard dates={dates} courses={state.courses} tasks={openTasks} items={timeline} draftMode routineProfile={state.routineProfile} onMoveBlock={moveBlock} onResizeBlock={resizeBlock} onResizeBusy={resizeBusy} onAddBusy={(date, start, category, label) => addPersonalSlot(date, start, category, label)} onOpenPersonal={(category, label) => setPersonalDialog({ category, label })} onOpenRoutine={() => setRoutineDialogOpen(true)} onOpenBlock={openStudyBlock} onSetPriority={(taskId, personalPriority) => { dispatch({ type: 'UPDATE_TASK_PRIORITY', taskId, personalPriority }); setNeedsAnalysis(true); }} onRemoveBlock={removeBlock} onRemoveBusy={(id) => { setUnavailable((current) => current.filter((slot) => slot.id !== id)); setNeedsAnalysis(true); }} />
+          <PlanCalendarBoard dates={dates} courses={state.courses} tasks={openTasks} items={timeline} draftMode routineProfile={state.routineProfile} onMoveBlock={moveBlock} onResizeBlock={resizeBlock} onResizeBusy={resizeBusy} onAddBusy={(date, start, category, label) => addPersonalSlot(date, start, category, label)} onOpenPersonal={(category, label) => setPersonalDialog({ category, label })} onOpenRoutine={() => setRoutineDialogOpen(true)} onOpenBlock={openStudyBlock} onSetPriority={(taskId, personalPriority) => { dispatch({ type: 'UPDATE_TASK_PRIORITY', taskId, personalPriority }); setNeedsAnalysis(true); }} onRemoveBlock={removeBlock} onRemoveBusy={(id) => savePersonalSchedule(unavailable.filter((slot) => slot.id !== id))} />
         )}
       </div>
 
       <PlanEntryModal open={entryOpen} tasks={openTasks} weekStart={weekStart} initialTaskId={entryTaskId} onClose={() => setEntryOpen(false)} onAdd={addBlock} />
+      <StudyBlockDialog
+        block={pendingBlock ?? null}
+        title={pendingBlock?.milestoneTitle ?? state.tasks.find((task) => task.id === pendingBlock?.taskId)?.title ?? 'Phiên tự học'}
+        saved={Boolean(!needsAnalysis && pendingBlock && state.plan?.blocks.some((block) => block.id === pendingBlock.id))}
+        draftReady={draftReady}
+        saving={saving}
+        minDate={DEMO_TODAY}
+        maxDate={addDays(calendarWeekStart(DEMO_TODAY), TASK_SELECTION_HORIZON_DAYS - 1)}
+        onClose={() => !saving && setPendingBlockId(null)}
+        onSave={updateBlockExactTime}
+        onStart={() => pendingBlock && startStudyBlock(pendingBlock.id)}
+        onApplyAndStart={() => void save(pendingBlock?.id)}
+      />
       <PersonalSlotDialog
         open={Boolean(personalDialog)}
         category={personalDialog?.category ?? 'other'}
