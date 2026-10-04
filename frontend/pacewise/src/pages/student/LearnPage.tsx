@@ -216,7 +216,7 @@ export function LearnPage() {
   };
 
   return (
-    <div className="page max-w-3xl">
+    <div className="page auto-hide-scrollbar h-[calc(100dvh-7.5rem)] max-w-3xl overflow-y-auto lg:h-[calc(100dvh-3.5rem)]">
       <PageHeader
         title="Học tập & Kiểm tra"
         description={`Hỏi đáp có trích dẫn và kiểm tra nhanh theo Rubric của ${activeCourse?.code ?? 'môn đang chọn'}.`}

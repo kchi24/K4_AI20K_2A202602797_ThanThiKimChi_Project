@@ -8,6 +8,9 @@ import type {
   GroupStats,
   LMSInstructorSummary,
   Drift,
+  DoBlocker,
+  DoSessionEvaluation,
+  DoSessionPreparation,
   Plan,
   PlanDraft,
   PlanImpact,
@@ -19,6 +22,7 @@ import type {
   Task,
   UnavailableSlot,
   User,
+  WeeklyGoal,
 } from '../types';
 import type { QAResult } from '../utils/qa';
 
@@ -212,7 +216,7 @@ export async function disconnectGoogleCalendar(): Promise<void> {
 
 export interface AgentResponse {
   response: string;
-  workflow: 'plan' | 'tracking' | 'qa' | 'understanding' | 'recover' | 'reflect';
+  workflow: 'plan' | 'do' | 'tracking' | 'qa' | 'understanding' | 'recover' | 'reflect';
   mode?: string;
   status: string;
   pending_action?: Record<string, unknown> | null;
@@ -220,6 +224,8 @@ export interface AgentResponse {
   output?: {
     plan_validation?: { valid: boolean; errors: { code: string }[] };
     plan_draft?: PlanDraft;
+    weekly_goals?: WeeklyGoal[];
+    do_session?: DoSessionPreparation | DoSessionEvaluation;
     citation_dispute?: { dispute_id: string };
   } | null;
   progress_metrics?: Record<string, unknown>;
@@ -409,7 +415,7 @@ export async function generatePlan(input: PlanInput, tasks: Task[]): Promise<Pla
     .filter(Boolean)
     .join(', ');
   const agentResult = await runAgent(
-    `Lập kế hoạch 7 ngày cho mục tiêu “${input.goal}”. Các nhiệm vụ đã chọn: ${selected}.`,
+    `Lập kế hoạch từ hiện tại đến hết tuần sau cho các mục tiêu đã xác nhận. Các nhiệm vụ đã chọn: ${selected}.`,
     'plan',
     {
       availability: input.availability
@@ -419,8 +425,11 @@ export async function generatePlan(input: PlanInput, tasks: Task[]): Promise<Pla
         id: item.id,
         label: item.label,
         day: String(item.weekday),
+        date: item.date,
         start: item.start,
         end: item.end,
+        source: item.source,
+        category: item.category,
       })),
       goals: input.tasks.map((item) => {
         const task = tasks.find((candidate) => candidate.id === item.taskId);
@@ -430,7 +439,9 @@ export async function generatePlan(input: PlanInput, tasks: Task[]): Promise<Pla
           course_id: task?.courseId,
           deadline: task?.deadline,
           remaining_minutes: item.remainingMin,
-          weekly_goal: input.goal,
+          personal_priority: item.personalPriority,
+          weekly_goal_id: item.weeklyGoalId,
+          weekly_goal: input.weeklyGoals?.find((goal) => goal.id === item.weeklyGoalId)?.title ?? input.goal,
         };
       }),
       plan_input: input,
@@ -446,8 +457,110 @@ export async function generatePlan(input: PlanInput, tasks: Task[]): Promise<Pla
   };
 }
 
+export async function proposeWeeklyGoals(tasks: Task[]): Promise<WeeklyGoal[]> {
+  const candidates = tasks
+    .filter((task) => task.status !== 'done')
+    .map((task) => ({
+      task_id: task.id,
+      title: task.title,
+      course_id: task.courseId,
+      deadline: task.deadline,
+      personal_priority: task.personalPriority ?? 2,
+      assignment_group_weight: task.assignmentGroup?.weight ?? 0,
+      points_possible: task.pointsPossible ?? 0,
+    }));
+  const result = await runAgent(
+    'Đề xuất mục tiêu tự học cho tuần này từ các deadline đang mở.',
+    'plan',
+    { planning_stage: 'goal_proposal', goals: candidates },
+  );
+  return result.output?.weekly_goals ?? [];
+}
+
 export async function askQuestion(question: string): Promise<QAResult> {
   const result = await runAgent(question, 'qa');
+  const sources = result.source_refs.map(toSource);
+  return {
+    kind: result.mode === 'integrity' ? 'integrity' : result.source_refs.length ? 'grounded' : 'abstained',
+    text: result.response,
+    citations: sources.map((item) => item.id),
+    sources,
+    suggestions: [],
+  };
+}
+
+export async function prepareDoSession(input: {
+  courseId: string;
+  blockId: string;
+  taskId: string;
+  title: string;
+  objective: string;
+  plannedMinutes: number;
+}): Promise<DoSessionPreparation> {
+  const result = await runAgent('Chuẩn bị phiên tự học đã được xác nhận.', 'do', {
+    do_course_id: input.courseId,
+    do_block_id: input.blockId,
+    progress_metrics: {
+      do_session: {
+        action: 'prepare',
+        course_id: input.courseId,
+        block_id: input.blockId,
+        task_id: input.taskId,
+        title: input.title,
+        objective: input.objective,
+        planned_minutes: input.plannedMinutes,
+      },
+    },
+  });
+  const prepared = result.output?.do_session;
+  if (!prepared || prepared.action !== 'prepare') throw new ApiError('UPSTREAM', 'Do Agent chưa chuẩn bị được phiên học.');
+  return prepared;
+}
+
+export async function evaluateDoSession(input: {
+  courseId: string;
+  blockId: string;
+  taskId: string;
+  plannedMinutes: number;
+  actualMinutes: number;
+  completionPercent: number;
+  blocker: DoBlocker;
+  blockerNote?: string;
+}): Promise<DoSessionEvaluation> {
+  const result = await runAgent('Đánh giá kết quả phiên tự học vừa kết thúc.', 'do', {
+    do_course_id: input.courseId,
+    do_block_id: input.blockId,
+    progress_metrics: {
+      do_session: {
+        action: 'complete',
+        course_id: input.courseId,
+        block_id: input.blockId,
+        task_id: input.taskId,
+        planned_minutes: input.plannedMinutes,
+        actual_minutes: input.actualMinutes,
+        completion_percent: input.completionPercent,
+        blocker: input.blocker,
+        blocker_note: input.blockerNote ?? '',
+      },
+    },
+  });
+  const evaluation = result.output?.do_session;
+  if (!evaluation || evaluation.action !== 'complete') throw new ApiError('UPSTREAM', 'Do Agent chưa đánh giá được phiên học.');
+  return evaluation;
+}
+
+export async function askDoQuestion(input: {
+  courseId: string;
+  blockId: string;
+  taskTitle: string;
+  objective: string;
+  question: string;
+}): Promise<QAResult> {
+  const result = await runAgent(
+    `Ngữ cảnh phiên tự học: ${input.taskTitle}. Mục tiêu: ${input.objective}.\nCâu hỏi của sinh viên: ${input.question}`,
+    'qa',
+    { do_course_id: input.courseId, do_block_id: input.blockId },
+  );
   const sources = result.source_refs.map(toSource);
   return {
     kind: result.mode === 'integrity' ? 'integrity' : result.source_refs.length ? 'grounded' : 'abstained',

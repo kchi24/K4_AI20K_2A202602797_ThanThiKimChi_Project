@@ -10,10 +10,7 @@ import { InstructorOverviewPage } from '../pages/instructor/InstructorOverviewPa
 import { ReviewQueuePage } from '../pages/instructor/ReviewQueuePage';
 import { DashboardPage } from '../pages/student/DashboardPage';
 import { LearnPage } from '../pages/student/LearnPage';
-import { PlanGeneratingPage } from '../pages/student/PlanGeneratingPage';
 import { PlanPage } from '../pages/student/PlanPage';
-import { PlanPreviewPage } from '../pages/student/PlanPreviewPage';
-import { PlanWizardPage } from '../pages/student/PlanWizardPage';
 import { ProgressPage } from '../pages/student/ProgressPage';
 import { RecoverDiffPage } from '../pages/student/RecoverDiffPage';
 import { RecoverPage } from '../pages/student/RecoverPage';
@@ -47,9 +44,9 @@ export function AppRoutes() {
       >
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/plan" element={<PlanPage />} />
-        <Route path="/plan/new" element={<PlanWizardPage />} />
-        <Route path="/plan/generating" element={<PlanGeneratingPage />} />
-        <Route path="/plan/preview" element={<PlanPreviewPage />} />
+        <Route path="/plan/new" element={<Navigate to="/plan" replace />} />
+        <Route path="/plan/generating" element={<Navigate to="/plan" replace />} />
+        <Route path="/plan/preview" element={<Navigate to="/plan" replace />} />
         <Route path="/study/:taskId" element={<TaskDetailPage />} />
         <Route path="/study/:taskId/session" element={<StudySessionPage />} />
         <Route path="/learn" element={<LearnPage />} />

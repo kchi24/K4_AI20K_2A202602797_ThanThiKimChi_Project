@@ -29,7 +29,7 @@ def quality_gate_node(state: LearningGraphState) -> dict[str, Any]:
             "quality_review": quality_review,
             **(
                 {"source_refs": [], "retrieved_passages": []}
-                if workflow != "qa"
+                if workflow not in {"qa", "do"}
                 else {}
             ),
         }
@@ -57,6 +57,8 @@ def quality_gate_node(state: LearningGraphState) -> dict[str, Any]:
     if workflow == "understanding":
         assessment_validation = output.get("assessment_validation") or {}
         reasons.extend(str(item) for item in assessment_validation.get("reasons") or [])
+    if workflow == "do" and not isinstance(output.get("do_session"), dict):
+        reasons.append("invalid_do_session")
 
     quality_review = {
         "passed": not reasons,
@@ -66,7 +68,7 @@ def quality_gate_node(state: LearningGraphState) -> dict[str, Any]:
     }
     output["quality_review"] = quality_review
     normalized: dict[str, Any] = {"output": output, "quality_review": quality_review}
-    if workflow in {"qa", "tracking"}:
+    if workflow in {"qa", "do", "tracking"}:
         if not reasons:
             normalized["status"] = (
                 "failed"
@@ -74,7 +76,7 @@ def quality_gate_node(state: LearningGraphState) -> dict[str, Any]:
                 else "completed"
             )
             normalized["pending_action"] = None
-    if workflow != "qa":
+    if workflow not in {"qa", "do"}:
         normalized.update({"source_refs": [], "retrieved_passages": []})
     return normalized
 

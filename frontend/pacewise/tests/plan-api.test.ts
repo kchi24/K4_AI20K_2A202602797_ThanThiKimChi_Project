@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { generatePlan } from '../src/services/api';
+import { generatePlan, proposeWeeklyGoals } from '../src/services/api';
 import type { PlanDraft, PlanInput, Task } from '../src/types';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -57,5 +57,42 @@ describe('generatePlan', () => {
       feasibility: { feasible: false, deficitMin: 120 },
       blocks: [{ id: 'b1' }],
     });
+  });
+
+  it('requests weekly goals as a separate student-review stage', async () => {
+    const task: Task = {
+      id: '1:10',
+      courseId: '1',
+      title: 'Mini project',
+      deadline: '2026-10-06',
+      estimateMin: 180,
+      loggedMin: 0,
+      status: 'todo',
+      priority: 'high',
+      personalPriority: 4,
+      objective: 'Submit on time',
+      assignmentGroup: { id: '3', name: 'Project', weight: 55 },
+      pointsPossible: 30,
+    };
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body));
+      expect(request.context.planning_stage).toBe('goal_proposal');
+      expect(request.context.goals[0]).toMatchObject({ personal_priority: 4, assignment_group_weight: 55 });
+      return new Response(JSON.stringify({
+        response: 'Mục tiêu đề xuất',
+        workflow: 'plan',
+        status: 'awaiting_student',
+        source_refs: [],
+        output: {
+          plan_validation: { valid: true, errors: [] },
+          weekly_goals: [{ id: 'goal-1', title: 'Hoàn thành Mini project', taskIds: ['1:10'], confirmed: false }],
+        },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(proposeWeeklyGoals([task])).resolves.toEqual([
+      { id: 'goal-1', title: 'Hoàn thành Mini project', taskIds: ['1:10'], confirmed: false },
+    ]);
   });
 });

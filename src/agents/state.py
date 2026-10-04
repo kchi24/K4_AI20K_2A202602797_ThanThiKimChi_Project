@@ -17,7 +17,7 @@ class LearningGraphState(TypedDict, total=False):
     course_code: str
     role: str
     week_id: str
-    workflow: str  # plan | tracking | qa | understanding | recover | reflect
+    workflow: str  # plan | do | tracking | qa | understanding | recover | reflect
     current_node: str
     messages: Annotated[list[dict[str, Any]], operator.add]
     request: dict[str, Any]
@@ -29,6 +29,7 @@ class LearningGraphState(TypedDict, total=False):
 
     # --- 2. Dữ liệu đầu vào (Context) ---
     goals: list[dict[str, Any]]
+    planning_stage: str
     assignments: list[dict[str, Any]]
     modules: list[dict[str, Any]]
     planner_items: list[dict[str, Any]]
@@ -54,6 +55,7 @@ class LearningGraphState(TypedDict, total=False):
     recovery_snapshot: dict[str, Any] | None
     recovery_options: list[dict[str, Any]]
     reflection_draft: dict[str, Any] | None
+    do_session: dict[str, Any] | None
 
     # --- 4. Cờ kiểm duyệt & Bất định (Guardrails) ---
     security_flags: dict[str, Any]

@@ -6,7 +6,7 @@ import re
 import unicodedata
 from typing import Any
 
-WORKFLOWS = {"plan", "tracking", "qa", "understanding", "recover", "reflect"}
+WORKFLOWS = {"plan", "do", "tracking", "qa", "understanding", "recover", "reflect"}
 
 
 def normalize_text(text: str) -> str:
@@ -36,6 +36,12 @@ SAFE_LEARNING_PATTERNS = (
 )
 
 ROUTING_PATTERNS: dict[str, tuple[str, ...]] = {
+    "do": (
+        r"\bphien (tu )?hoc\b",
+        r"\bbat dau hoc\b",
+        r"\bket thuc phien\b",
+        r"\bdo agent\b",
+    ),
     "plan": (
         r"\bke hoach\b",
         r"\bchia (nho|viec|milestone)\b",

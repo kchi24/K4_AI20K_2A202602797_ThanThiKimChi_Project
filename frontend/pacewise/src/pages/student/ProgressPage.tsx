@@ -39,7 +39,6 @@ export function ProgressPage() {
   const done = visibleTasks.filter((t) => t.status === 'done');
   const openTaskKey = open.map((task) => task.id).join('|');
 
-  const [studyTask, setStudyTask] = useState(open[0]?.id ?? '');
   const [form, setForm] = useState({ taskId: open[0]?.id ?? '', minutes: '', date: DEMO_TODAY, note: '' });
   const [errors, setErrors] = useState<{ minutes?: string; taskId?: string }>({});
   const [tracking, setTracking] = useState<AgentResponse | null>(null);
@@ -78,7 +77,6 @@ export function ProgressPage() {
 
   useEffect(() => {
     const nextTaskId = open[0]?.id ?? '';
-    setStudyTask(nextTaskId);
     setForm((current) => ({ ...current, taskId: nextTaskId }));
     setTracking(null);
   }, [state.courseScope, openTaskKey]);
@@ -147,13 +145,8 @@ export function ProgressPage() {
 
       <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-2 lg:gap-6">
         <Card aria-labelledby="start">
-          <CardHeader id="start" title="Bắt đầu phiên học" subtitle="Hẹn giờ sẽ tự ghi thời gian khi bạn hoàn thành." />
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-            <Select className="flex-1" label="Nhiệm vụ" value={studyTask} onChange={(e) => setStudyTask(e.target.value)} options={open.map((t) => ({ value: t.id, label: t.title }))} />
-            <Button icon="play" disabled={!studyTask} onClick={() => navigate(`/study/${studyTask}/session`)}>
-              Bắt đầu
-            </Button>
-          </div>
+          <CardHeader id="start" title="Phiên tự học theo kế hoạch" subtitle="Do Agent chỉ mở từ study block đã được Plan Agent tạo và xác nhận." />
+          <Button icon="calendar" onClick={() => navigate('/plan')}>Mở lịch học PaceWise</Button>
           {state.activeSession && (
             <p className="caption mt-3">
               Đang có phiên chạy cho <strong>{taskById.get(state.activeSession.taskId)?.title}</strong>.

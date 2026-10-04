@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=5000, description="Tin nhắn từ user")
-    workflow: Literal["plan", "tracking", "qa", "understanding", "recover", "reflect"] | None = None
+    workflow: Literal["plan", "do", "tracking", "qa", "understanding", "recover", "reflect"] | None = None
     context: dict[str, Any] = Field(default_factory=dict)
 
 

@@ -161,7 +161,7 @@ function addStudyBlockReminders(
       urgency: 'normal',
       courseId: task.courseId,
       taskId: task.id,
-      href: `/study/${encodeURIComponent(task.id)}`,
+      href: `/study/${encodeURIComponent(task.id)}/session?blockId=${encodeURIComponent(block.id)}`,
     }));
 
     if (endsAt > now) return;

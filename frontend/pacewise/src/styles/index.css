@@ -2,6 +2,45 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --pw-surface: 255 255 255;
+  --pw-canvas: 248 250 252;
+  --pw-ink: 31 41 55;
+  --pw-muted: 100 116 139;
+  --pw-line: 231 236 243;
+  --pw-primary-light: 238 244 255;
+  --pw-primary-ink: 52 97 214;
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --pw-surface: 17 24 39;
+  --pw-canvas: 10 15 27;
+  --pw-ink: 241 245 249;
+  --pw-muted: 148 163 184;
+  --pw-line: 51 65 85;
+  --pw-primary-light: 30 45 78;
+  --pw-primary-ink: 147 174 255;
+  color-scheme: dark;
+}
+
+:root[data-theme='dark'] .text-slate-600,
+:root[data-theme='dark'] .text-slate-500 {
+  color: rgb(148 163 184) !important;
+}
+
+:root[data-theme='dark'] .bg-slate-50,
+:root[data-theme='dark'] .bg-slate-100 {
+  background-color: rgb(30 41 59) !important;
+}
+
+:root[data-theme='dark'] input,
+:root[data-theme='dark'] select,
+:root[data-theme='dark'] textarea {
+  background-color: rgb(var(--pw-surface));
+  color: rgb(var(--pw-ink));
+}
+
 @layer base {
   html {
     -webkit-text-size-adjust: 100%;
@@ -37,6 +76,31 @@
   }
   .link {
     @apply font-semibold text-primary-ink underline-offset-4 hover:underline;
+  }
+
+  /* Keep dense planner surfaces clean while preserving mouse and keyboard scrolling. */
+  .auto-hide-scrollbar {
+    scrollbar-width: none;
+  }
+  .auto-hide-scrollbar:hover,
+  .auto-hide-scrollbar:focus-within {
+    scrollbar-color: #94A3B8 transparent;
+    scrollbar-width: thin;
+  }
+  .auto-hide-scrollbar::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+  .auto-hide-scrollbar:hover::-webkit-scrollbar,
+  .auto-hide-scrollbar:focus-within::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .auto-hide-scrollbar::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: #94A3B8;
+    background-clip: padding-box;
   }
 }
 

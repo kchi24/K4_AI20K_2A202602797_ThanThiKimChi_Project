@@ -74,7 +74,7 @@ describe('deterministic reminders', () => {
     });
     const nextBlock = reminders.find((item) => item.id.startsWith('study-block:next'));
     expect(nextBlock?.scheduledAt).toBe('2026-10-03T02:00:00.000Z');
-    expect(nextBlock?.href).toBe('/study/task-1');
+    expect(nextBlock?.href).toBe('/study/task-1/session?blockId=next');
     expect(activeReminders(reminders, now).map((item) => item.kind)).toEqual(expect.arrayContaining(['study_block', 'missed_block']));
   });
 

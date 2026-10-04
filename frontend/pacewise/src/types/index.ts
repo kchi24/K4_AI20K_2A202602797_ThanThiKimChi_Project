@@ -40,6 +40,7 @@ export interface Course {
 export type Tone = 'primary' | 'success' | 'warning' | 'danger' | 'accent' | 'neutral';
 
 export type Priority = 'high' | 'medium' | 'low';
+export type PersonalPriority = 1 | 2 | 3 | 4;
 export type TaskStatus = 'todo' | 'in_progress' | 'done';
 
 export interface Task {
@@ -53,6 +54,8 @@ export interface Task {
   loggedMin: number;
   status: TaskStatus;
   priority: Priority;
+  /** Learner-owned preference; independent from LMS weight and system risk. */
+  personalPriority?: PersonalPriority;
   objective: string;
   /** True when the estimate came from PaceWise rather than the student. */
   estimateIsAssumption?: boolean;
@@ -75,6 +78,7 @@ export interface TaskProgress {
   estimateIsAssumption?: boolean;
   loggedMin: number;
   status: TaskStatus;
+  personalPriority?: PersonalPriority;
   updatedAt: string;
 }
 
@@ -220,6 +224,15 @@ export interface TimeBlock {
   date: string;
   start: Clock;
   end: Clock;
+  /** Current week is committed; next-week blocks remain a forecast. */
+  status?: 'confirmed' | 'tentative' | 'history';
+}
+
+export interface WeeklyGoal {
+  id: string;
+  title: string;
+  taskIds: string[];
+  confirmed: boolean;
 }
 
 export interface Plan {
@@ -248,21 +261,40 @@ export interface UnavailableSlot {
   end: Clock;
   /** Exact local date for LMS/Google constraints; manual recurring slots omit it. */
   date?: string;
-  source?: 'manual' | 'google' | 'lms';
+  source?: 'manual' | 'google' | 'lms' | 'routine';
+  /** Self-study is a preferred window; the other categories are hard constraints. */
+  category?: PersonalSlotCategory;
   readOnly?: boolean;
 }
 
-export type PreferredTime = 'morning' | 'afternoon' | 'evening';
+export type PersonalSlotCategory = 'meal' | 'self_study' | 'sleep' | 'other';
+export type PreferredTime = 'late_night' | 'morning' | 'afternoon' | 'evening';
+
+export interface RoutineProfile {
+  wakeTime: Clock;
+  sleepTime: Clock;
+  preferred: PreferredTime[];
+}
 
 export interface PlanInput {
   goal: string;
   /** Monday of the selected calendar week. Optional for legacy saved drafts. */
   weekStart?: string;
-  tasks: { taskId: string; remainingMin: number }[];
+  /** End of the visible forecast horizon (normally Sunday next week). */
+  horizonEnd?: string;
+  weeklyGoals?: WeeklyGoal[];
+  tasks: {
+    taskId: string;
+    remainingMin: number;
+    personalPriority?: PersonalPriority;
+    weeklyGoalId?: string;
+  }[];
   availability: AvailabilityDay[];
   unavailable: UnavailableSlot[];
   /** One or more preferred study periods. A scalar is accepted for old workspaces. */
   preferred: PreferredTime | PreferredTime[];
+  /** Student-positioned blocks that the AI must preserve while scheduling the remainder. */
+  pinnedBlocks?: TimeBlock[];
 }
 
 export interface Feasibility {
@@ -281,6 +313,9 @@ export interface PlanDraft {
   input: PlanInput;
   weekStart?: string;
   weekEnd?: string;
+  horizonEnd?: string;
+  scheduleStart?: string;
+  weeklyGoals?: WeeklyGoal[];
   blocks: TimeBlock[];
   feasibility: Feasibility;
   reasons: string[];
@@ -295,17 +330,20 @@ export interface PlanDraft {
     title: string;
     deadline: string;
     priority: Priority;
+    personalPriority: PersonalPriority;
     assignmentGroupWeight: number;
     pointsPossible: number;
   }>;
   milestones?: Array<{
     milestoneId: string;
     taskId: string;
+    weeklyGoalId?: string | null;
     title: string;
     deliverable: string;
     estimatedMin: number;
     targetMin: number;
     dependsOn: string[];
+    sourceRefs?: string[];
     deadline: string;
   }>;
 }
@@ -317,6 +355,54 @@ export interface StudySession {
   minutes: number;
   note?: string;
   source: 'timer' | 'manual';
+  blockId?: string;
+  plannedMin?: number;
+  completionPercent?: number;
+  outcome?: DoOutcome;
+  blocker?: DoBlocker;
+  blockerNote?: string;
+  needsRecovery?: boolean;
+}
+
+export type DoOutcome = 'on_track' | 'completed' | 'needs_more_time' | 'blocked' | 'missed';
+export type DoBlocker = 'none' | 'knowledge' | 'time' | 'interruption' | 'other';
+
+export interface DoResource {
+  id: string;
+  title: string;
+  kind: string;
+  url?: string | null;
+  module: string;
+  citation: string;
+}
+
+export interface DoSessionPreparation {
+  action: 'prepare';
+  status: 'ready';
+  block_id: string;
+  task_id: string;
+  title: string;
+  objective: string;
+  planned_minutes: number;
+  recommended_resources: DoResource[];
+  opening_prompt: string;
+}
+
+export interface DoSessionEvaluation {
+  action: 'complete';
+  status: DoOutcome;
+  block_id: string;
+  task_id: string;
+  planned_minutes: number;
+  actual_minutes: number;
+  variance_minutes: number;
+  completion_percent: number;
+  remaining_minutes: number;
+  blocker: DoBlocker;
+  blocker_note: string;
+  needs_recovery: boolean;
+  needs_understanding_check: boolean;
+  next_action: string;
 }
 
 export interface ActiveSession {

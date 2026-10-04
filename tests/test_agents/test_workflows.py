@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from src.agents.workflows.coordinator import coordinator_node
+from src.agents.workflows.do import do_node
 from src.agents.workflows.plan import plan_node
 from src.agents.workflows.qa import qa_node
 from src.agents.workflows.recover import _executable_recovery_options, recover_node
@@ -45,6 +46,63 @@ def test_coordinator_keeps_valid_non_answering_workflow_when_classifier_is_unava
     assert result["workflow"] == "plan"
     assert result["security_flags"]["action"] == "allow"
     assert result["security_flags"]["reason"] == "non_answering_workflow"
+
+
+def test_do_prepares_authorized_module_resources_for_study_block():
+    result = do_node(
+        {
+            "assignments": [{"id": "1:7", "title": "Bài tập vòng lặp"}],
+            "modules": [
+                {
+                    "title": "Tuần 2",
+                    "items": [
+                        {"id": 11, "title": "Slide vòng lặp", "item_type": "file", "url": "/files/loops.pdf"},
+                        {"id": 12, "title": "Video hàm", "item_type": "video", "url": "/videos/functions"},
+                    ],
+                }
+            ],
+            "progress_metrics": {
+                "do_session": {
+                    "action": "prepare",
+                    "block_id": "block-1",
+                    "task_id": "1:7",
+                    "milestone_title": "Ôn vòng lặp for",
+                    "planned_minutes": 45,
+                }
+            },
+        }
+    )
+
+    prepared = result["output"]["do_session"]
+    assert prepared["status"] == "ready"
+    assert prepared["recommended_resources"][0]["title"] == "Slide vòng lặp"
+    assert result["source_refs"][0]["citation"] == "[Tuần 2 · Slide vòng lặp]"
+
+
+def test_do_completion_requests_recovery_and_understanding_when_blocked():
+    result = do_node(
+        {
+            "progress_metrics": {
+                "do_session": {
+                    "action": "complete",
+                    "block_id": "block-1",
+                    "task_id": "1:7",
+                    "planned_minutes": 60,
+                    "actual_minutes": 70,
+                    "completion_percent": 50,
+                    "blocker": "knowledge",
+                    "blocker_note": "Chưa hiểu điều kiện dừng",
+                }
+            }
+        }
+    )
+
+    evaluation = result["output"]["do_session"]
+    assert evaluation["status"] == "blocked"
+    assert evaluation["remaining_minutes"] == 30
+    assert evaluation["needs_recovery"] is True
+    assert evaluation["needs_understanding_check"] is True
+    assert result["pending_action"]["workflow"] == "recover"
 
 
 def test_qa_blocks_injection_without_retrieval(monkeypatch):
@@ -181,6 +239,43 @@ def test_plan_returns_validated_draft_requiring_confirmation(mock_llm):
     result = plan_node({"query": "Lập kế hoạch tuần", "availability": [{"hours": 10}]})
     assert result["pending_action"]["type"] == "confirm_plan"
     assert result["status"] == "awaiting_student"
+
+
+def test_plan_proposes_reviewable_weekly_goals_from_open_lms_tasks():
+    result = plan_node(
+        {
+            "query": "Đề xuất mục tiêu tuần",
+            "planning_stage": "goal_proposal",
+            "assignments": [
+                {
+                    "id": "1:10",
+                    "title": "Mini project",
+                    "deadline": "2026-10-06",
+                    "points_possible": 30,
+                    "assignment_group": {"weight": 55},
+                    "submission": {"workflow_state": "unsubmitted"},
+                },
+                {
+                    "id": "1:9",
+                    "title": "Bài đã nộp",
+                    "deadline": "2026-10-05",
+                    "submission": {"workflow_state": "submitted"},
+                },
+            ],
+        }
+    )
+
+    goals = result["output"]["weekly_goals"]
+    assert result["status"] == "awaiting_student"
+    assert result["output"]["plan_validation"]["valid"] is True
+    assert goals == [
+        {
+            "id": "goal-1",
+            "title": "Hoàn thành phần cần thiết của Mini project trước hạn",
+            "taskIds": ["1:10"],
+            "confirmed": False,
+        }
+    ]
     assert result["output"]["plan_validation"]["valid"] is True
 
 

@@ -13,7 +13,7 @@ export function RequireRole({ role, children }: { role: Role; children: React.Re
 }
 
 export function homeFor(role?: Role) {
-  if (role === 'student') return '/dashboard';
+  if (role === 'student') return '/plan';
   if (role === 'instructor') return '/instructor';
   if (role === 'guest') return '/403';
   return '/login';
