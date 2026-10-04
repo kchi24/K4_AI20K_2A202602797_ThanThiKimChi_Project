@@ -2,6 +2,7 @@ import json
 import logging
 import re
 from asyncio import gather
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -35,6 +36,7 @@ _CLIENT_CONTEXT_FIELDS = {
     "goals",
     "assessment_id",
     "plan_input",
+    "planning_stage",
 }
 
 
@@ -226,7 +228,19 @@ async def chat(
     db: Session = Depends(get_db),
 ) -> ChatResponse:
     """Run one agent turn with authenticated user, role, course and LMS context."""
-    lms_context = await _load_lms_agent_context(session, settings, db)
+    scoped_session = session
+    requested_course_id = payload.context.get("do_course_id")
+    do_block_id = str(payload.context.get("do_block_id") or "").strip()
+    if requested_course_id is not None and do_block_id and payload.workflow in {"do", "qa"}:
+        try:
+            course_id = int(requested_course_id)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="Invalid course_id") from exc
+        if course_id not in session.course_ids:
+            raise HTTPException(status_code=403, detail="Course is outside the authenticated LMS enrollment")
+        scoped_session = replace(session, course_id=course_id)
+
+    lms_context = await _load_lms_agent_context(scoped_session, settings, db)
     safe_context = {key: value for key, value in payload.context.items() if key in _CLIENT_CONTEXT_FIELDS}
     assessment_id = str(safe_context.pop("assessment_id", "")).strip() or None
     trusted_assessment: dict[str, Any] = {}
@@ -235,12 +249,12 @@ async def chat(
             raise HTTPException(status_code=422, detail="assessment_id is required for understanding checks")
         trusted_assessment = await load_approved_assessment(
             db,
-            session,
+            scoped_session,
             settings,
             assessment_id,
         )
-    learner_memory = load_learner_memory(db, session, settings)
-    thread_id = _learning_thread_id(session, settings)
+    learner_memory = load_learner_memory(db, scoped_session, settings)
+    thread_id = _learning_thread_id(scoped_session, settings)
     config = {"configurable": {"thread_id": thread_id}}
     try:
         active_agent = getattr(request.app.state, "agent", agent)
@@ -282,7 +296,7 @@ async def chat(
     security_flags = result.get("security_flags") or {}
     security_action = str(security_flags.get("action") or "")
     result_workflow = str(result.get("workflow") or payload.workflow or "qa")
-    source_refs = (result.get("source_refs") or []) if result_workflow == "qa" else []
+    source_refs = (result.get("source_refs") or []) if result_workflow in {"qa", "do"} else []
     if security_action == "guided_help":
         mode = "integrity"
     elif source_refs:
@@ -318,7 +332,7 @@ async def chat(
         }
         output["plan_draft"] = draft
 
-    review_case_id = persist_agent_outcome(db, session, settings, result, assessment_id)
+    review_case_id = persist_agent_outcome(db, scoped_session, settings, result, assessment_id)
 
     safe_response, output_policy = enforce_output_policy(
         str(result.get("response") or ""),

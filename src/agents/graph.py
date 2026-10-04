@@ -1,5 +1,5 @@
 """
-Master LangGraph: kết nối Coordinator và 6 workflow nhánh với durable PostgreSQL
+Master LangGraph: kết nối Coordinator và 7 workflow nhánh với durable PostgreSQL
 checkpointer ở runtime; MemorySaver chỉ dùng cho unit test/SQLite local.
 """
 
@@ -14,6 +14,7 @@ from langgraph.graph import END, StateGraph
 
 from src.agents.state import LearningGraphState
 from src.agents.workflows.coordinator import coordinator_node
+from src.agents.workflows.do import do_node
 from src.agents.workflows.plan import plan_node
 from src.agents.workflows.qa import qa_node
 from src.agents.workflows.quality_gate import quality_gate_node, repair_node
@@ -28,7 +29,7 @@ from src.observability import observe_agent_node
 def route_workflow(state: LearningGraphState) -> str:
     """Điều hướng từ coordinator sang workflow tương ứng."""
     workflow = state.get("workflow", "qa")
-    valid_workflows = {"plan", "tracking", "qa", "understanding", "recover", "reflect"}
+    valid_workflows = {"plan", "do", "tracking", "qa", "understanding", "recover", "reflect"}
     return workflow if workflow in valid_workflows else "qa"
 
 
@@ -100,6 +101,7 @@ def create_agent(checkpointer: Any = default_checkpointer):
     # 1. Thêm các Node
     builder.add_node("coordinator", instrument_node("coordinator", coordinator_node))
     builder.add_node("plan", instrument_node("plan", plan_node))
+    builder.add_node("do", instrument_node("do", do_node))
     builder.add_node("tracking", instrument_node("tracking", tracking_node))
     builder.add_node("qa", instrument_node("qa", qa_node))
     builder.add_node("understanding", instrument_node("understanding", understanding_node))
@@ -117,6 +119,7 @@ def create_agent(checkpointer: Any = default_checkpointer):
         route_workflow,
         {
             "plan": "plan",
+            "do": "do",
             "tracking": "tracking",
             "qa": "qa",
             "understanding": "understanding",
@@ -126,7 +129,7 @@ def create_agent(checkpointer: Any = default_checkpointer):
     )
 
     # 4. Specialist output always passes through a shared critic before END.
-    for workflow in ("plan", "tracking", "qa", "understanding", "recover", "reflect"):
+    for workflow in ("plan", "do", "tracking", "qa", "understanding", "recover", "reflect"):
         builder.add_edge(workflow, "quality_gate")
     builder.add_conditional_edges(
         "quality_gate",

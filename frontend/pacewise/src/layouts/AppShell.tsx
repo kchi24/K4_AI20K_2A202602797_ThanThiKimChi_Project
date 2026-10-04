@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Icon, type IconName } from '../components/ui/Icon';
 import { Badge } from '../components/ui/Badge';
+import { ThemeToggle } from '../components/domain/ThemeToggle';
 import { useAppStore } from '../store/AppStore';
 import { logout as logoutApi } from '../services/api';
 import { cx } from '../utils/cx';
@@ -31,7 +32,7 @@ export function Logo({ compact }: { compact?: boolean }) {
   );
 }
 
-export function AppShell({ items, roleLabel, roleTone, banner }: { items: NavItem[]; roleLabel: string; roleTone: 'primary' | 'accent'; banner?: ReactNode }) {
+export function AppShell({ items, roleLabel, roleTone, banner, iconOnly = false }: { items: NavItem[]; roleLabel: string; roleTone: 'primary' | 'accent'; banner?: ReactNode; iconOnly?: boolean }) {
   const { state, dispatch } = useAppStore();
   const navigate = useNavigate();
   const location = useLocation();
@@ -66,22 +67,22 @@ export function AppShell({ items, roleLabel, roleTone, banner }: { items: NavIte
       </a>
 
       {/* Desktop sidebar */}
-      <aside className="sticky top-0 hidden h-screen w-[264px] shrink-0 flex-col border-r border-line bg-white px-4 py-6 lg:flex">
-        <div className="px-2">
-          <Logo />
+      <aside className={`sticky top-0 hidden h-screen shrink-0 flex-col border-r border-line bg-white py-5 lg:flex ${iconOnly ? 'w-[72px] px-2' : 'w-[264px] px-4'}`}>
+        <div className={iconOnly ? 'flex justify-center' : 'px-2'}>
+          <Logo compact={iconOnly} />
         </div>
-        <div className="mt-6 rounded-2xl border border-line bg-canvas px-3 py-3">
+        {!iconOnly && <div className="mt-6 rounded-2xl border border-line bg-canvas px-3 py-3">
           <Badge tone={roleTone} icon={roleTone === 'primary' ? 'book' : 'users'}>
             {roleLabel}
           </Badge>
           <p className="mt-2 truncate font-semibold">{state.user?.name}</p>
           <p className="caption truncate">{state.user?.email}</p>
-        </div>
+        </div>}
         <nav className="mt-6 flex flex-col gap-1" aria-label="Điều hướng chính">
           {items.map((i) => (
-            <NavLink key={i.to} to={i.to} end={i.end} className={navClass}>
+            <NavLink key={i.to} to={i.to} end={i.end} className={iconOnly ? ({ isActive }) => cx('relative flex h-11 items-center justify-center rounded-xl', isActive ? 'bg-primary-light text-primary-ink' : 'text-slate-500 hover:bg-slate-50 hover:text-ink') : navClass} aria-label={i.label} title={i.label}>
               <Icon name={i.icon} size={20} />
-              <span className="flex-1">{i.label}</span>
+              {!iconOnly && <span className="flex-1">{i.label}</span>}
               {!!i.badge && (
                 <span className="flex h-6 min-w-[24px] items-center justify-center rounded-full bg-warning-light px-1.5 text-xs font-bold text-warning-ink" aria-label={`${i.badge} mục cần chú ý`}>
                   {i.badge}
@@ -90,14 +91,19 @@ export function AppShell({ items, roleLabel, roleTone, banner }: { items: NavIte
             </NavLink>
           ))}
         </nav>
+        {iconOnly && (
+          <div className="mt-1" aria-label="Giao diện">
+            <ThemeToggle sidebar />
+          </div>
+        )}
         <div className="mt-auto flex flex-col gap-1 border-t border-line pt-3">
-          <button onClick={returnToLms} className="flex min-h-[44px] w-full items-center gap-3 rounded-xl px-3 text-[15px] font-medium text-primary-ink hover:bg-primary-light">
+          <button onClick={returnToLms} aria-label="Quay lại LMS" title="Quay lại LMS" className={`flex min-h-[44px] w-full items-center rounded-xl text-primary-ink hover:bg-primary-light ${iconOnly ? 'justify-center' : 'gap-3 px-3 text-[15px] font-medium'}`}>
             <Icon name="arrowLeft" size={20} />
-            Quay lại LMS
+            {!iconOnly && 'Quay lại LMS'}
           </button>
-          <button onClick={() => void logout()} className="flex min-h-[44px] w-full items-center gap-3 rounded-xl px-3 text-[15px] font-medium text-slate-600 hover:bg-slate-50 hover:text-ink">
+          <button onClick={() => void logout()} aria-label="Đăng xuất PaceWise" title="Đăng xuất PaceWise" className={`flex min-h-[44px] w-full items-center rounded-xl text-slate-600 hover:bg-slate-50 hover:text-ink ${iconOnly ? 'justify-center' : 'gap-3 px-3 text-[15px] font-medium'}`}>
             <Icon name="logout" size={20} />
-            Đăng xuất PaceWise
+            {!iconOnly && 'Đăng xuất PaceWise'}
           </button>
         </div>
       </aside>
@@ -126,11 +132,18 @@ export function AppShell({ items, roleLabel, roleTone, banner }: { items: NavIte
             className={({ isActive }) => cx('relative flex flex-col items-center justify-center gap-1 text-[11px] font-semibold', isActive ? 'text-primary-ink' : 'text-slate-500')}
           >
             <Icon name={i.icon} size={22} />
-            {i.label}
+            {!iconOnly && i.label}
             {!!i.badge && <span className="absolute right-[22%] top-2 h-2.5 w-2.5 rounded-full bg-warning" aria-label="Có mục cần chú ý" />}
           </NavLink>
         ))}
-        <button
+        {iconOnly ? <>
+          <button onClick={returnToLms} aria-label="Quay lại LMS" title="Quay lại LMS" className="flex items-center justify-center text-primary-ink">
+            <Icon name="arrowLeft" size={22} />
+          </button>
+          <button onClick={() => void logout()} aria-label="Đăng xuất PaceWise" title="Đăng xuất PaceWise" className="flex items-center justify-center text-slate-500">
+            <Icon name="logout" size={22} />
+          </button>
+        </> : <button
           onClick={() => setMoreOpen(true)}
           className={cx('relative flex flex-col items-center justify-center gap-1 text-[11px] font-semibold', rest.some((i) => location.pathname.startsWith(i.to)) ? 'text-primary-ink' : 'text-slate-500')}
           aria-haspopup="dialog"
@@ -139,7 +152,7 @@ export function AppShell({ items, roleLabel, roleTone, banner }: { items: NavIte
           <Icon name="menu" size={22} />
           Thêm
           {rest.some((i) => i.badge) && <span className="absolute right-[22%] top-2 h-2.5 w-2.5 rounded-full bg-warning" aria-hidden="true" />}
-        </button>
+        </button>}
       </nav>
 
       {moreOpen && (

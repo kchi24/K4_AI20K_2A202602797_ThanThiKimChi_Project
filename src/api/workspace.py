@@ -27,6 +27,7 @@ WORKSPACE_KEYS = {
     "planHistory",
     "availability",
     "unavailable",
+    "routineProfile",
     "sessions",
     "wizardInput",
     "planDraft",

@@ -16,8 +16,8 @@ from src.agents.state import LearningGraphState
 def coordinator_node(state: LearningGraphState) -> dict:
     """
     Node phân loại và điều phối chính của Multi-Agent.
-    Sử dụng LLM để xác định chính xác 1 trong 6 workflows:
-    plan | tracking | qa | understanding | recover | reflect.
+    Sử dụng LLM để xác định chính xác 1 trong 7 workflows:
+    plan | do | tracking | qa | understanding | recover | reflect.
     """
     query = state.get("query") or ""
     if not query and state.get("messages"):
@@ -26,12 +26,12 @@ def coordinator_node(state: LearningGraphState) -> dict:
 
     workflow, route_confidence = classify_workflow(query, state.get("pending_action"))
     workflow_hint = str((state.get("request") or {}).get("workflow_hint") or "").lower()
-    if workflow_hint in {"plan", "tracking", "qa", "understanding", "recover", "reflect"}:
+    if workflow_hint in {"plan", "do", "tracking", "qa", "understanding", "recover", "reflect"}:
         workflow, route_confidence = workflow_hint, 1.0
     security_flags = evaluate_input_policy(query)
     rule_decision = evaluate_guardrails(query)
     if (
-        workflow in {"plan", "tracking", "recover", "reflect"}
+        workflow in {"plan", "do", "tracking", "recover", "reflect"}
         and rule_decision["action"] == "allow"
         and security_flags["action"] == "guided_help"
     ):
@@ -85,7 +85,7 @@ def coordinator_node(state: LearningGraphState) -> dict:
 
         data = json.loads(content)
         detected_workflow = data.get("workflow", "").lower()
-        if detected_workflow in {"plan", "tracking", "qa", "understanding", "recover", "reflect"}:
+        if detected_workflow in {"plan", "do", "tracking", "qa", "understanding", "recover", "reflect"}:
             workflow = detected_workflow
             reasoning = data.get("reasoning", "")
             intent_summary = str(data.get("intent_summary", intent_summary))[:160]

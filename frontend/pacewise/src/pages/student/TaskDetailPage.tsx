@@ -45,8 +45,8 @@ export function TaskDetailPage() {
         title={task.title}
         actions={
           task.status !== 'done' && (
-            <ButtonLink to={`/study/${task.id}/session`} icon="play" size="lg">
-              {running ? 'Tiếp tục phiên học' : 'Bắt đầu học'}
+            <ButtonLink to={running ? `/study/${task.id}/session` : '/plan'} icon={running ? 'play' : 'calendar'} size="lg">
+              {running ? 'Tiếp tục phiên học' : 'Mở lịch học'}
             </ButtonLink>
           )
         }

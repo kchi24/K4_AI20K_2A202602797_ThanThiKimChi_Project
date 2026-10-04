@@ -40,24 +40,33 @@ from app.models import (
 
 
 def _get_or_create_assignment_groups(db: Session, course: Course) -> list[AssignmentGroup]:
-    groups = db.scalars(
+    existing = db.scalars(
         select(AssignmentGroup)
         .where(AssignmentGroup.course_id == course.id)
         .order_by(AssignmentGroup.position)
     ).all()
-    if groups:
-        return groups
-    groups = [
-        AssignmentGroup(course_id=course.id, name="Assignments", position=1, group_weight=60),
-        AssignmentGroup(
-            course_id=course.id,
-            name="Quizzes and checks",
-            position=2,
-            group_weight=40,
-            drop_lowest=1,
-        ),
-    ]
-    db.add_all(groups)
+    templates = {
+        "CS101": [("Bài tập", 25), ("Quiz", 20), ("Project", 55)],
+        "DS201": [("Thực hành dữ liệu", 35), ("Quiz", 20), ("Project", 45)],
+        "PM102": [("Bài cá nhân", 25), ("Hoạt động nhóm", 35), ("Project", 40)],
+    }.get(course.code, [("Bài tập", 40), ("Quiz", 20), ("Project", 40)])
+    by_position = {group.position: group for group in existing}
+    groups: list[AssignmentGroup] = []
+    for position, (name, weight) in enumerate(templates, 1):
+        group = by_position.get(position)
+        if group:
+            group.name = name
+            group.group_weight = weight
+        else:
+            group = AssignmentGroup(
+                course_id=course.id,
+                name=name,
+                position=position,
+                group_weight=weight,
+            )
+            db.add(group)
+        group.drop_lowest = 1 if name == "Quiz" else 0
+        groups.append(group)
     db.flush()
     return groups
 
@@ -75,17 +84,22 @@ def _seed_assignment_structure(db: Session, course: Course) -> None:
                 AssignmentConfiguration.assignment_id == assignment.id
             )
         )
+        group = groups[index % len(groups)]
         if not config:
             db.add(
                 AssignmentConfiguration(
                     assignment_id=assignment.id,
-                    assignment_group_id=groups[index % len(groups)].id,
+                    assignment_group_id=group.id,
                     unlock_at=assignment.due_at - timedelta(days=14),
                     lock_at=assignment.due_at + timedelta(days=2),
                     grading_type="points",
                     peer_reviews=index % 4 == 0,
                 )
             )
+        else:
+            # Keep demo data idempotent while allowing improved academic
+            # weights to appear after an ordinary service restart.
+            config.assignment_group_id = group.id
 
 
 def _seed_sections_and_groups(db: Session, course: Course, students: list[User]) -> None:

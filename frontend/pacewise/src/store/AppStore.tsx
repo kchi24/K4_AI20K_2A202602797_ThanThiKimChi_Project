@@ -11,6 +11,7 @@ import type {
   ClassGuidance,
   ClassGroup,
   Course,
+  DoSessionEvaluation,
   GroupStats,
   LMSCourseData,
   LMSInstructorSummary,
@@ -19,6 +20,7 @@ import type {
   PilotMetrics,
   PlanDraft,
   PlanInput,
+  RoutineProfile,
   QAMessage,
   QuickCheckResult,
   Reflection,
@@ -71,6 +73,7 @@ export interface AppState {
   planHistory: Plan[];
   availability: AvailabilityDay[];
   unavailable: UnavailableSlot[];
+  routineProfile: RoutineProfile | null;
   sessions: StudySession[];
   activeSession: ActiveSession | null;
   wizardInput: PlanInput | null;
@@ -116,6 +119,7 @@ export const initialState: AppState = {
   planHistory: [],
   availability: defaultAvailability,
   unavailable: defaultUnavailable,
+  routineProfile: null,
   sessions: [],
   activeSession: null,
   wizardInput: null,
@@ -170,9 +174,10 @@ export type Action =
   | { type: 'PAUSE_SESSION' }
   | { type: 'RESUME_SESSION' }
   | { type: 'CANCEL_SESSION' }
-  | { type: 'COMPLETE_SESSION'; minutes: number; note?: string }
+  | { type: 'COMPLETE_SESSION'; minutes: number; note?: string; blockId?: string; plannedMin?: number; evaluation?: DoSessionEvaluation }
   | { type: 'ADD_MANUAL_SESSION'; session: Omit<StudySession, 'id' | 'source'> }
   | { type: 'UPDATE_TASK_ESTIMATE'; taskId: string; estimateMin: number }
+  | { type: 'UPDATE_TASK_PRIORITY'; taskId: string; personalPriority: 1 | 2 | 3 | 4 }
   | { type: 'SET_TASK_DONE'; taskId: string; done: boolean }
   | { type: 'ADD_QA'; message: QAMessage }
   | { type: 'CLEAR_QA' }
@@ -182,6 +187,7 @@ export type Action =
   | { type: 'SAVE_REFLECTION'; courseId: string; weekStart: string; effectiveWeekStart: string; answers: [string, string, string]; aiDraft?: Record<string, unknown>; aiSummary?: string }
   | { type: 'SET_RECOVERY_OPTIONS'; options: RecoveryOption[]; key: string | null }
   | { type: 'SAVE_AVAILABILITY'; availability: AvailabilityDay[]; unavailable: UnavailableSlot[] }
+  | { type: 'UPDATE_ROUTINE_PROFILE'; profile: RoutineProfile }
   | { type: 'UPDATE_SETTINGS'; patch: Partial<Settings> }
   | { type: 'SET_REVIEW_STATUS'; id: string; status: ReviewStatus; note?: string }
   | { type: 'SET_ASSESSMENT_STATUS'; id: string; status: AssessmentStatus; note?: string }
@@ -205,12 +211,20 @@ function audit(state: AppState, action: string): AuditEntry[] {
   return [{ id: uid('au'), at, actor: state.user?.name ?? 'Hệ thống', action }, ...state.audit];
 }
 
+function defaultPersonalPriority(task: Task): 1 | 2 | 3 | 4 {
+  if (task.priority === 'high') return 4;
+  if ((task.assignmentGroup?.weight ?? 0) >= 40 || (task.pointsPossible ?? 0) >= 30) return 3;
+  if (task.priority === 'low') return 1;
+  return 2;
+}
+
 function progressOf(task: Task): TaskProgress {
   return {
     estimateMin: task.estimateMin,
     estimateIsAssumption: task.estimateIsAssumption,
     loggedMin: task.loggedMin,
     status: task.status,
+    personalPriority: task.personalPriority ?? defaultPersonalPriority(task),
     updatedAt: new Date().toISOString(),
   };
 }
@@ -388,13 +402,18 @@ export function reducer(state: AppState, action: Action): AppState {
         const current = comparisonTasks.find((item) => item.id === task.id);
         const saved = state.taskProgress[task.id];
         const progress = saved ?? (current ? progressOf(current) : undefined);
-        if (!progress) return { ...task, estimateMin: adaptiveEstimate(task, estimateProfiles) };
+        if (!progress) return {
+          ...task,
+          estimateMin: adaptiveEstimate(task, estimateProfiles),
+          personalPriority: task.personalPriority ?? defaultPersonalPriority(task),
+        };
         return {
           ...task,
           estimateMin: progress.estimateIsAssumption ? adaptiveEstimate(task, estimateProfiles) : progress.estimateMin,
           estimateIsAssumption: progress.estimateIsAssumption,
           loggedMin: progress.loggedMin,
           status: task.status === 'done' ? 'done' as const : progress.status,
+          personalPriority: progress.personalPriority ?? 2,
         };
       });
       const reconciled = preserveLearningReferences(state.plan, state.sessions);
@@ -534,17 +553,17 @@ export function reducer(state: AppState, action: Action): AppState {
       const plan: Plan = {
         id: uid('plan'),
         weekStart: state.planDraft.weekStart ?? state.planDraft.input.weekStart ?? PLANNING_WINDOW_START,
-        blocks: state.planDraft.blocks,
+        blocks: state.planDraft.blocks.filter((block) => block.status !== 'tentative'),
         savedAt: new Date().toISOString(),
         version: (state.plan?.version ?? 0) + 1,
       };
       return withFreshPilotMetrics({
         ...state,
         plan,
-        provisionalBlocks: [],
+        provisionalBlocks: state.planDraft.blocks.filter((block) => block.status === 'tentative'),
         planHistory: state.plan ? [state.plan, ...state.planHistory] : state.planHistory,
-        availability: state.planDraft.input.availability,
-        unavailable: state.planDraft.input.unavailable,
+        availability: state.routineProfile ? state.availability : state.planDraft.input.availability,
+        unavailable: state.planDraft.input.unavailable.filter((slot) => slot.source !== 'lms' && slot.source !== 'routine'),
         planDraft: null,
         wizardInput: null,
         recoveryOptions: [],
@@ -572,7 +591,21 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'COMPLETE_SESSION': {
       const s = state.activeSession;
       if (!s) return state;
-      const session: StudySession = { id: uid('ses'), taskId: s.taskId, date: DEMO_TODAY, minutes: action.minutes, note: action.note, source: 'timer' };
+      const session: StudySession = {
+        id: uid('ses'),
+        taskId: s.taskId,
+        date: DEMO_TODAY,
+        minutes: action.minutes,
+        note: action.note,
+        source: 'timer',
+        blockId: action.blockId,
+        plannedMin: action.plannedMin,
+        completionPercent: action.evaluation?.completion_percent,
+        outcome: action.evaluation?.status,
+        blocker: action.evaluation?.blocker,
+        blockerNote: action.evaluation?.blocker_note,
+        needsRecovery: action.evaluation?.needs_recovery,
+      };
       const tasks = state.tasks.map((task) =>
         task.id === s.taskId
           ? { ...task, loggedMin: task.loggedMin + action.minutes, status: task.status === 'done' ? 'done' as const : 'in_progress' as const }
@@ -606,6 +639,17 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         ...withTaskProgress(state, tasks),
       });
+    }
+    case 'UPDATE_TASK_PRIORITY': {
+      const tasks = state.tasks.map((task) => (
+        task.id === action.taskId
+          ? { ...task, personalPriority: action.personalPriority }
+          : task
+      ));
+      return {
+        ...state,
+        ...withTaskProgress(state, tasks),
+      };
     }
     case 'SET_TASK_DONE': {
       const completedTasks = state.tasks.map((task) =>
@@ -728,6 +772,8 @@ export function reducer(state: AppState, action: Action): AppState {
         ].slice(-50),
       });
     }
+    case 'UPDATE_ROUTINE_PROFILE':
+      return { ...state, routineProfile: action.profile };
     case 'UPDATE_SETTINGS':
       return { ...state, settings: { ...state.settings, ...action.patch } };
     case 'SET_REVIEW_STATUS': {

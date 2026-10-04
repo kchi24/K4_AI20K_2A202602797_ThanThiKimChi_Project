@@ -201,6 +201,57 @@ async def test_chat_uses_authenticated_identity_and_lms_context(
 
 
 @pytest.mark.asyncio
+async def test_do_workflow_keeps_resources_and_scopes_to_enrolled_course(
+    client,
+    authenticated_student,
+    monkeypatch,
+):
+    monkeypatch.setattr("src.api.routes.LMSClient.service_get", AsyncMock(side_effect=_lms_response))
+    ainvoke = AsyncMock(
+        return_value={
+            "response": "Phiên học đã sẵn sàng.",
+            "workflow": "do",
+            "status": "completed",
+            "source_refs": [{"id": "m1", "citation": "[Module 1]"}],
+            "output": {"do_session": {"action": "prepare", "status": "ready"}},
+        }
+    )
+    monkeypatch.setattr("src.api.routes.agent", SimpleNamespace(ainvoke=ainvoke))
+
+    response = await client.post(
+        "/api/v1/chat",
+        json={
+            "message": "Chuẩn bị phiên học",
+            "workflow": "do",
+            "context": {
+                "do_course_id": str(authenticated_student.course_id),
+                "do_block_id": "block-1",
+                "progress_metrics": {"do_session": {"action": "prepare"}},
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["workflow"] == "do"
+    assert response.json()["source_refs"][0]["citation"] == "[Module 1]"
+    state = ainvoke.await_args.args[0]
+    assert state["course_id"] == str(authenticated_student.course_id)
+
+
+@pytest.mark.asyncio
+async def test_do_workflow_rejects_course_outside_enrollment(client, authenticated_student):
+    response = await client.post(
+        "/api/v1/chat",
+        json={
+            "message": "Chuẩn bị phiên học",
+            "workflow": "do",
+            "context": {"do_course_id": "999", "do_block_id": "block-1"},
+        },
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_understanding_uses_only_server_approved_rubric(
     client,
     authenticated_student,

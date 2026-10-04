@@ -3,14 +3,16 @@ import { Select } from '../ui/Field';
 import { useToast } from '../ui/Toast';
 import { switchCourse, syncCanvas } from '../../services/api';
 import { useAppStore } from '../../store/AppStore';
+import { Icon } from '../ui/Icon';
 
-export function CourseSwitcher({ allowAll = false }: { allowAll?: boolean }) {
+export function CourseSwitcher({ allowAll = false, compact = false }: { allowAll?: boolean; compact?: boolean }) {
   const { state, dispatch } = useAppStore();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const selectedScope = allowAll ? state.courseScope : state.user?.courseId ?? '';
   const [displayCourseId, setDisplayCourseId] = useState(selectedScope);
   const activeCourseRef = useRef(state.user?.courseId);
+  const detailsRef = useRef<HTMLDetailsElement>(null);
 
   useEffect(() => {
     if (!busy) {
@@ -22,11 +24,16 @@ export function CourseSwitcher({ allowAll = false }: { allowAll?: boolean }) {
   if (!state.user || state.courses.length < 2) return null;
 
   const selectCourse = async (courseId: string) => {
-    if (busy || courseId === displayCourseId) return;
+    if (busy) return;
+    if (courseId === displayCourseId) {
+      detailsRef.current?.removeAttribute('open');
+      return;
+    }
     if (courseId === 'all') {
       setDisplayCourseId('all');
       dispatch({ type: 'SET_COURSE_SCOPE', courseScope: 'all' });
       toast({ tone: 'success', title: 'Đang xem tổng quan tất cả môn' });
+      detailsRef.current?.removeAttribute('open');
       return;
     }
     const previousCourseId = state.user?.courseId;
@@ -51,6 +58,7 @@ export function CourseSwitcher({ allowAll = false }: { allowAll?: boolean }) {
       return;
     } finally {
       setBusy(false);
+      detailsRef.current?.removeAttribute('open');
     }
 
     void syncCanvas()
@@ -73,6 +81,48 @@ export function CourseSwitcher({ allowAll = false }: { allowAll?: boolean }) {
         });
       });
   };
+
+  if (compact) {
+    const options = [
+      ...(allowAll ? [{ value: 'all', label: 'Tất cả môn học' }] : []),
+      ...state.courses.map((course) => ({ value: course.id, label: `${course.code} — ${course.name}` })),
+    ];
+    return (
+      <details ref={detailsRef} className="group relative">
+        <summary
+          className="relative flex h-10 w-10 cursor-pointer list-none items-center justify-center rounded-xl text-slate-600 marker:hidden hover:bg-primary-light hover:text-primary-ink"
+          aria-label="Chọn môn học"
+          title="Chọn môn học"
+        >
+          <Icon name="book" size={20} />
+          {busy && <span className="absolute inset-1 animate-pulse rounded-lg border border-primary" aria-hidden="true" />}
+        </summary>
+        <div className="absolute right-0 top-12 z-50 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-line bg-white shadow-xl">
+          <div className="border-b border-line px-4 py-3">
+            <p className="text-sm font-bold">Chọn môn học</p>
+            <p className="mt-0.5 text-xs text-muted">Nội dung Hỏi đáp dùng dữ liệu của môn đang chọn.</p>
+          </div>
+          <div className="max-h-72 overflow-y-auto p-2">
+            {options.map((option) => {
+              const selected = option.value === displayCourseId;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void selectCourse(option.value)}
+                  className={`flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm ${selected ? 'bg-primary-light font-semibold text-primary-ink' : 'hover:bg-slate-50'}`}
+                >
+                  <Icon name={selected ? 'checkCircle' : 'book'} size={18} className="shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </details>
+    );
+  }
 
   return (
     <div className="border-b border-line bg-white px-4 py-3 sm:px-6 lg:px-10" aria-busy={busy}>

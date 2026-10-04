@@ -153,6 +153,12 @@ def persist_agent_outcome(
         }
     if workflow == "tracking":
         profile["last_progress_metrics"] = result.get("progress_metrics") or {}
+    if workflow == "do" and isinstance((result.get("output") or {}).get("do_session"), dict):
+        do_session = (result.get("output") or {})["do_session"]
+        profile["last_do_session"] = do_session
+        do_history = list(profile.get("do_history") or [])
+        do_history.append({**do_session, "recorded_at": now})
+        profile["do_history"] = do_history[-20:]
 
     history.append(
         {

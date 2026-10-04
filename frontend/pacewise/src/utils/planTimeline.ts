@@ -5,6 +5,9 @@ export type PlanTimelineSource = 'lms' | 'pacewise' | 'busy';
 
 export interface PlanTimelineItem {
   id: string;
+  /** Stable domain identifier used by editable calendar views. */
+  entityId?: string;
+  taskId?: string;
   source: PlanTimelineSource;
   title: string;
   date: string;
@@ -16,6 +19,7 @@ export interface PlanTimelineItem {
   kindLabel: string;
   deadline?: string;
   readOnly: boolean;
+  scheduleStatus?: 'confirmed' | 'tentative' | 'history';
 }
 
 const LOCAL_TIME_ZONE = 'Asia/Ho_Chi_Minh';
@@ -98,6 +102,8 @@ export function buildPlanTimeline({ blocks, calendarItems, tasks, courses, unava
       const [endHour, endMinute] = block.end.split(':').map(Number);
       return {
         id: `pacewise:${block.id}`,
+        entityId: block.id,
+        taskId: block.taskId,
         source: 'pacewise' as const,
         title: block.milestoneTitle ?? task?.title ?? 'Nhiệm vụ học tập',
         date: block.date,
@@ -108,7 +114,8 @@ export function buildPlanTimeline({ blocks, calendarItems, tasks, courses, unava
         kind: 'study_block',
         kindLabel: 'Study block',
         deadline: task?.deadline,
-        readOnly: false,
+        readOnly: block.status === 'history',
+        scheduleStatus: block.status,
       };
     });
 
@@ -188,14 +195,15 @@ export function buildPlanTimeline({ blocks, calendarItems, tasks, courses, unava
       dates.filter((date) => inRange(date, from, to)).forEach((date) => {
         timeline.push({
           id: `busy:${slot.id}:${date}`,
+          entityId: slot.id,
           source: 'busy',
           title: slot.label,
           date,
           start: slot.start,
           end: slot.end,
           durationMin: Math.max(0, clockDuration(slot.start, slot.end)),
-          kind: slot.source === 'google' ? 'google_busy' : 'personal_busy',
-          kindLabel: slot.source === 'google' ? 'Google Calendar' : 'Không thể học',
+          kind: slot.category === 'self_study' ? 'personal_self_study' : slot.source === 'google' ? 'google_busy' : 'personal_busy',
+          kindLabel: slot.category === 'self_study' ? 'Khung tự học ưu tiên' : slot.source === 'google' ? 'Google Calendar' : 'Không thể học',
           readOnly: Boolean(slot.readOnly),
         });
       });

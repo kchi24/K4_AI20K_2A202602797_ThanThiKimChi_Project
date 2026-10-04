@@ -18,7 +18,7 @@ const formatTime = (value: string) => new Date(value).toLocaleString('vi-VN', {
 
 const tone = (item: Reminder) => item.urgency === 'critical' ? 'danger' : item.urgency === 'urgent' ? 'warning' : 'primary';
 
-export function ReminderCenter() {
+export function ReminderCenter({ compact = false }: { compact?: boolean }) {
   const { state, dispatch } = useAppStore();
   const toast = useToast();
   const [clock, setClock] = useState(() => Date.now());
@@ -96,6 +96,70 @@ export function ReminderCenter() {
       description: permission === 'granted' ? 'PaceWise giới hạn tối đa 3 thông báo chủ động mỗi ngày.' : 'Bạn vẫn xem được mọi nhắc việc trong PaceWise.',
     });
   };
+
+  if (compact) {
+    return (
+      <details className="group relative">
+        <summary
+          className="relative flex h-10 w-10 cursor-pointer list-none items-center justify-center rounded-xl text-slate-600 marker:hidden hover:bg-primary-light hover:text-primary-ink"
+          aria-label={`Nhắc việc${unread.length ? `, ${unread.length} chưa đọc` : ''}`}
+          title="Nhắc việc"
+        >
+          <Icon name="bell" size={20} />
+          {unread.length > 0 && (
+            <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-warning px-1 text-[10px] font-bold text-warning-ink">
+              {unread.length > 9 ? '9+' : unread.length}
+            </span>
+          )}
+        </summary>
+
+        <div className="absolute right-0 top-12 z-50 w-[min(26rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-line bg-white shadow-xl">
+          <div className="flex items-center gap-2 border-b border-line px-4 py-3">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary-light text-primary-ink"><Icon name="bell" size={17} /></span>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-bold">Nhắc việc</p>
+              <p className="truncate text-xs text-muted">{active[0]?.title ?? upcoming[0]?.title ?? 'Không có cảnh báo mới'}</p>
+            </div>
+            {unread.length > 0 && (
+              <button type="button" className="text-xs font-semibold text-primary-ink hover:underline" onClick={() => dispatch({ type: 'MARK_REMINDERS_READ', ids: unread.map((item) => item.id) })}>
+                Đã đọc
+              </button>
+            )}
+          </div>
+
+          <div className="auto-hide-scrollbar max-h-[60vh] overflow-y-auto p-3">
+            {visible.length === 0 ? (
+              <p className="rounded-xl bg-slate-50 px-3 py-3 text-sm text-muted">Kế hoạch đang ổn. PaceWise sẽ báo khi có việc cần xử lý.</p>
+            ) : (
+              <ul className="space-y-2">
+                {visible.slice(0, 5).map((item) => (
+                  <li key={item.id} className="rounded-xl border border-line px-3 py-3">
+                    <div className="flex items-center gap-2">
+                      <Badge tone={tone(item)}>{item.urgency === 'critical' ? 'Khẩn' : item.urgency === 'urgent' ? 'Cần chú ý' : 'Sắp tới'}</Badge>
+                      <span className="caption ml-auto">{formatTime(item.scheduledAt)}</span>
+                    </div>
+                    <p className="mt-1.5 text-sm font-semibold">{item.title}</p>
+                    <p className="mt-0.5 text-xs text-muted">{item.message}</p>
+                    {item.href && (
+                      <Link to={item.href} onClick={() => dispatch({ type: 'MARK_REMINDERS_READ', ids: [item.id] })} className="mt-2 inline-flex text-xs font-semibold text-primary-ink hover:underline">
+                        {item.kind === 'missed_block' || item.kind === 'lms_change' || item.kind === 'deadline_2h' ? 'Mở Phục hồi' : 'Xem chi tiết'}
+                      </Link>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {!state.reminders.preferences.browserEnabled && (
+            <div className="border-t border-line p-3">
+              <Button block size="sm" variant="secondary" icon="bell" onClick={() => void enableBrowserNotifications()}>Bật thông báo trình duyệt</Button>
+            </div>
+          )}
+        </div>
+      </details>
+    );
+  }
 
   return (
     <div className="px-4 pt-4 sm:px-6 lg:px-10">

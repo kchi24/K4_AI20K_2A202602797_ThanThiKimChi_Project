@@ -61,6 +61,76 @@ def _parse_depends_on(val: Any) -> list[str]:
     return []
 
 
+def _goal_candidates(
+    assignments: list[dict[str, Any]],
+    requested: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Return a small, stable set of open LMS tasks for weekly goal review."""
+    requested_ids = {
+        str(item.get("task_id") or item.get("taskId") or "")
+        for item in (requested or [])
+        if str(item.get("task_id") or item.get("taskId") or "")
+    }
+    open_items = []
+    for assignment in assignments:
+        if requested_ids and str(assignment.get("id")) not in requested_ids:
+            continue
+        submission = assignment.get("submission") or {}
+        if str(submission.get("workflow_state") or "").lower() in {"submitted", "graded"}:
+            continue
+        open_items.append(assignment)
+    return sorted(
+        open_items,
+        key=lambda item: (
+            str(item.get("deadline") or "9999-12-31"),
+            -float((item.get("assignment_group") or {}).get("weight") or 0),
+            -float(item.get("points_possible") or 0),
+        ),
+    )[:4]
+
+
+def _extract_weekly_goals(text: str, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    parsed_items: list[Any] = []
+    json_match = re.search(r"```json\s*([\s\S]*?)```", text)
+    if json_match:
+        try:
+            payload = json.loads(json_match.group(1))
+            parsed_items = payload.get("weekly_goals", []) if isinstance(payload, dict) else payload
+        except (TypeError, ValueError, json.JSONDecodeError):
+            parsed_items = []
+    candidate_ids = {str(item.get("id")) for item in candidates}
+    goals: list[dict[str, Any]] = []
+    for index, item in enumerate(parsed_items if isinstance(parsed_items, list) else []):
+        if not isinstance(item, dict):
+            continue
+        task_ids = [
+            str(value)
+            for value in item.get("task_ids", item.get("taskIds", []))
+            if str(value) in candidate_ids
+        ]
+        title = str(item.get("title") or "").strip()
+        if title and task_ids:
+            goals.append(
+                {
+                    "id": str(item.get("id") or f"goal-{index + 1}"),
+                    "title": title,
+                    "taskIds": task_ids,
+                    "confirmed": False,
+                }
+            )
+    if goals:
+        return goals[:4]
+    return [
+        {
+            "id": f"goal-{index + 1}",
+            "title": f"Hoàn thành phần cần thiết của {item.get('title') or 'nhiệm vụ'} trước hạn",
+            "taskIds": [str(item.get("id"))],
+            "confirmed": False,
+        }
+        for index, item in enumerate(candidates)
+    ]
+
+
 def _extract_milestones_from_text(text: str) -> list[dict[str, Any]]:
     """
     Trích xuất danh sách proposed_milestones từ câu trả lời của LLM.
@@ -88,6 +158,11 @@ def _extract_milestones_from_text(text: str) -> list[dict[str, Any]]:
                         )
                         deps = _parse_depends_on(item.get("depends_on") or item.get("dependencies"))
                         task_id = str(item.get("task_id") or item.get("taskId") or item.get("assignment_id") or "")
+                        source_refs = [
+                            str(value)
+                            for value in (item.get("source_refs", item.get("sourceRefs", [])) or [])
+                            if str(value).strip()
+                        ]
                         result.append({
                             "milestone_id": m_id,
                             **({"task_id": task_id} if task_id else {}),
@@ -95,6 +170,7 @@ def _extract_milestones_from_text(text: str) -> list[dict[str, Any]]:
                             "deliverable": deliv,
                             "estimated_minutes": est_min,
                             "depends_on": deps,
+                            **({"source_refs": source_refs} if source_refs else {}),
                         })
                 if result:
                     return result
@@ -123,6 +199,15 @@ def _extract_milestones_from_text(text: str) -> list[dict[str, Any]]:
                                 "deliverable": str(item.get("deliverable") or "Đầu ra kiểm chứng được"),
                                 "estimated_minutes": _parse_int_minutes(item.get("estimated_minutes")),
                                 "depends_on": _parse_depends_on(item.get("depends_on")),
+                                **(
+                                    {"source_refs": [
+                                        str(value)
+                                        for value in (item.get("source_refs", item.get("sourceRefs", [])) or [])
+                                        if str(value).strip()
+                                    ]}
+                                    if (item.get("source_refs") or item.get("sourceRefs"))
+                                    else {}
+                                ),
                             })
                     if result:
                         return result
@@ -152,35 +237,23 @@ def _extract_milestones_from_text(text: str) -> list[dict[str, Any]]:
         if result:
             return result
 
-    # 4. Fallback baseline: Đảm bảo proposed_milestones luôn có dữ liệu hợp lệ
+    # Keep the workflow confirmable when the model is unavailable. The server
+    # scheduler replaces this neutral milestone with task-aware decomposition
+    # for multi-assignment plans.
     return [
         {
             "milestone_id": "M1",
-            "title": "Xác định câu hỏi nghiên cứu và lập đề cương",
-            "deliverable": "Bản đề cương 1 trang xác định phạm vi",
+            "title": "Đọc yêu cầu và xác định đầu ra",
+            "deliverable": "Checklist yêu cầu cần hoàn thành",
             "estimated_minutes": 60,
             "depends_on": [],
         },
         {
             "milestone_id": "M2",
-            "title": "Thu thập và phân tích tài liệu học thuật",
-            "deliverable": "Danh mục 5-7 nguồn học thuật có trích dẫn",
-            "estimated_minutes": 90,
+            "title": "Thực hiện và rà soát nhiệm vụ đã chọn",
+            "deliverable": "Nhiệm vụ sẵn sàng để kiểm tra hoặc nộp",
+            "estimated_minutes": 60,
             "depends_on": ["M1"],
-        },
-        {
-            "milestone_id": "M3",
-            "title": "Soạn thảo nội dung các luận điểm chính",
-            "deliverable": "Bản nháp 1.500 từ theo rubric",
-            "estimated_minutes": 120,
-            "depends_on": ["M2"],
-        },
-        {
-            "milestone_id": "M4",
-            "title": "Rà soát, hiệu đính và đối chiếu tiêu chuẩn",
-            "deliverable": "Bản hoàn chỉnh kèm checklist kiểm tra",
-            "estimated_minutes": 45,
-            "depends_on": ["M3"],
         },
     ]
 
@@ -230,6 +303,27 @@ def plan_node(state: LearningGraphState) -> dict[str, Any]:
     if not query and state.get("messages"):
         last_msg = state["messages"][-1]
         query = last_msg.get("content", "") if isinstance(last_msg, dict) else getattr(last_msg, "content", "")
+
+    if state.get("planning_stage") == "goal_proposal":
+        candidates = _goal_candidates(
+            state.get("assignments") or [],
+            state.get("goals") or [],
+        )
+        weekly_goals = _extract_weekly_goals("", candidates)
+        titles = "\n".join(f"- {item['title']}" for item in weekly_goals)
+        return {
+            "current_node": "plan",
+            "response": (
+                "Plan Agent đề xuất các mục tiêu sau. Bạn có thể sửa, bỏ hoặc đổi ưu tiên trước khi lập lịch:\n"
+                + (titles or "- Chưa có deadline mở trong dữ liệu LMS.")
+            ),
+            "analysis": "Đề xuất nội bộ dựa trên deadline, trọng số học vụ và các nhiệm vụ LMS chưa nộp.",
+            "status": "awaiting_student" if weekly_goals else "completed",
+            "output": {
+                "weekly_goals": weekly_goals,
+                "plan_validation": {"valid": True, "errors": []},
+            },
+        }
 
     existing_milestones = state.get("proposed_milestones") or []
     q_lower = query.lower()
@@ -287,8 +381,10 @@ def plan_node(state: LearningGraphState) -> dict[str, Any]:
             f"Nhiệm vụ của sinh viên: '{query}'\n\n"
             f"DỮ LIỆU LMS VÀ QUỸ THỜI GIAN ĐÃ XÁC THỰC:\n"
             f"{json.dumps(planning_context, ensure_ascii=False, indent=2)}\n\n"
-            f"Hãy lập bảng lộ trình milestone súc tích gồm 4 mốc cụ thể, đầu ra kiểm chứng được và thời lượng thực tế. "
-            f"BẮT BUỘC đính kèm khối JSON ```json chứa danh sách milestones ở cuối bài!"
+            "Hãy chia TỪNG nhiệm vụ đã chọn thành số milestone phù hợp với loại và khối lượng công việc; "
+            "không ép mọi nhiệm vụ thành 4 mốc. Mỗi milestone phải có task_id, title, deliverable, "
+            "estimated_minutes, depends_on và source_refs trỏ về assignment hoặc rubric đã dùng. "
+            "BẮT BUỘC đính kèm khối JSON ```json chứa danh sách milestones ở cuối bài."
         )
         default_analysis = "Milestone Agent đã phân rã lộ trình milestone mới."
 
