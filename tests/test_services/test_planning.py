@@ -62,6 +62,38 @@ def test_scheduler_prioritizes_student_defined_self_study_window():
     assert result["blocks"][0]["start"] == "20:00"
 
 
+def test_scheduler_uses_explicit_weekend_self_study_before_generic_weekday_time():
+    result = build_plan_draft(
+        {
+            "goal": "Use the study windows I placed on the calendar",
+            "weekStart": "2026-10-05",
+            "horizonEnd": "2026-10-11",
+            "tasks": [{"taskId": "a1", "remainingMin": 60}],
+            "availability": [
+                {"weekday": weekday, "enabled": weekday < 5, "start": "08:00", "end": "20:00"}
+                for weekday in range(7)
+            ],
+            "unavailable": [
+                {
+                    "weekday": 6,
+                    "date": "2026-10-11",
+                    "start": "20:00",
+                    "end": "22:00",
+                    "category": "self_study",
+                }
+            ],
+            "preferred": ["morning", "afternoon"],
+        },
+        [{"id": "a1", "title": "Assignment", "deadline": "2026-10-11T23:59:00+07:00"}],
+        today=date(2026, 10, 5),
+    )
+
+    assert result["feasibility"]["feasible"] is True
+    assert result["blocks"][0]["date"] == "2026-10-11"
+    assert result["blocks"][0]["start"] == "20:00"
+    assert result["blocks"][0]["end"] == "21:00"
+
+
 def test_scheduler_supports_explicit_late_night_preference_and_sleep_constraint():
     result = build_plan_draft(
         {

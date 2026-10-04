@@ -565,6 +565,10 @@ export interface Reflection {
   courseId: string;
   weekStart: string;
   effectiveWeekStart?: string;
+  scope?: 'weekly' | 'activity';
+  activityId?: string;
+  activityTitle?: string;
+  activityKind?: string;
   answers: [string, string, string];
   savedAt: string;
   aiDraft?: Record<string, unknown>;

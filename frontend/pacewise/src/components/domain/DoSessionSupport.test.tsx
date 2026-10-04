@@ -13,6 +13,9 @@ describe('DoSessionSupport', () => {
   it('shows grounded session resources and an embedded question form', () => {
     render(<DoSessionSupport courseId="1" blockId="b1" taskTitle="Vòng lặp" objective="Hiểu vòng lặp" preparation={preparation} loading={false} />);
     expect(screen.getByText('Slide vòng lặp')).toBeTruthy();
+    const resourceLink = screen.getByRole('link', { name: /Slide vòng lặp/i });
+    expect(resourceLink.getAttribute('target')).toBe('_blank');
+    expect(resourceLink.getAttribute('href')).toBe('http://localhost:8010/mock.pdf');
     expect(screen.getByPlaceholderText('Hỏi về khái niệm đang học…')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Gửi câu hỏi' })).toBeTruthy();
   });

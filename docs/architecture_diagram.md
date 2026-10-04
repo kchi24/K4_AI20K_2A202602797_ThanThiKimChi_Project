@@ -1,222 +1,184 @@
-# PaceWise — Architecture
+# PaceWise architecture and data flow
 
-**Trạng thái:** Kiến trúc thực thi cho MVP + hướng mở rộng production pilot · **Cập nhật:** 30/09/2026
+Tài liệu này mô tả kiến trúc đang chạy trong repository, không phải kiến trúc dự kiến. Mốc kiểm chứng: **04/10/2026**.
 
-## 1. System context
+## 1. Component diagram
 
 ```mermaid
 flowchart LR
-    Student[Student] --> Web[React/Vite Web App]
-    Instructor[Instructor / Advisor] --> Web
-    Canvas[Canvas LMS] -.->|P1: LTI 1.3 launch| Web
-    Web -->|HTTPS / HttpOnly session + CSRF| API[FastAPI API]
-    API -.->|Optional: REST read-only| Canvas
-    API --> DB[(PostgreSQL)]
-    API -->|retrieval only| Qdrant[(Qdrant service)]
-    API --> AI[LangGraph AI Harness]
-    API -->|OAuth 2.0: identity + freebusy + confirmed events| GCal[Google Calendar API]
-    API -->|RFC 5545 export, no OAuth| ICS[ICS file]
-    Canvas -->|event trigger + REST snapshot| Worker[Projection/RAG worker]
-    Worker --> DB
-    Worker -->|versioned ingestion| Qdrant
-    AI --> Gateway[OpenRouter / OpenAI-compatible Models]
-    API --> Obs[Request ID + structured logs + Prometheus/Grafana]
+    subgraph Client["Browser"]
+        UI["React + TypeScript\nPlan · Do · Reflect"]
+        Instructor["Instructor UI\nOverview · Review"]
+    end
+
+    subgraph PaceWise["PaceWise"]
+        Nginx["Nginx frontend\n:5173"]
+        API["FastAPI API\n:8000"]
+        Auth["Session + CSRF + RBAC"]
+        Graph["LangGraph coordinator"]
+        Specialists["Plan · Do · Tracking · QA\nUnderstanding · Recover · Reflect"]
+        Gate["Quality gate + one repair pass"]
+        Worker["LMS projection / RAG worker"]
+        DB[("PaceWise PostgreSQL\n:5433")]
+        Vector[("Qdrant\n:6333")]
+    end
+
+    subgraph LMS["Canvas-compatible LMS Simulator"]
+        LMSAPI["LMS API + launch\n:8010"]
+        LMSDB[("LMS PostgreSQL\n:5434")]
+        Files["Course files / PDF"]
+    end
+
+    subgraph External["Optional external services"]
+        LLM["OpenAI-compatible LLM"]
+        GCal["Google Calendar"]
+    end
+
+    UI --> Nginx
+    Instructor --> Nginx
+    Nginx -->|"/api/* reverse proxy"| API
+    API --> Auth
+    Auth --> Graph
+    Graph --> Specialists --> Gate
+    Gate -->|"pass or repair once"| Graph
+    Graph --> LLM
+    API <--> DB
+    Worker <--> DB
+    Worker <--> Vector
+    API --> Vector
+    API <--> LMSAPI
+    Worker <--> LMSAPI
+    LMSAPI <--> LMSDB
+    LMSAPI --> Files
+    API <--> GCal
 ```
 
-Canvas là hệ thống bên ngoài. MVP luôn chạy bằng fixture; REST chỉ đọc chỉ bật khi có sandbox/token và LTI 1.3 là P1 khi có developer key. PaceWise không fork Canvas và không ghi điểm/nộp bài. Fixture dùng cùng schema nội bộ để CI/demo vẫn chạy khi sandbox không khả dụng.
-
-## 2. Application components
+## 2. Agent graph
 
 ```mermaid
-flowchart TB
-    UI[React/Vite: /student + /instructor] --> API[FastAPI Router]
-    API --> Auth[HttpOnly session + CSRF + RBAC]
-    API --> CanvasAdapter[Canvas Fixture/REST Adapter]
-    API --> Plan[Plan + Progress + Risk Service]
-    API --> Assess[Assessment + Evidence Service]
-    API --> Tutor[Grounded Tutor Service]
-    API --> Dashboard[Aggregate Dashboard Service]
-    API --> Calendar[Google Calendar Adapter]
-
-    Plan --> Graph[LangGraph Typed Workflow]
-    Assess --> Graph
-    Tutor --> Graph
-    Graph --> Decompose[Task Decomposer]
-    Graph --> Recover[Recovery Planner]
-    Graph --> ItemBuilder[Assessment Builder]
-    Graph --> RubricScorer[CR Rubric Scorer]
-    Graph --> Retriever[Qdrant Retriever + lazy FastEmbed + FlashRank ONNX]
-    Graph --> Guardrail[Rules + calibrated classifier + output policy]
-    Graph --> Critic[Deterministic quality gate]
-    Critic -->|invalid, max 1 pass| Repair[Safe Repair Agent]
-    Repair --> Critic
-
-    Plan --> Deterministic[Constraint + Risk Validators]
-    Assess --> Deterministic
-    Assess --> MC[MC Rule Scorer]
-    Tutor --> Citation[Citation Validator]
-
-    Auth --> DB[(PostgreSQL)]
-    CanvasAdapter --> DB
-    Plan --> DB
-    Assess --> DB
-    Dashboard --> DB
-    Calendar --> DB
-    Calendar --> GoogleAPI[Google Calendar REST API]
-    Retriever --> Qdrant[(Qdrant)]
-    CanvasAdapter --> Queue[(PostgreSQL ingestion queue)]
-    Queue --> Worker[Projection/RAG worker]
-    Worker --> Qdrant
-    Graph --> Checkpoint[(PostgreSQL LangGraph checkpoint)]
+flowchart TD
+    Request["Authenticated request + LMS/workspace context"] --> Coordinator
+    Coordinator -->|plan| Plan
+    Coordinator -->|do| Do
+    Coordinator -->|tracking| Tracking
+    Coordinator -->|qa| QA
+    Coordinator -->|understanding| Understanding
+    Coordinator -->|recover| Recover
+    Coordinator -->|reflect| Reflect
+    Plan --> QualityGate
+    Do --> QualityGate
+    Tracking --> QualityGate
+    QA --> QualityGate
+    Understanding --> QualityGate
+    Recover --> QualityGate
+    Reflect --> QualityGate
+    QualityGate -->|passed| Response
+    QualityGate -->|failed, first time| Repair
+    Repair --> QualityGate
+    QualityGate -->|failed after repair| SafeResponse["Safe failure / human decision"]
 ```
 
-Ranh giới quan trọng:
+`LearningGraphState` mang theo assignment, module, lịch rảnh/bận, kế hoạch hiện tại, hồ sơ học tập, nguồn truy xuất, risk, phương án Recover và bản nháp Reflect. Runtime Docker dùng PostgreSQL checkpointer; unit test có thể dùng memory checkpointer.
 
-- LLM hiểu ngữ nghĩa và sinh đề xuất; code kiểm tra quyền, schema, deadline, key MC, citation existence và privacy threshold.
-- Backend deterministic scheduler là nguồn duy nhất tạo study block và quyết định tính khả thi; frontend chỉ thu thập input và hiển thị bản nháp.
-- Thread học tập có khóa `institution:user:course:learning-cycle`, không phụ thuộc cookie session đăng nhập.
-- PostgreSQL lưu learner profile/mastery/misconception theo `institution:user:course`; checkpoint theo tuần chỉ giữ working memory.
-- Browser chỉ gửi `assessment_id`; backend kiểm tra bản duyệt của giảng viên rồi lấy rubric/đáp án từ LMS bằng service credential.
-- Ca đánh giá thiếu chắc chắn và khiếu nại citation tạo `AgentReviewCase` bền vững, không chỉ nằm trong LangGraph state.
-- Chat ưu tiên đọc LMS course projection do worker duy trì; chỉ fallback sang REST khi projection thiếu hoặc quá hạn.
-- Request chat chỉ retrieval. Worker riêng nhận event, lấy REST snapshot, version hóa học liệu và cập nhật Qdrant; point được cô lập theo institution/course/resource/version/access scope.
-- Assessment builder không tự duyệt output của chính nó. Item/rubric phải qua quality gate và giảng viên xác nhận.
-- Độ tin cậy thấp, câu trả lời ngoài rubric hoặc bộ chấm bất đồng được chuyển vào hàng chờ giảng viên; không tự cập nhật bằng chứng học tập.
-- Mọi plan/re-plan, assessment publish và instructor action đều version hóa/audit.
-
-## 3. Plan–Do–Reflect workflow
-
-Trong sơ đồ trạng thái, `Check` và `Recovery` là các nhánh hỗ trợ bên trong bước
-`Do`, không phải hai giai đoạn độc lập thay thế chu trình của đề bài.
-
-```mermaid
-stateDiagram-v2
-    [*] --> PlanDraft
-    PlanDraft --> PlanConfirmed: Student confirms
-    PlanConfirmed --> Doing
-    Doing --> CheckOffered: Milestone completed
-    CheckOffered --> Doing: Student postpones
-    CheckOffered --> Checking: Starts approved check
-    Checking --> ReviewQueue: Low confidence / out of rubric
-    Checking --> EvidenceUpdated: Valid evidence
-    ReviewQueue --> EvidenceUpdated: Instructor resolves
-    EvidenceUpdated --> RiskEvaluation
-    Doing --> RiskEvaluation: Progress/deadline changes
-    RiskEvaluation --> Doing: Plan remains feasible
-    RiskEvaluation --> RecoveryDraft: Risk exceeds threshold
-    RecoveryDraft --> Doing: Student confirms option
-    Doing --> Reflecting: End of week
-    Reflecting --> PlanDraft: Confirmed adjustment
-```
-
-### 3.1 End-to-end data flow
+## 3. Plan → Do → Reflect
 
 ```mermaid
 sequenceDiagram
-    autonumber
-    actor User as Student / Instructor
-    participant UI as React Web
-    participant API as FastAPI
-    participant Auth as Session + RBAC
-    participant LMS as LMS Adapter
+    actor S as Sinh viên
+    participant LMS as LMS
+    participant UI as PaceWise UI
+    participant API as FastAPI / LangGraph
     participant DB as PostgreSQL
-    participant Agent as LangGraph
-    participant Vector as Qdrant
-    participant Model as LLM Gateway
+    participant Q as Qdrant
 
-    User->>UI: Login or LMS launch
-    UI->>API: Credentials / one-time launch token
-    API->>LMS: Verify identity and enrollments
-    LMS-->>API: User, role, allowed courses
-    API->>DB: Create revocable session
-    API-->>UI: HttpOnly session + CSRF cookie
-
-    User->>UI: Plan, Track, Ask, Check, Recover, Reflect
-    UI->>API: Request + CSRF (no client user_id/role)
-    API->>Auth: Validate session, role and course access
-    API->>DB: Read workspace, projection and learner memory
-    API->>Agent: Authorized state + workflow request
-    opt Grounded QA
-        Agent->>Vector: Retrieve tenant/course-scoped passages
-        Vector-->>Agent: Versioned passages + metadata
-        Agent->>Model: Prompt + authorized context
-        Model-->>Agent: Candidate response
+    LMS-->>API: course, assignment, quiz, lịch học, submission
+    API-->>UI: snapshot đã phân quyền
+    S->>UI: thêm Ăn/Ngủ/Bận/Tự học, ưu tiên và giờ sinh hoạt
+    UI->>DB: PUT workspace (version + CSRF)
+    S->>UI: AI lập kế hoạch
+    UI->>API: goal + workload + availability + constraints
+    API-->>UI: milestone + study block + capacity + assumptions
+    S->>UI: xem trước, chỉnh, Áp dụng kế hoạch
+    UI->>DB: lưu plan đã xác nhận
+    S->>UI: mở study block
+    UI->>API: bắt đầu/kết thúc Do, actual time, blocker
+    API->>Q: retrieval học liệu đã ingest
+    Q-->>API: passages có metadata nguồn
+    API-->>UI: gợi ý tài liệu / trả lời có citation hoặc từ chối
+    UI->>DB: session + evaluation
+    S->>UI: Reflect sau hoạt động hoặc cuối tuần
+    UI->>API: plan so với actual + câu trả lời phản tư
+    API-->>UI: tóm tắt + một điều chỉnh đề xuất
+    alt cần điều chỉnh
+        UI-->>S: quay về Plan với bản AI đề xuất
+        S->>UI: xem và xác nhận
+    else không cần điều chỉnh
+        UI-->>S: quay về lịch học hiện tại
     end
-    Agent->>Agent: Validate constraints, safety and citations
-    Agent->>Agent: Critic → one bounded repair → Critic
-    Agent-->>API: Draft/result + status + pending action
-    API->>DB: Persist outcome, audit and review case
-    API-->>UI: Safe response and source references
-    UI-->>User: Result or confirmation screen
 ```
 
-LMS event ingestion không nằm trên request chat:
+## 4. Lưu lịch cá nhân sau reload
 
 ```mermaid
 flowchart LR
-    Event[LMS event / periodic sync] --> Queue[(Durable ingestion queue)]
-    Queue --> Worker[Projection and RAG worker]
-    Worker --> REST[LMS REST current snapshot]
-    REST --> Normalize[Normalize + checksum + version]
-    Normalize --> DB[(Course projection in PostgreSQL)]
-    Normalize --> Chunk[Chunk by resource/version/access scope]
-    Chunk --> Embed[Lazy FastEmbed]
-    Embed --> Vector[(Qdrant)]
-    Worker --> Audit[Sync cursor + retry + audit]
+    Drag["Thêm/kéo/resize/xóa\nĂn · Ngủ · Bận · Tự học"] --> Local["PlanPage state"]
+    Local --> Action["SAVE_AVAILABILITY"]
+    Action --> Store["AppStore workspace state"]
+    Store -->|"debounce 750 ms"| Put["PUT /api/v1/workspace"]
+    Put -->|"optimistic version check"| PG[("pacewise_workspaces")]
+    Reload["Reload / đăng nhập lại"] --> Get["GET /api/v1/workspace"]
+    Get --> Hydrate["HYDRATE_WORKSPACE"]
+    PG --> Get
+    Hydrate --> Calendar["Khôi phục các ô lịch cá nhân"]
 ```
 
-## 4. Deployment and observability
+Workspace là nguồn dữ liệu chính cho lịch cá nhân, routine, plan, session và reflection. LMS vẫn là nguồn chính cho môn học, deadline, lịch lớp và submission. Bản `planDraft` chỉ là đề xuất AI và không được ghi đè lịch cá nhân mới hơn.
+
+## 5. LMS sync và RAG
 
 ```mermaid
-flowchart LR
-    GitHub[GitHub Actions] -->|test, scan, build| Registry[Container Registry]
-    Registry --> Staging[Render Staging API + Worker]
-    Registry --> Production[Render Production API + Worker]
-    Vercel[Vercel Frontend] --> Staging
-    Vercel --> Production
-    Staging --> StagingDB[(Staging Postgres + Qdrant)]
-    Production --> ProdDB[(Production Postgres + Qdrant)]
-    Staging --> StagingRedis[(Staging Redis)]
-    Production --> ProdRedis[(Production Redis)]
-    Staging --> Telemetry[Sentry + Langfuse + Metrics]
-    Production --> Telemetry
-    Monitor[External Uptime Monitor] --> Staging
-    Monitor --> Production
+flowchart TD
+    Event["LMS integration event"] --> Worker
+    Worker --> Cursor["Durable sync cursor"]
+    Worker --> Projection["Course / learner projection"]
+    Worker --> Job["RAG ingestion job"]
+    Job --> Extract["Đọc page / PDF / module"]
+    Extract --> Chunk["Chunk + source metadata"]
+    Chunk --> Qdrant
+    SSE["SSE lms.changed"] --> Browser["Frontend refresh snapshot"]
+    Projection --> API
+    API --> Browser
 ```
 
-Staging và production phải dùng project/schema, secret và telemetry environment tách biệt. Alembic migration, smoke test và rollback tương thích là release gate trước pilot; bản hiện tại vẫn dùng `create_all` và chưa được tuyên bố production-ready.
+- Worker xử lý event theo cursor và hàng đợi bền vững, nên restart không làm mất vị trí đồng bộ.
+- Chat không ingest tài liệu trong request; nó chỉ truy xuất corpus đã chuẩn bị.
+- Nếu evidence không đạt ngưỡng, QA phải báo thiếu nguồn thay vì tạo citation giả.
 
-## 5. Technology decisions
+## 6. Data ownership và bảo mật
 
-| Thành phần | Lựa chọn P0 | Lý do |
+| Dữ liệu | Nguồn chính | Quy tắc |
 |---|---|---|
-| Frontend | React 19 + TypeScript + Vite | Một codebase cho hai vai trò, production build phục vụ bằng Nginx |
-| Backend | Python 3.11 + FastAPI + Pydantic + SQLAlchemy | Khớp repo và API/schema rõ; Alembic là hardening bắt buộc trước pilot |
-| Database/vector | PostgreSQL + Qdrant service | PostgreSQL lưu nghiệp vụ/checkpoint/job; Qdrant tách process để backend có thể scale nhiều replica |
-| Cache/job | Durable queue trong PostgreSQL + worker riêng | Event được project và ingestion retry được sau restart; Redis chỉ thêm khi throughput thực tế yêu cầu |
-| AI | LangGraph + OpenAI-compatible client/OpenRouter | Workflow có state/HITL, đổi model qua config |
-| RAG | FastEmbed đa ngôn ngữ + Qdrant + FlashRank ONNX | Pipeline ingest → retrieve → rerank → citation, lazy-load để giảm RAM |
-| Guardrail | Quy tắc nhanh + classifier hiệu chuẩn + output policy | Chặn input/output nhiều lớp; khi classifier lỗi hệ thống hạ cấp sang guided help an toàn |
-| Canvas | Fixture bắt buộc; REST read-only có điều kiện; LTI 1.3 P1 | Demo tái lập, tích hợp thật khi có credential |
-| Calendar | Google OAuth 2.0 + Calendar REST qua HTTPX; RFC 5545 `.ics` | Kết nối trực tiếp có HITL và fallback không phụ thuộc Google |
-| Quality | Pytest, Ruff, Vitest/Testing Library, axe-core, Locust/k6, RAGAS + metric xác định trước | Unit, integration, accessibility, load và chất lượng AI; browser E2E là bước hardening sau MVP |
-| Observability | Request ID, structured logs, Prometheus/Grafana | Theo dõi lỗi/latency HTTP, agent node và RAG; OpenTelemetry/LLM tracing là P1 |
+| Course, assignment, quiz, deadline, submission | LMS PostgreSQL/API | PaceWise đọc theo enrollment/session; không cho client tự chọn user/role |
+| Lịch cá nhân, routine, plan, study session, reflection | PaceWise PostgreSQL | Lưu theo `user_id`; PUT yêu cầu CSRF và version để phát hiện conflict |
+| Trạng thái hội thoại agent | LangGraph PostgreSQL checkpointer | Tách theo thread/session đã xác thực |
+| Chunk học liệu và metadata nguồn | Qdrant | Chỉ ingest từ course context được phép |
+| Tổng quan lớp | Projection tổng hợp | Instructor-only; ngưỡng nhóm tối thiểu, không dùng để xếp hạng/chấm điểm |
+| Google token | PaceWise backend | Mã hóa server-side; không trả refresh token xuống browser |
 
-Hiện trạng P0 đã triển khai gồm request ID, structured logs, metrics Prometheus và dashboard
-Grafana. Qdrant và worker đã chạy thành service riêng trong Docker Compose. OpenTelemetry/LLM
-tracing và Redis chỉ là bước nâng cấp khi pilot đo được nhu cầu throughput tương ứng.
+Session dùng cookie `HttpOnly`; request thay đổi trạng thái cần CSRF. Service key giữa PaceWise và LMS không được đóng gói vào frontend.
 
-LangGraph dùng PostgreSQL checkpointer trong Docker/production. `MemorySaver` chỉ được giữ làm
-fallback cho unit test hoặc cấu hình SQLite local. Embedding FastEmbed và FlashRank ONNX đều
-lazy-load; chỉ workflow QA/RAG mới nạp model vào RAM.
+## 7. Deployment map
 
-## 6. Security and privacy boundaries
+| Service | Port host | Vai trò |
+|---|---:|---|
+| `frontend` | 5173 | Nginx phục vụ React và proxy `/api` |
+| `backend` | 8000 | FastAPI, auth, workspace, LangGraph, calendar integration |
+| `worker` | — | LMS projection và RAG ingestion |
+| `lms-simulator` | 8010 | Canvas-compatible demo LMS |
+| `pacewise-postgres` | 5433 | Workspace, session, memory, queue, checkpoint |
+| `lms-postgres` | 5434 | Dữ liệu LMS demo |
+| `qdrant` | 6333 | Vector store |
+| `prometheus` | 9090 | Metrics, profile `observability` |
+| `grafana` | 3001 | Dashboard, profile `observability` |
 
-- Token Canvas, model key và DSN chỉ nằm trong secret store; không vào Git, prompt hoặc log.
-- Google refresh token được mã hóa bằng Fernet trong PostgreSQL; access token và OAuth code không được lưu hoặc ghi log.
-- Backend kiểm tra RBAC/tenant ở service layer; frontend ẩn nút không được xem là kiểm soát quyền.
-- Log dùng mã giả, loại nội dung nhạy cảm; log vận hành giữ 30 ngày và dữ liệu pilot đã thay định danh giữ 90 ngày.
-- Dashboard chỉ trả aggregate khi n≥5; chat/Reflect thô không hiển thị.
-- Trạng thái bằng chứng không phải điểm chính thức; không xếp hạng hay tự động kỷ luật.
-- Yêu cầu xóa hoàn tất trong 30 ngày; bản sao lưu hết hạn trong 30 ngày tiếp theo.
-- Backup, restore, delete/export và incident runbook phải được kiểm thử trước pilot.
+Các endpoint và lệnh chạy được ghi trong [README](../README.md). Kết quả kiểm chứng hiện tại nằm tại [evaluation-evidence.md](evaluation-evidence.md).

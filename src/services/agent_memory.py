@@ -143,14 +143,18 @@ def persist_agent_outcome(
         and result.get("status") == "completed"
         and result.get("reflection_draft")
     ):
-        profile["last_reflection"] = result["reflection_draft"]
-        profile["next_week_adjustment"] = {
-            "effective_week_start": result["reflection_draft"].get(
-                "effective_week_start"
-            ),
-            "adjustment": result["reflection_draft"].get("adjustment"),
-            "confirmed_at": now,
-        }
+        reflection = result["reflection_draft"]
+        if reflection.get("scope") == "activity":
+            activity_reflections = list(profile.get("activity_reflections") or [])
+            activity_reflections.append({**reflection, "confirmed_at": now})
+            profile["activity_reflections"] = activity_reflections[-50:]
+        else:
+            profile["last_reflection"] = reflection
+            profile["next_week_adjustment"] = {
+                "effective_week_start": reflection.get("effective_week_start"),
+                "adjustment": reflection.get("adjustment"),
+                "confirmed_at": now,
+            }
     if workflow == "tracking":
         profile["last_progress_metrics"] = result.get("progress_metrics") or {}
     if workflow == "do" and isinstance((result.get("output") or {}).get("do_session"), dict):

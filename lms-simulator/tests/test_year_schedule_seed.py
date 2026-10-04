@@ -2,7 +2,18 @@ from datetime import UTC, datetime
 
 from app.db import Base
 from app.extended_api import CourseActivityRequest, create_course_activity
-from app.models import Assignment, CalendarEvent, Course, CourseContent, Enrollment, Resource, User
+from app.models import (
+    Assignment,
+    CalendarEvent,
+    Course,
+    CourseContent,
+    CourseModule,
+    Enrollment,
+    ModuleItem,
+    QuizQuestion,
+    Resource,
+    User,
+)
 from app.security import hash_password
 from app.year_schedule_seed import COURSE_SCHEDULES, seed_2026_demo_calendars
 from sqlalchemy import create_engine, func, select
@@ -12,7 +23,7 @@ from sqlalchemy.orm import Session
 def _database() -> Session:
     engine = create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(engine)
-    db = Session(engine)
+    db = Session(engine, autoflush=False)
     student = User(
         email="student@canvas.local",
         full_name="Demo Student",
@@ -49,10 +60,10 @@ def test_year_schedule_covers_2026_and_is_idempotent() -> None:
         }
         starts = db.scalars(select(CalendarEvent.starts_at).order_by(CalendarEvent.starts_at)).all()
 
-        assert counts["events"] == 486
-        assert counts["assignments"] == 33
+        assert counts["events"] == 498
+        assert counts["assignments"] == 36
         assert counts["videos"] == 36
-        assert counts["quizzes"] == 45
+        assert counts["quizzes"] == 48
         assert starts[0].replace(tzinfo=UTC).year == 2026
         assert starts[-1].replace(tzinfo=UTC).year == 2026
         assert {value.month for value in starts} == set(range(1, 13))
@@ -66,13 +77,87 @@ def test_year_schedule_covers_2026_and_is_idempotent() -> None:
             )
             for code in ("CS101", "DS201", "PM102")
         }
-        assert assignment_counts == {"CS101": 10, "DS201": 11, "PM102": 12}
+        assert assignment_counts == {"CS101": 11, "DS201": 12, "PM102": 13}
+
+        discrete_math = db.scalar(select(Course).where(Course.code == "DS201"))
+        assert discrete_math is not None
+        assert discrete_math.name == "Toán rời rạc — Chương 3: Quan hệ hai ngôi"
+        discrete_math_assignments = db.scalars(
+            select(Assignment.title).where(Assignment.course_id == discrete_math.id)
+        ).all()
+        assert "BTVN 2026 T10.1: 3.1 Khái niệm quan hệ hai ngôi và tính chất" in discrete_math_assignments
+        assert not any(
+            legacy.casefold() in title.casefold()
+            for title in discrete_math_assignments
+            for legacy in ("làm sạch dữ liệu", "trực quan hóa", "dashboard", "phân tích mô tả")
+        )
+        chapter_module = db.scalar(
+            select(CourseModule).where(
+                CourseModule.course_id == discrete_math.id,
+                CourseModule.name == "Chương 3: Quan hệ hai ngôi",
+            )
+        )
+        assert chapter_module is not None
+        chapter_items = db.scalars(
+            select(ModuleItem)
+            .where(ModuleItem.module_id == chapter_module.id)
+            .order_by(ModuleItem.position)
+        ).all()
+        assert [item.title for item in chapter_items] == [
+            "3.1 Khái niệm quan hệ hai ngôi và tính chất",
+            "3.2 Quan hệ tương đương",
+            "3.3 Quan hệ thứ tự",
+        ]
+        assert chapter_items[0].item_type == "file"
+        assert chapter_items[0].external_url == "/static/mock-files/TRR_Full_P4.pdf"
+        assert all(item.item_type == "page" and not item.external_url for item in chapter_items[1:])
+        chapter_quiz = db.scalar(
+            select(CourseContent).where(
+                CourseContent.course_id == discrete_math.id,
+                CourseContent.title == "Quiz Chương 3: Quan hệ hai ngôi",
+            )
+        )
+        assert chapter_quiz is not None
+        assert db.scalar(
+            select(func.count(QuizQuestion.id)).where(QuizQuestion.quiz_id == chapter_quiz.id)
+        ) == 5
+        assert db.scalar(
+            select(func.count(Resource.id)).where(
+                Resource.course_id == discrete_math.id,
+                Resource.source_url == "/static/mock-files/TRR_Full_P4.pdf",
+            )
+        ) == 1
+        discrete_math_events = db.scalars(
+            select(CalendarEvent).where(CalendarEvent.course_id == discrete_math.id)
+        ).all()
+        demo_online = [
+            item
+            for item in discrete_math_events
+            if item.title == "[DS201] Học online · Chương 3: Quan hệ hai ngôi (3.1–3.3) · 120 phút"
+        ]
+        demo_offline = [
+            item
+            for item in discrete_math_events
+            if item.title == "[DS201] Học tại lớp · Chương 3: Quan hệ hai ngôi (3.1–3.3) · 90 phút"
+        ]
+        assert len(demo_online) == 2
+        assert len(demo_offline) == 2
+        assert not any(
+            legacy.casefold() in item.title.casefold()
+            for item in discrete_math_events
+            for legacy in ("làm sạch dữ liệu", "trực quan hóa", "dashboard", "phân tích mô tả")
+        )
         online_classes = db.scalars(
             select(CalendarEvent).where(CalendarEvent.event_kind == "class_session")
         ).all()
         assert online_classes
         assert all(item.join_url for item in online_classes)
         assert all(item.attendance_status == "scheduled" for item in online_classes)
+        offline_classes = db.scalars(
+            select(CalendarEvent).where(CalendarEvent.event_kind == "class")
+        ).all()
+        assert len(offline_classes) == 6
+        assert all(item.join_url is None for item in offline_classes)
 
         teacher = db.scalar(select(User).where(User.email == "teacher@canvas.local"))
         assert teacher is not None
@@ -88,6 +173,8 @@ def test_year_schedule_covers_2026_and_is_idempotent() -> None:
         assert any("Quiz tháng" in title for title in q4_titles)
         assert any("Thi giữa kỳ học kỳ 1" in title for title in q4_titles)
         assert any("Thi cuối kỳ" in title for title in q4_titles)
+        assert any("Học tại lớp" in title for title in q4_titles)
+        assert any("Quiz tuần 05/10" in title for title in q4_titles)
 
         seed_2026_demo_calendars(db)
 
@@ -95,6 +182,12 @@ def test_year_schedule_covers_2026_and_is_idempotent() -> None:
         assert db.scalar(select(func.count(Assignment.id))) == counts["assignments"]
         assert db.scalar(select(func.count(Resource.id)).where(Resource.kind == "video")) == counts["videos"]
         assert db.scalar(select(func.count(CourseContent.id)).where(CourseContent.kind == "quiz")) == counts["quizzes"]
+        assert db.scalar(
+            select(func.count(Resource.id)).where(
+                Resource.course_id == discrete_math.id,
+                Resource.source_url == "/static/mock-files/TRR_Full_P4.pdf",
+            )
+        ) == 1
 
 
 def test_instructor_can_add_full_activity_set_to_an_existing_course() -> None:

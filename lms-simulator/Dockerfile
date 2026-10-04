@@ -17,6 +17,7 @@ RUN apt-get update \
 
 COPY --chown=appuser:appuser lms-simulator/app ./app
 COPY --chown=appuser:appuser lms-simulator/static ./static
+COPY --chown=appuser:appuser TRR_Full_P4.pdf ./static/mock-files/TRR_Full_P4.pdf
 COPY lms-simulator/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \

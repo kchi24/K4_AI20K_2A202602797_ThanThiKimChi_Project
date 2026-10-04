@@ -17,7 +17,7 @@ import { evaluateDoSession, prepareDoSession } from '../../services/api';
 import { useAppStore } from '../../store/AppStore';
 import type { DoBlocker, DoSessionEvaluation, DoSessionPreparation } from '../../types';
 import { remainingOf } from '../../utils/progress';
-import { minutesUntil, studyBlockAccess } from '../../utils/studyBlockAccess';
+import { studyBlockAccess } from '../../utils/studyBlockAccess';
 import { durationMin, formatDay, formatDuration, formatTimer } from '../../utils/time';
 
 const OUTCOME_LABEL: Record<DoSessionEvaluation['status'], string> = {
@@ -59,7 +59,6 @@ export function StudySessionPage() {
   const plannedBlock = blockId
     ? taskBlocks.find((block) => block.id === blockId)
     : taskBlocks.find((block) => studyBlockAccess(block, clock).state === 'available')
-      ?? taskBlocks.find((block) => studyBlockAccess(block, clock).state === 'too_early')
       ?? taskBlocks[taskBlocks.length - 1];
   const access = plannedBlock ? studyBlockAccess(plannedBlock, clock) : undefined;
   const course = task ? courseOf(task.id) : undefined;
@@ -157,16 +156,13 @@ export function StudySessionPage() {
   };
 
   if (access && access.state !== 'available' && !mine) {
-    const tooEarly = access.state === 'too_early';
     return (
       <div className="page flex min-h-[calc(100dvh-4rem)] max-w-2xl items-center justify-center">
         <Card className="w-full text-center">
-          <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-primary-light text-primary-ink"><Icon name={tooEarly ? 'clock' : 'calendar'} size={28} /></span>
-          <h1 className="mt-4 text-2xl font-bold">{tooEarly ? 'Chưa đến giờ tự học' : 'Buổi tự học đã kết thúc'}</h1>
+          <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-primary-light text-primary-ink"><Icon name="calendar" size={28} /></span>
+          <h1 className="mt-4 text-2xl font-bold">Buổi tự học đã kết thúc</h1>
           <p className="mx-auto mt-2 max-w-md text-muted">
-            {tooEarly
-              ? `Phiên được mở trước giờ bắt đầu 5 phút. Còn khoảng ${minutesUntil(access.opensAt, clock)} phút.`
-              : 'Study block vẫn được giữ trên lịch sử; Plan Agent sẽ xử lý phần chưa hoàn thành trong lần phân tích tiếp theo.'}
+            Study block vẫn được giữ trên lịch sử; Plan Agent sẽ xử lý phần chưa hoàn thành trong lần phân tích tiếp theo.
           </p>
           {plannedBlock && <p className="mt-4 text-sm font-semibold">{formatDay(plannedBlock.date)} · {plannedBlock.start}–{plannedBlock.end}</p>}
           <ButtonLink to="/plan" className="mt-6">Về lịch học PaceWise</ButtonLink>
@@ -199,6 +195,7 @@ export function StudySessionPage() {
             <p className="mt-1 text-sm text-muted">{done.evaluation?.next_action ?? 'Thời gian thực tế đã được lưu vào Tiến độ.'}</p>
             <div className="mt-4 flex flex-wrap justify-center gap-2">
               <ButtonLink to="/plan">Về lịch học PaceWise</ButtonLink>
+              <ButtonLink to={`/reflect?activity=${encodeURIComponent(`study:${plannedBlock.id}`)}`} variant="secondary">Phản tư phiên này</ButtonLink>
               {done.evaluation?.needs_recovery && <ButtonLink to="/recover" variant="secondary">Mở Recover</ButtonLink>}
               {done.evaluation?.needs_understanding_check && <ButtonLink to="/learn?tab=check" variant="secondary">Kiểm tra nhanh</ButtonLink>}
             </div>

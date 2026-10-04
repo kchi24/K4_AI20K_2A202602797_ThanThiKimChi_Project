@@ -37,7 +37,13 @@ def _module_resources(modules: list[dict[str, Any]], query: str) -> list[dict[st
                 continue
             title = str(item.get("title") or item.get("name") or module_title)
             kind = str(item.get("type") or item.get("item_type") or "module").lower()
-            url = str(item.get("url") or item.get("html_url") or item.get("source_url") or "")
+            url = str(
+                item.get("url")
+                or item.get("html_url")
+                or item.get("source_url")
+                or item.get("external_url")
+                or ""
+            )
             overlap = len(query_terms & _terms(f"{module_title} {title}"))
             type_bonus = 1 if kind in {"resource", "file", "page", "lecture_video", "video"} else 0
             candidates.append(

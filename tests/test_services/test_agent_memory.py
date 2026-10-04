@@ -143,3 +143,36 @@ def test_reflection_updates_next_week_memory_only_after_student_confirmation():
     assert next_adjustment["effective_week_start"] == "2026-10-05"
     assert next_adjustment["adjustment"] == "Tăng 15 phút cho mỗi study block."
     assert next_adjustment["confirmed_at"]
+
+
+def test_activity_reflection_is_history_and_never_overwrites_weekly_adjustment():
+    session = _session()
+    settings = get_settings()
+    weekly = {
+        "scope": "weekly",
+        "effective_week_start": "2026-10-05",
+        "adjustment": "Chia block còn 45 phút.",
+    }
+    activity = {
+        "scope": "activity",
+        "activity": {"id": "study:b1", "title": "Ôn vòng lặp"},
+        "next_step": "Đọc lại slide 3.",
+    }
+
+    with SessionLocal() as db:
+        db.query(LearnerMemory).filter(LearnerMemory.user_id == session.user_id).delete()
+        db.commit()
+        persist_agent_outcome(
+            db, session, settings,
+            {"workflow": "reflect", "status": "completed", "reflection_draft": weekly},
+            None,
+        )
+        persist_agent_outcome(
+            db, session, settings,
+            {"workflow": "reflect", "status": "completed", "reflection_draft": activity},
+            None,
+        )
+        memory = load_learner_memory(db, session, settings)
+
+    assert memory["profile"]["next_week_adjustment"]["adjustment"] == "Chia block còn 45 phút."
+    assert memory["profile"]["activity_reflections"][-1]["activity"]["id"] == "study:b1"
