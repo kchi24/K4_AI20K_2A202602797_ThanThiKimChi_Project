@@ -66,5 +66,6 @@ P-008-ci-fix/
 .tmp-cursus-media/
 lms-simulator/uploads/
 
-# Local reference decks
+# Local reference decks; keep the project pitch deck
 *.pptx
+!presentation/pitch_deck.pptx
